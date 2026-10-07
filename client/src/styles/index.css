@@ -1,0 +1,262 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ---------------------------------------------------------------------
+   * Runtime theme system (Section 1).
+   * Every brand/accent colour in the app is a Tailwind `brand-*` utility
+   * backed by these CSS variables (RGB triplets, so Tailwind's alpha
+   * modifiers like `brand-500/40` keep working). Switching the theme sets
+   * `data-theme` on <html>; only the accent ramp changes, so the existing
+   * professional light UI, card surfaces and text contrast are untouched
+   * and nothing can regress in readability.
+   *
+   * :root is the default (Purple) and equals the original ramp exactly.
+   * ------------------------------------------------------------------- */
+  :root,
+  [data-theme='purple'] {
+    --brand-50: 246 243 255;
+    --brand-100: 237 231 254;
+    --brand-200: 220 209 252;
+    --brand-300: 194 175 248;
+    --brand-400: 161 131 241;
+    --brand-500: 132 89 230;
+    --brand-600: 107 63 212;
+    --brand-700: 90 49 180;
+    --brand-800: 74 41 146;
+    --brand-900: 59 33 117;
+
+    --color-primary: #6B3FD4;
+    --color-secondary: #8B5CF6;
+    --color-accent: #F59E0B;
+    --color-sidebar-bg: rgb(74 41 146);
+    --color-sidebar-text: #FFFFFF;
+    --color-sidebar-text-muted: rgba(255, 255, 255, 0.8);
+    --color-sidebar-hover: rgba(255, 255, 255, 0.1);
+    --color-sidebar-active: rgba(255, 255, 255, 0.18);
+    --color-sidebar-border: rgba(255, 255, 255, 0.12);
+    --color-canvas: #F7F5FC;
+    --color-card: #FFFFFF;
+    --color-ink: #1C1731;
+    --color-ink-muted: #3A3552;
+    --color-ink-subtle: #4E4A66;
+    --color-line: #E6E2F2;
+    --color-button-primary-bg: #6B3FD4;
+    --color-button-primary-text: #FFFFFF;
+  }
+
+  [data-theme='blue'] {
+    --brand-50: 239 246 255;
+    --brand-100: 219 234 254;
+    --brand-200: 191 219 254;
+    --brand-300: 147 197 253;
+    --brand-400: 96 165 250;
+    --brand-500: 59 130 246;
+    --brand-600: 37 99 235;
+    --brand-700: 29 78 216;
+    --brand-800: 30 64 175;
+    --brand-900: 30 58 138;
+  }
+
+  [data-theme='green'] {
+    --brand-50: 236 253 245;
+    --brand-100: 209 250 229;
+    --brand-200: 167 243 208;
+    --brand-300: 110 231 183;
+    --brand-400: 52 211 153;
+    --brand-500: 16 185 129;
+    --brand-600: 5 150 105;
+    --brand-700: 4 120 87;
+    --brand-800: 6 95 70;
+    --brand-900: 6 78 59;
+  }
+
+  [data-theme='orange'] {
+    --brand-50: 255 247 237;
+    --brand-100: 255 237 213;
+    --brand-200: 254 215 170;
+    --brand-300: 253 186 116;
+    --brand-400: 251 146 60;
+    --brand-500: 249 115 22;
+    --brand-600: 234 88 12;
+    --brand-700: 194 65 12;
+    --brand-800: 154 52 18;
+    --brand-900: 124 45 18;
+  }
+
+  [data-theme='yellow'] {
+    --brand-50: 254 252 232;
+    --brand-100: 254 249 195;
+    --brand-200: 254 240 138;
+    --brand-300: 253 224 71;
+    --brand-400: 250 204 21;
+    --brand-500: 234 179 8;
+    --brand-600: 202 138 4;
+    --brand-700: 161 98 7;
+    --brand-800: 133 77 14;
+    --brand-900: 113 63 18;
+  }
+
+  [data-theme='pink'] {
+    --brand-50: 253 242 248;
+    --brand-100: 252 231 243;
+    --brand-200: 251 207 232;
+    --brand-300: 249 168 212;
+    --brand-400: 244 114 182;
+    --brand-500: 236 72 153;
+    --brand-600: 219 39 119;
+    --brand-700: 190 24 93;
+    --brand-800: 157 23 77;
+    --brand-900: 131 24 67;
+  }
+
+  /* Dark = deep slate chrome on the normal light content. */
+  [data-theme='dark'] {
+    --brand-50: 248 250 252;
+    --brand-100: 241 245 249;
+    --brand-200: 226 232 240;
+    --brand-300: 203 213 225;
+    --brand-400: 148 163 184;
+    --brand-500: 100 116 139;
+    --brand-600: 71 85 105;
+    --brand-700: 51 65 85;
+    --brand-800: 30 41 59;
+    --brand-900: 15 23 42;
+  }
+
+  /* Black = graphite/near-black chrome. */
+  [data-theme='black'] {
+    --brand-50: 250 250 250;
+    --brand-100: 244 244 245;
+    --brand-200: 228 228 231;
+    --brand-300: 200 200 205;
+    --brand-400: 140 140 148;
+    --brand-500: 82 82 91;
+    --brand-600: 39 39 42;
+    --brand-700: 30 30 34;
+    --brand-800: 20 20 23;
+    --brand-900: 9 9 11;
+  }
+
+  /* White = minimal neutral (zinc) chrome; rail stays dark enough for its
+     white text, content accents read as quiet greys. */
+  [data-theme='white'] {
+    --brand-50: 250 250 250;
+    --brand-100: 244 244 245;
+    --brand-200: 228 228 231;
+    --brand-300: 212 212 216;
+    --brand-400: 161 161 170;
+    --brand-500: 113 113 122;
+    --brand-600: 82 82 91;
+    --brand-700: 63 63 70;
+    --brand-800: 39 39 42;
+    --brand-900: 24 24 27;
+  }
+
+  /* Multicolour = vivid violet base ramp; the sidebar gets a gradient below. */
+  [data-theme='multicolour'] {
+    --brand-50: 245 243 255;
+    --brand-100: 237 233 254;
+    --brand-200: 221 214 254;
+    --brand-300: 196 181 253;
+    --brand-400: 167 139 250;
+    --brand-500: 139 92 246;
+    --brand-600: 124 58 237;
+    --brand-700: 109 40 217;
+    --brand-800: 91 33 182;
+    --brand-900: 76 29 149;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+  }
+
+  /* Keyboard focus stays visible everywhere; pointer clicks stay clean. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* ---------------------------------------------------------------------
+   * Shared sidebar theme. Defined once here so every layout shell
+   * (AdminLayout's Sidebar and RoleWorkspaceLayout) renders the same
+   * professional purple rail rather than each interface styling its own.
+   * ------------------------------------------------------------------- */
+  .app-sidebar {
+    background-color: var(--color-sidebar-bg, rgb(var(--brand-800)));
+    color: var(--color-sidebar-text, #ffffff);
+  }
+  /* Multicolour theme: give the rail a distinctive gradient identity while
+     every other surface still recolours through the brand ramp above. */
+  [data-theme='multicolour'] .app-sidebar {
+    background-image: linear-gradient(
+      160deg,
+      #6d28d9 0%,
+      #db2777 42%,
+      #ea580c 74%,
+      #f59e0b 100%
+    );
+  }
+  /* Accent-only surfaces ease between themes so switching feels intentional
+     rather than a hard flash. Scoped to chrome so content never animates. */
+  .app-sidebar,
+  .sidebar-link {
+    transition: background-color 200ms ease, background-image 200ms ease, color 200ms ease;
+  }
+  /* A single navigation entry inside the purple sidebar. */
+  .sidebar-link {
+    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50;
+    color: var(--color-sidebar-text-muted, rgba(255, 255, 255, 0.8));
+  }
+  .sidebar-link:hover {
+    background-color: var(--color-sidebar-hover, rgba(255, 255, 255, 0.1));
+    color: var(--color-sidebar-text, #ffffff);
+  }
+  /* Active entry: lighter purple/white contrast so the current page is obvious. */
+  .sidebar-link-active {
+    background-color: var(--color-sidebar-active, rgba(255, 255, 255, 0.15));
+    color: var(--color-sidebar-text, #ffffff);
+  }
+  /* Count badge that stays readable on the purple background. */
+  .sidebar-badge {
+    @apply shrink-0 rounded-full px-1.5 py-0.5 text-[0.7rem] font-semibold;
+    background-color: var(--color-sidebar-badge-bg, rgba(255, 255, 255, 0.25));
+    color: var(--color-sidebar-text, #ffffff);
+  }
+
+  /* ---------------------------------------------------------------------
+   * Clickable KPI / summary cards. Applied to cards that drill down to a
+   * detail page or report, so every actionable card across the ERP shows
+   * the same pointer, hover lift and focus feedback. Non-actionable
+   * summary cards deliberately do NOT get this class.
+   * ------------------------------------------------------------------- */
+  .card-interactive {
+    @apply cursor-pointer transition duration-150 hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-card focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40;
+  }
+
+  /* Drafting grid used behind the brand panel — a nod to a site plan. */
+  .blueprint-grid {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+      linear-gradient(to right, rgba(255, 255, 255, 0.14) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+    background-size: 28px 28px, 28px 28px, 140px 140px, 140px 140px;
+  }
+}

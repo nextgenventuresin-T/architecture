@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#6B3FD4" />
+    <meta name="description" content="ABCD India — plan, build and monitor construction projects." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>Sign in · ABCD India</title>
+    <script>
+      // Apply the saved accent theme before React mounts so there is no flash
+      // of the default theme on load. Mirrors ThemeContext's validation.
+      (function () {
+        try {
+          var t = localStorage.getItem('aerp.theme');
+          var valid = ['purple','blue','green','orange','yellow','pink','dark','black','white','multicolour','custom'];
+          var theme = valid.indexOf(t) !== -1 ? t : 'purple';
+          document.documentElement.dataset.theme = theme;
+          if (theme === 'custom') {
+            var raw = localStorage.getItem('aerp.theme_custom');
+            if (raw) {
+              var c = JSON.parse(raw);
+              var root = document.documentElement;
+              if (c.primary) root.style.setProperty('--color-primary', c.primary);
+              if (c.sidebarBg) root.style.setProperty('--color-sidebar-bg', c.sidebarBg);
+              if (c.sidebarText) root.style.setProperty('--color-sidebar-text', c.sidebarText);
+              if (c.background) root.style.setProperty('--color-canvas', c.background);
+              if (c.card) root.style.setProperty('--color-card', c.card);
+              if (c.textMain) root.style.setProperty('--color-ink', c.textMain);
+              if (c.textMuted) root.style.setProperty('--color-ink-muted', c.textMuted);
+              if (c.border) root.style.setProperty('--color-line', c.border);
+              if (c.buttonPrimaryBg) root.style.setProperty('--color-button-primary-bg', c.buttonPrimaryBg);
+            }
+          }
+        } catch (e) {
+          document.documentElement.dataset.theme = 'purple';
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

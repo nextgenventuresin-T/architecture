@@ -1,0 +1,17 @@
+{
+  "name": "architecture-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack Architecture ERP (React Vite + Node.js Express + MySQL)",
+  "scripts": {
+    "build": "npm --prefix client install --include=dev && npm --prefix client run build && npm --prefix server install",
+    "start": "node server/src/server.js",
+    "server": "npm --prefix server start",
+    "client": "npm --prefix client run dev",
+    "migrate": "npm --prefix server run db:migrate",
+    "seed": "npm --prefix server run db:seed"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

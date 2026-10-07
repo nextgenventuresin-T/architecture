@@ -1,0 +1,742 @@
+--- a/client/tailwind.config.js
++++ b/client/tailwind.config.js
+@@ -18,9 +18,14 @@
+           900: '#3B2175',
+         },
+         ink: {
++          // Primary body text — very dark navy, near-black for strong readability.
+           DEFAULT: '#1C1731',
+-          muted: '#615C77',
+-          subtle: '#8B87A0',
++          // Secondary text/labels. Darkened from #615C77 so headings, values and
++          // labels never read as pale grey (global readability pass).
++          muted: '#3A3552',
++          // Tertiary text/hints. Darkened from #8B87A0 but kept a step lighter
++          // than `muted` so the type hierarchy still reads.
++          subtle: '#4E4A66',
+         },
+         line: '#E6E2F2',
+         canvas: '#F7F5FC',
+--- a/client/src/styles/index.css
++++ b/client/src/styles/index.css
+@@ -28,6 +28,37 @@
+ }
+ 
+ @layer components {
++  /* ---------------------------------------------------------------------
++   * Shared sidebar theme. Defined once here so every layout shell
++   * (AdminLayout's Sidebar and RoleWorkspaceLayout) renders the same
++   * professional purple rail rather than each interface styling its own.
++   * ------------------------------------------------------------------- */
++  .app-sidebar {
++    @apply bg-brand-800 text-white;
++  }
++  /* A single navigation entry inside the purple sidebar. */
++  .sidebar-link {
++    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50;
++  }
++  /* Active entry: lighter purple/white contrast so the current page is obvious. */
++  .sidebar-link-active {
++    @apply bg-white/15 text-white;
++  }
++  /* Count badge that stays readable on the purple background. */
++  .sidebar-badge {
++    @apply shrink-0 rounded-full bg-white/25 px-1.5 py-0.5 text-[0.7rem] font-semibold text-white;
++  }
++
++  /* ---------------------------------------------------------------------
++   * Clickable KPI / summary cards. Applied to cards that drill down to a
++   * detail page or report, so every actionable card across the ERP shows
++   * the same pointer, hover lift and focus feedback. Non-actionable
++   * summary cards deliberately do NOT get this class.
++   * ------------------------------------------------------------------- */
++  .card-interactive {
++    @apply cursor-pointer transition duration-150 hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-card focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40;
++  }
++
+   /* Drafting grid used behind the brand panel — a nod to a site plan. */
+   .blueprint-grid {
+     background-image:
+--- a/client/src/components/layout/Sidebar.jsx
++++ b/client/src/components/layout/Sidebar.jsx
+@@ -21,7 +21,7 @@
+ 
+       <aside
+         className={[
+-          'fixed inset-y-0 left-0 z-40 flex flex-col border-r border-line bg-white',
++          'app-sidebar fixed inset-y-0 left-0 z-40 flex flex-col border-r border-brand-900/30',
+           'transition-[transform,width] duration-200 ease-out',
+           isCollapsed ? 'w-[76px]' : 'w-[264px]',
+           isOpen ? 'translate-x-0' : '-translate-x-full',
+@@ -29,13 +29,13 @@
+         ].join(' ')}
+         aria-label="Main navigation"
+       >
+-        <div className="flex h-16 shrink-0 items-center justify-between border-b border-line px-4">
+-          {isCollapsed ? <Logo size={32} /> : <Logo size={32} withWordmark />}
++        <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4 text-white">
++          {isCollapsed ? <Logo size={32} tone="light" /> : <Logo size={32} tone="light" withWordmark />}
+           <button
+             type="button"
+             onClick={onClose}
+             aria-label="Close navigation"
+-            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted hover:bg-brand-50 hover:text-brand-700 lg:hidden"
++            className="flex h-9 w-9 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white lg:hidden"
+           >
+             <X className="h-5 w-5" aria-hidden="true" />
+           </button>
+@@ -54,11 +54,9 @@
+                 title={isCollapsed ? label : undefined}
+                 className={({ isActive }) =>
+                   [
+-                    'group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors',
++                    'sidebar-link group relative',
+                     isCollapsed ? 'justify-center' : '',
+-                    isActive
+-                      ? 'bg-brand-50 font-medium text-brand-700'
+-                      : 'text-ink-muted hover:bg-canvas hover:text-ink',
++                    isActive ? 'sidebar-link-active' : '',
+                   ].join(' ')
+                 }
+               >
+@@ -67,14 +65,14 @@
+                     {/* Active marker doubles as the only decoration in the rail */}
+                     <span
+                       aria-hidden="true"
+-                      className={`absolute left-0 h-5 w-1 rounded-r-full bg-brand-600 transition-opacity ${
++                      className={`absolute left-0 h-5 w-1 rounded-r-full bg-white transition-opacity ${
+                         isActive ? 'opacity-100' : 'opacity-0'
+                       }`}
+                     />
+                     <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
+                     {!isCollapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
+                     {!isCollapsed && count > 0 && (
+-                      <span className="shrink-0 rounded-full bg-brand-600 px-1.5 py-0.5 text-[0.7rem] font-semibold text-white">
++                      <span className="sidebar-badge">
+                         {count}
+                       </span>
+                     )}
+@@ -85,11 +83,11 @@
+           })}
+         </nav>
+ 
+-        <div className="shrink-0 border-t border-line p-3">
++        <div className="shrink-0 border-t border-white/10 p-3">
+           <button
+             type="button"
+             onClick={onToggleCollapse}
+-            className={`hidden w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-muted transition-colors hover:bg-canvas hover:text-ink lg:flex ${
++            className={`hidden w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/80 transition-colors hover:bg-white/10 hover:text-white lg:flex ${
+               isCollapsed ? 'justify-center' : ''
+             }`}
+           >
+--- a/client/src/components/layout/RoleWorkspaceLayout.jsx
++++ b/client/src/components/layout/RoleWorkspaceLayout.jsx
+@@ -1,7 +1,6 @@
+ import { NavLink, Outlet } from 'react-router-dom';
+ import { LogOut } from 'lucide-react';
+ import Logo from '../ui/Logo';
+-import Button from '../ui/Button';
+ import useAuth from '../../hooks/useAuth';
+ import { ROLE_LABELS, ROLES } from '../../config/roles';
+ 
+@@ -62,34 +61,44 @@
+   const modules = modulesForRole(user);
+ 
+   return (
+-    <div className="min-h-screen bg-canvas">
+-      <header className="border-b border-line bg-white">
+-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4">
+-          <Logo size={34} withWordmark />
+-          <div className="flex items-center gap-4">
+-            <span className="hidden text-sm text-ink-muted sm:inline">{ROLE_LABELS[user?.role] || user?.role}</span>
+-            <Button variant="secondary" onClick={logout}>
+-              <LogOut className="h-4 w-4" aria-hidden="true" />
+-              Sign out
+-            </Button>
+-          </div>
++    <div className="min-h-screen bg-canvas lg:flex">
++      {/* Shared purple sidebar — same treatment as the admin rail, so every
++          role workspace matches. Structure and menu items are unchanged; only
++          the styling is standardised here. */}
++      <aside className="app-sidebar flex flex-col gap-4 border-b border-brand-900/30 px-4 py-4 lg:min-h-screen lg:w-64 lg:shrink-0 lg:gap-6 lg:border-b-0 lg:border-r lg:px-4 lg:py-6">
++        <div className="flex items-center justify-between gap-3 text-white">
++          <Logo size={34} tone="light" withWordmark />
+         </div>
+-      </header>
+ 
+-      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-5 py-8 lg:flex-row">
+-        <nav className="flex shrink-0 gap-2 overflow-x-auto lg:w-56 lg:flex-col" aria-label="Workspace navigation">
++        <span className="hidden text-xs font-medium uppercase tracking-wide text-white/60 lg:block">
++          {ROLE_LABELS[user?.role] || user?.role}
++        </span>
++
++        <nav className="flex flex-1 gap-1.5 overflow-x-auto lg:flex-col lg:overflow-visible" aria-label="Workspace navigation">
+           {modules.map((module) => (
+             <NavLink
+               key={module.path}
+               to={module.path}
+               end={module.path === `/${user?.role}` || module.path === '/finance' || module.path === '/procurement' || module.path === '/warehouse'}
+-              className={({ isActive }) => `whitespace-nowrap rounded-xl px-4 py-3 text-sm font-medium ${isActive ? 'bg-brand-50 text-brand-700' : 'text-ink-muted hover:bg-white hover:text-ink'}`}
++              className={({ isActive }) => `sidebar-link whitespace-nowrap ${isActive ? 'sidebar-link-active' : ''}`}
+             >
+               {module.label}
+             </NavLink>
+           ))}
+         </nav>
+-        <main className="min-w-0 flex-1">
++
++        <button
++          type="button"
++          onClick={logout}
++          className="sidebar-link w-full justify-start"
++        >
++          <LogOut className="h-4 w-4 shrink-0" aria-hidden="true" />
++          Sign out
++        </button>
++      </aside>
++
++      <div className="min-w-0 flex-1">
++        <main className="mx-auto max-w-6xl px-5 py-8">
+           <Outlet />
+         </main>
+       </div>
+--- a/client/src/components/dashboard/SummaryCards.jsx
++++ b/client/src/components/dashboard/SummaryCards.jsx
+@@ -54,7 +54,7 @@
+     <Link
+       to={to}
+       className={[
+-        'group flex flex-col justify-between rounded-2xl border bg-white p-4 shadow-card transition-colors sm:p-5',
++        'card-interactive group flex flex-col justify-between rounded-2xl border bg-white p-4 shadow-card sm:p-5',
+         accent ? 'border-brand-200 bg-brand-50/40 hover:border-brand-300' : 'border-line hover:border-brand-200',
+       ].join(' ')}
+     >
+--- a/client/src/components/reports/KpiGrid.jsx
++++ b/client/src/components/reports/KpiGrid.jsx
+@@ -29,7 +29,7 @@
+             type="button"
+             onClick={() => onSelect(def.reportId, def.filters ?? {}, def.label)}
+             aria-pressed={isActive}
+-            className={`rounded-xl border bg-white px-4 py-3.5 text-left transition-colors hover:border-brand-300 hover:shadow-card focus:outline-none focus:ring-2 focus:ring-brand-500/40 ${
++            className={`card-interactive rounded-xl border bg-white px-4 py-3.5 text-left ${
+               isActive ? 'border-brand-400 ring-1 ring-brand-400' : 'border-line'
+             }`}
+           >
+--- a/client/src/components/approvals/ApprovalSummary.jsx
++++ b/client/src/components/approvals/ApprovalSummary.jsx
+@@ -6,7 +6,9 @@
+  * Every figure is scoped server-side to what the signed-in user may see, so
+  * an HR user's "Total" is their labour queue, not the whole organisation's.
+  */
+-export default function ApprovalSummary({ summary, onSelectPending }) {
++export default function ApprovalSummary({ summary, onSelectFilters }) {
++  const today = new Date().toISOString().slice(0, 10);
++
+   const cards = [
+     {
+       key: 'pending',
+@@ -14,6 +16,7 @@
+       value: formatNumber(summary.pending),
+       icon: Hourglass,
+       tone: 'text-amber-700 bg-amber-50',
++      filters: { status: 'pending' },
+     },
+     {
+       key: 'approvedToday',
+@@ -21,6 +24,7 @@
+       value: formatNumber(summary.approvedToday),
+       icon: CheckCircle2,
+       tone: 'text-emerald-700 bg-emerald-50',
++      filters: { status: 'approved', dateFrom: today, dateTo: today },
+     },
+     {
+       key: 'rejectedToday',
+@@ -28,6 +32,7 @@
+       value: formatNumber(summary.rejectedToday),
+       icon: XCircle,
+       tone: 'text-danger bg-danger-soft',
++      filters: { status: 'rejected', dateFrom: today, dateTo: today },
+     },
+     {
+       key: 'total',
+@@ -35,6 +40,7 @@
+       value: formatNumber(summary.total),
+       icon: Layers,
+       tone: 'text-brand-600 bg-brand-50',
++      filters: { status: 'all' },
+     },
+     {
+       key: 'myPending',
+@@ -42,10 +48,7 @@
+       value: formatNumber(summary.myPending),
+       icon: UserCheck,
+       tone: 'text-brand-600 bg-brand-50',
+-      // Only this card is actionable, and only when there is something to act
+-      // on — a card that looks clickable but does nothing is worse than a
+-      // plain one.
+-      onClick: summary.myPending > 0 ? onSelectPending : undefined,
++      filters: { status: 'pending' },
+     },
+   ];
+ 
+@@ -64,12 +67,13 @@
+           </div>
+         );
+ 
+-        return card.onClick ? (
++        return onSelectFilters ? (
+           <button
+             key={card.key}
+             type="button"
+-            onClick={card.onClick}
+-            className="rounded-xl border border-line bg-white px-4 py-3.5 text-left transition-colors hover:border-brand-200 hover:bg-brand-50/40 focus:border-brand-500 focus:shadow-focus focus:outline-none"
++            onClick={() => onSelectFilters(card.filters)}
++            aria-label={`${card.label} — filter the queue`}
++            className="card-interactive block rounded-xl border border-line bg-white px-4 py-3.5 text-left hover:bg-brand-50/40"
+           >
+             {content}
+           </button>
+--- a/client/src/components/finance/FinanceSummary.jsx
++++ b/client/src/components/finance/FinanceSummary.jsx
+@@ -6,7 +6,7 @@
+  * which derives them from projects.estimated_budget, expenses,
+  * contractor_payments and procurement_requests — nothing here is hardcoded.
+  */
+-export default function FinanceSummary({ summary }) {
++export default function FinanceSummary({ summary, onSelectTab }) {
+   const cards = [
+     {
+       label: 'Total project budget',
+@@ -14,6 +14,7 @@
+       icon: Wallet,
+       tone: 'text-brand-600 bg-brand-50',
+       hint: `${summary.counts.projects} active projects`,
++      tab: 'projects',
+     },
+     {
+       label: 'Total expenses',
+@@ -21,6 +22,7 @@
+       icon: Receipt,
+       tone: 'text-brand-600 bg-brand-50',
+       hint: `${summary.counts.expenses} recorded`,
++      tab: 'expenses',
+     },
+     {
+       label: 'Contractor payments',
+@@ -28,6 +30,7 @@
+       icon: HardHat,
+       tone: 'text-amber-700 bg-amber-50',
+       hint: `of ${formatCompactCurrency(summary.contractorContractValue)} contracted`,
++      tab: 'contractor-payments',
+     },
+     {
+       label: 'Procurement value',
+@@ -35,6 +38,7 @@
+       icon: ShoppingCart,
+       tone: 'text-brand-600 bg-brand-50',
+       hint: `${formatCompactCurrency(summary.procurementReceivedValue)} received`,
++      tab: 'procurement',
+     },
+     {
+       label: 'Paid amount',
+@@ -42,6 +46,7 @@
+       icon: CheckCircle2,
+       tone: 'text-emerald-700 bg-emerald-50',
+       hint: 'Paid expenses + contractor payments',
++      tab: 'payments',
+     },
+     {
+       label: 'Pending payments',
+@@ -49,6 +54,7 @@
+       icon: Hourglass,
+       tone: 'text-amber-700 bg-amber-50',
+       hint: `${summary.counts.pendingExpenses} awaiting approval`,
++      tab: 'payments',
+     },
+     {
+       label: 'Outstanding amount',
+@@ -56,25 +62,44 @@
+       icon: AlertCircle,
+       tone: 'text-danger bg-danger-soft',
+       hint: 'Contract value not yet paid',
++      tab: 'contractor-payments',
+     },
+   ];
+ 
+   return (
+     <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-7">
+-      {cards.map((card) => (
+-        <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
+-          <div className="flex items-center gap-2.5">
+-            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.tone}`}>
+-              <card.icon className="h-4 w-4" aria-hidden="true" />
+-            </span>
+-            <div className="min-w-0">
+-              <p className="text-lg font-semibold tabular-nums leading-tight text-ink">{card.value}</p>
+-              <p className="truncate text-xs text-ink-subtle">{card.label}</p>
++      {cards.map((card) => {
++        const inner = (
++          <>
++            <div className="flex items-center gap-2.5">
++              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.tone}`}>
++                <card.icon className="h-4 w-4" aria-hidden="true" />
++              </span>
++              <div className="min-w-0">
++                <p className="text-lg font-semibold tabular-nums leading-tight text-ink">{card.value}</p>
++                <p className="truncate text-xs text-ink-subtle">{card.label}</p>
++              </div>
+             </div>
++            {card.hint && <p className="mt-2 truncate text-[0.7rem] text-ink-subtle">{card.hint}</p>}
++          </>
++        );
++
++        return onSelectTab && card.tab ? (
++          <button
++            key={card.label}
++            type="button"
++            onClick={() => onSelectTab(card.tab)}
++            aria-label={`${card.label} — open ${card.tab.replace('-', ' ')}`}
++            className="card-interactive block rounded-xl border border-line bg-white px-4 py-3.5 text-left"
++          >
++            {inner}
++          </button>
++        ) : (
++          <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
++            {inner}
+           </div>
+-          {card.hint && <p className="mt-2 truncate text-[0.7rem] text-ink-subtle">{card.hint}</p>}
+-        </div>
+-      ))}
++        );
++      })}
+     </div>
+   );
+ }
+--- a/client/src/pages/admin/finance/FinanceDashboardPage.jsx
++++ b/client/src/pages/admin/finance/FinanceDashboardPage.jsx
+@@ -89,7 +89,7 @@
+         </div>
+       ) : (
+         <>
+-          {lookups.summary && <FinanceSummary summary={lookups.summary} />}
++          {lookups.summary && <FinanceSummary summary={lookups.summary} onSelectTab={setActiveTab} />}
+ 
+           <Card>
+             <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} className="px-5 pt-1" />
+--- a/client/src/components/procurement/ProcurementSummary.jsx
++++ b/client/src/components/procurement/ProcurementSummary.jsx
+@@ -2,45 +2,50 @@
+ import { formatCompactCurrency, formatNumber } from '../../utils/format';
+ 
+ /** Headline request counts and value above the procurement table. */
+-export default function ProcurementSummary({ summary }) {
++export default function ProcurementSummary({ summary, onSelectStatus }) {
+   const cards = [
+-    { label: 'Total requests', value: formatNumber(summary.total), icon: FileText, tone: 'text-brand-600 bg-brand-50' },
++    { label: 'Total requests', value: formatNumber(summary.total), icon: FileText, tone: 'text-brand-600 bg-brand-50', status: 'all' },
+     {
+       label: 'Pending approval',
+       value: formatNumber(summary.pendingApproval),
+       icon: Hourglass,
+       tone: 'text-amber-700 bg-amber-50',
++      status: 'pending_approval',
+     },
+     {
+       label: 'Approved',
+       value: formatNumber(summary.approved),
+       icon: CheckCircle2,
+       tone: 'text-emerald-700 bg-emerald-50',
++      status: 'approved',
+     },
+     {
+       label: 'Ordered',
+       value: formatNumber(summary.ordered),
+       icon: ShoppingCart,
+       tone: 'text-brand-600 bg-brand-50',
++      status: 'ordered',
+     },
+     {
+       label: 'Partially / fully received',
+       value: formatNumber(summary.partiallyReceived + summary.received),
+       icon: PackageCheck,
+       tone: 'text-emerald-700 bg-emerald-50',
++      status: 'received',
+     },
+     {
+       label: 'Estimated value',
+       value: formatCompactCurrency(summary.estimatedValue),
+       icon: IndianRupee,
+       tone: 'text-brand-600 bg-brand-50',
++      status: 'all',
+     },
+   ];
+ 
+   return (
+     <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
+-      {cards.map((card) => (
+-        <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
++      {cards.map((card) => {
++        const inner = (
+           <div className="flex items-center gap-2.5">
+             <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.tone}`}>
+               <card.icon className="h-4 w-4" aria-hidden="true" />
+@@ -50,8 +55,24 @@
+               <p className="truncate text-xs text-ink-subtle">{card.label}</p>
+             </div>
+           </div>
+-        </div>
+-      ))}
++        );
++
++        return onSelectStatus ? (
++          <button
++            key={card.label}
++            type="button"
++            onClick={() => onSelectStatus(card.status)}
++            aria-label={`${card.label} — filter the list`}
++            className="card-interactive block rounded-xl border border-line bg-white px-4 py-3.5 text-left"
++          >
++            {inner}
++          </button>
++        ) : (
++          <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
++            {inner}
++          </div>
++        );
++      })}
+     </div>
+   );
+ }
+--- a/client/src/pages/admin/procurement/ProcurementListPage.jsx
++++ b/client/src/pages/admin/procurement/ProcurementListPage.jsx
+@@ -160,7 +160,12 @@
+         }
+       />
+ 
+-      {lookups.summary && <ProcurementSummary summary={lookups.summary} />}
++      {lookups.summary && (
++        <ProcurementSummary
++          summary={lookups.summary}
++          onSelectStatus={(status) => setFilters((f) => ({ ...f, status, page: 1 }))}
++        />
++      )}
+ 
+       {error ? (
+         <>
+--- a/client/src/components/warehouse/WarehouseSummary.jsx
++++ b/client/src/components/warehouse/WarehouseSummary.jsx
+@@ -6,37 +6,42 @@
+  * GET /warehouse/summary, which derives them from warehouse_stock and
+  * warehouse_transactions — nothing here is hardcoded.
+  */
+-export default function WarehouseSummary({ summary }) {
++export default function WarehouseSummary({ summary, onSelectTab }) {
+   const cards = [
+     {
+       label: 'Total warehouses',
+       value: formatNumber(summary.totalWarehouses),
+       icon: Warehouse,
+       tone: 'text-brand-600 bg-brand-50',
++      tab: 'warehouses',
+     },
+     {
+       label: 'Materials in stock',
+       value: formatNumber(summary.materialsInStock),
+       icon: Package,
+       tone: 'text-brand-600 bg-brand-50',
++      tab: 'stock',
+     },
+     {
+       label: 'Total stock quantity',
+       value: formatNumber(summary.totalStockQuantity),
+       icon: Layers,
+       tone: 'text-brand-600 bg-brand-50',
++      tab: 'stock',
+     },
+     {
+       label: 'Low stock items',
+       value: formatNumber(summary.lowStockItems),
+       icon: TrendingDown,
+       tone: 'text-amber-700 bg-amber-50',
++      tab: 'stock',
+     },
+     {
+       label: 'Out of stock items',
+       value: formatNumber(summary.outOfStockItems),
+       icon: PackageX,
+       tone: 'text-danger bg-danger-soft',
++      tab: 'stock',
+     },
+     {
+       label: 'Movements (30 days)',
+@@ -46,25 +51,44 @@
+       icon: ArrowDownToLine,
+       tone: 'text-emerald-700 bg-emerald-50',
+       hint: `${formatNumber(summary.recentReceipts)} in · ${formatNumber(summary.recentIssues)} out · ${formatNumber(summary.recentTransfers)} moved`,
++      tab: 'transactions',
+     },
+   ];
+ 
+   return (
+     <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
+-      {cards.map((card) => (
+-        <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
+-          <div className="flex items-center gap-2.5">
+-            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.tone}`}>
+-              <card.icon className="h-4 w-4" aria-hidden="true" />
+-            </span>
+-            <div className="min-w-0">
+-              <p className="text-xl font-semibold tabular-nums leading-tight text-ink">{card.value}</p>
+-              <p className="truncate text-xs text-ink-subtle">{card.label}</p>
++      {cards.map((card) => {
++        const inner = (
++          <>
++            <div className="flex items-center gap-2.5">
++              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.tone}`}>
++                <card.icon className="h-4 w-4" aria-hidden="true" />
++              </span>
++              <div className="min-w-0">
++                <p className="text-xl font-semibold tabular-nums leading-tight text-ink">{card.value}</p>
++                <p className="truncate text-xs text-ink-subtle">{card.label}</p>
++              </div>
+             </div>
++            {card.hint && <p className="mt-2 truncate text-[0.7rem] text-ink-subtle">{card.hint}</p>}
++          </>
++        );
++
++        return onSelectTab && card.tab ? (
++          <button
++            key={card.label}
++            type="button"
++            onClick={() => onSelectTab(card.tab)}
++            aria-label={`${card.label} — open ${card.tab}`}
++            className="card-interactive block rounded-xl border border-line bg-white px-4 py-3.5 text-left"
++          >
++            {inner}
++          </button>
++        ) : (
++          <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
++            {inner}
+           </div>
+-          {card.hint && <p className="mt-2 truncate text-[0.7rem] text-ink-subtle">{card.hint}</p>}
+-        </div>
+-      ))}
++        );
++      })}
+     </div>
+   );
+ }
+--- a/client/src/pages/admin/warehouse/WarehouseListPage.jsx
++++ b/client/src/pages/admin/warehouse/WarehouseListPage.jsx
+@@ -174,7 +174,7 @@
+ 
+       {flash && <Alert tone="success" className="mb-4">{flash}</Alert>}
+ 
+-      {lookups.summary && <WarehouseSummary summary={lookups.summary} />}
++      {lookups.summary && <WarehouseSummary summary={lookups.summary} onSelectTab={setActiveTab} />}
+ 
+       {canMoveStock && (
+         <div className="mb-6 flex flex-wrap gap-2">
+--- a/client/src/components/hr/HrOverviewTab.jsx
++++ b/client/src/components/hr/HrOverviewTab.jsx
+@@ -10,21 +10,38 @@
+  * hardcoded. `contractorBreakdown` is only present for ADMIN/HR callers;
+  * a CONTRACTOR sees the same cards scoped to their own workforce.
+  */
+-export default function HrOverviewTab({ summary }) {
++export default function HrOverviewTab({ summary, onSelectTab }) {
+   const cards = [
+-    { label: 'Company labour', value: summary.companyLabourCount, icon: Users, tone: 'text-brand-600 bg-brand-50' },
+-    { label: 'Contractor labour', value: summary.contractorLabourCount, icon: HardHat, tone: 'text-amber-700 bg-amber-50' },
+-    { label: 'Total workforce', value: summary.totalWorkforce, icon: Users, tone: 'text-emerald-700 bg-emerald-50' },
+-    { label: 'Contractors engaged', value: summary.contractorOrgCount, icon: Building2, tone: 'text-brand-600 bg-brand-50' },
+-    { label: 'Active sites', value: summary.siteCount, icon: MapPin, tone: 'text-brand-600 bg-brand-50' },
+-    { label: 'Active projects', value: summary.projectCount, icon: Building2, tone: 'text-brand-600 bg-brand-50' },
++    { label: 'Company labour', value: summary.companyLabourCount, icon: Users, tone: 'text-brand-600 bg-brand-50', tab: 'company-labour' },
++    { label: 'Contractor labour', value: summary.contractorLabourCount, icon: HardHat, tone: 'text-amber-700 bg-amber-50', tab: 'contractor-labour' },
++    { label: 'Total workforce', value: summary.totalWorkforce, icon: Users, tone: 'text-emerald-700 bg-emerald-50', tab: 'assignments' },
++    { label: 'Contractors engaged', value: summary.contractorOrgCount, icon: Building2, tone: 'text-brand-600 bg-brand-50', tab: 'contractor-workers' },
++    { label: 'Active sites', value: summary.siteCount, icon: MapPin, tone: 'text-brand-600 bg-brand-50', tab: 'assignments' },
++    { label: 'Active projects', value: summary.projectCount, icon: Building2, tone: 'text-brand-600 bg-brand-50', tab: 'assignments' },
+   ];
+ 
++  // A Card panel is clickable only when the host provided a tab navigator.
++  const panelNav = (tab) =>
++    onSelectTab
++      ? {
++          onClick: () => onSelectTab(tab),
++          role: 'button',
++          tabIndex: 0,
++          onKeyDown: (e) => {
++            if (e.key === 'Enter' || e.key === ' ') {
++              e.preventDefault();
++              onSelectTab(tab);
++            }
++          },
++          className: 'card-interactive',
++        }
++      : {};
++
+   return (
+     <div className="space-y-6 p-5">
+       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
+-        {cards.map((card) => (
+-          <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
++        {cards.map((card) => {
++          const inner = (
+             <div className="flex items-center gap-2.5">
+               <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.tone}`}>
+                 <card.icon className="h-4 w-4" aria-hidden="true" />
+@@ -34,12 +51,28 @@
+                 <p className="truncate text-xs text-ink-subtle">{card.label}</p>
+               </div>
+             </div>
+-          </div>
+-        ))}
++          );
++
++          return onSelectTab && card.tab ? (
++            <button
++              key={card.label}
++              type="button"
++              onClick={() => onSelectTab(card.tab)}
++              aria-label={`${card.label} — open ${card.tab.replace('-', ' ')}`}
++              className="card-interactive block rounded-xl border border-line bg-white px-4 py-3.5 text-left"
++            >
++              {inner}
++            </button>
++          ) : (
++            <div key={card.label} className="rounded-xl border border-line bg-white px-4 py-3.5">
++              {inner}
++            </div>
++          );
++        })}
+       </div>
+ 
+       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+-        <Card>
++        <Card {...panelNav('attendance')}>
+           <CardHeader
+             title="Today's attendance"
+             description="Company + contractor labour marked so far today."
+@@ -56,7 +89,7 @@
+           </CardBody>
+         </Card>
+ 
+-        <Card>
++        <Card {...panelNav('labour-requests')}>
+           <CardHeader
+             title="Labour requests"
+             description="Contractor requests awaiting action."
+--- a/client/src/pages/HrDashboardPage.jsx
++++ b/client/src/pages/HrDashboardPage.jsx
+@@ -144,7 +144,7 @@
+         {validTab === 'overview' && (
+           summaryLoading
+             ? <LoadingPane />
+-            : <HrOverviewTab summary={summary ?? emptySummary} />
++            : <HrOverviewTab summary={summary ?? emptySummary} onSelectTab={setActiveTab} />
+         )}
+ 
+         {validTab === 'company-labour' && (

@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: architecture-erp
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "4000"
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        value: architecture_erp
+      - key: DB_SSL
+        value: "true"
+      - key: SEED_ADMIN_EMAIL
+        value: admin@architectureerp.com
+      - key: SEED_ADMIN_PASSWORD
+        value: Admin@12345678
