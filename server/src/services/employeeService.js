@@ -107,6 +107,18 @@ function toEmployee(row, skills = [], profile360 = null, searchQuery = null) {
     avatarUrl: row.avatar_url || null,
     notes: row.notes,
     userId: row.user_id,
+    user: row.user_id
+      ? {
+          id: row.user_id,
+          fullName: row.user_full_name,
+          email: row.user_email,
+          username: row.user_username,
+          isActive: Boolean(row.user_is_active),
+          roleId: row.user_role_id,
+          role: row.user_role_slug,
+          roleName: row.user_role_name,
+        }
+      : null,
     createdAt: row.created_at,
     currentProject: row.current_project || null,
     currentSite: row.current_site || null,
@@ -205,7 +217,7 @@ async function generateCode() {
   throw ApiError.badRequest('Could not generate an employee ID. Enter one manually.');
 }
 
-async function create(payload) {
+async function create(payload, actorId) {
   const employee_code = payload.employee_code?.trim() || (await generateCode());
 
   if (await employeeModel.findByCode(employee_code)) {
@@ -214,10 +226,45 @@ async function create(payload) {
     });
   }
 
+  let userIdToLink =
+    payload.user_id !== undefined
+      ? (payload.user_id ? Number(payload.user_id) : null)
+      : (payload.userId !== undefined ? (payload.userId ? Number(payload.userId) : null) : undefined);
+
+  if (payload.createUserAccess && typeof payload.createUserAccess === 'object') {
+    const ua = payload.createUserAccess;
+    const userAccessService = require('./userAccessService');
+    const newUserId = await userAccessService.createUser(
+      {
+        full_name: payload.full_name?.trim(),
+        email: ua.email?.trim() || payload.email?.trim(),
+        username: ua.username?.trim() || null,
+        password: ua.password,
+        confirmPassword: ua.confirmPassword || ua.password,
+        role: ua.role || 'employee',
+        department: payload.department?.trim() || null,
+        phone: payload.phone?.trim() || null,
+        status: ua.status || 'active',
+      },
+      actorId
+    );
+    userIdToLink = newUserId;
+  }
+
+  if (userIdToLink) {
+    const existingLinked = await employeeModel.findByUserId(userIdToLink);
+    if (existingLinked) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        user_id: `This user account is already linked to employee ${existingLinked.full_name}.`,
+      });
+    }
+  }
+
   const status = payload.status ?? 'active';
   const id = await employeeModel.create({
     ...payload,
     employee_code,
+    user_id: userIdToLink !== undefined ? userIdToLink : null,
     status,
     is_active: isActiveFlag(status),
   });
@@ -235,8 +282,8 @@ async function create(payload) {
   return getById(id);
 }
 
-async function update(id, payload) {
-  await getById(id); // 404s when missing
+async function update(id, payload, actorId) {
+  const existingEmployee = await getById(id); // 404s when missing
 
   if (payload.employee_code) {
     const existing = await employeeModel.findByCode(payload.employee_code);
@@ -247,9 +294,46 @@ async function update(id, payload) {
     }
   }
 
+  let userIdToLink =
+    payload.user_id !== undefined
+      ? (payload.user_id ? Number(payload.user_id) : null)
+      : (payload.userId !== undefined ? (payload.userId ? Number(payload.userId) : null) : undefined);
+
+  if (payload.createUserAccess && typeof payload.createUserAccess === 'object') {
+    const ua = payload.createUserAccess;
+    const userAccessService = require('./userAccessService');
+    const newUserId = await userAccessService.createUser(
+      {
+        full_name: payload.full_name?.trim() || existingEmployee.fullName,
+        email: ua.email?.trim() || payload.email?.trim() || existingEmployee.email,
+        username: ua.username?.trim() || null,
+        password: ua.password,
+        confirmPassword: ua.confirmPassword || ua.password,
+        role: ua.role || 'employee',
+        department: payload.department?.trim() || existingEmployee.department || null,
+        phone: payload.phone?.trim() || existingEmployee.phone || null,
+        status: ua.status || 'active',
+      },
+      actorId
+    );
+    userIdToLink = newUserId;
+  }
+
+  if (userIdToLink) {
+    const existingLinked = await employeeModel.findByUserId(userIdToLink);
+    if (existingLinked && Number(existingLinked.id) !== Number(id)) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        user_id: `This user account is already linked to employee ${existingLinked.full_name}.`,
+      });
+    }
+  }
+
   const patch = { ...payload };
   if (payload.status !== undefined) {
     patch.is_active = isActiveFlag(payload.status);
+  }
+  if (userIdToLink !== undefined) {
+    patch.user_id = userIdToLink;
   }
 
   await employeeModel.update(id, patch);

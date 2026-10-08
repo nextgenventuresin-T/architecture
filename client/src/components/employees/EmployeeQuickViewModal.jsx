@@ -177,6 +177,19 @@ export default function EmployeeQuickViewModal({ employee, isOpen, onClose }) {
                   </strong>
                 </span>
               </div>
+              <div className="flex items-center gap-2 text-ink-muted">
+                <ShieldCheck className="h-3.5 w-3.5 text-brand-600 shrink-0" />
+                <span>
+                  User Access:{' '}
+                  {employee.user ? (
+                    <strong className="text-brand-700 font-semibold">
+                      {employee.user.roleName || employee.user.role} ({employee.user.username || employee.user.email})
+                    </strong>
+                  ) : (
+                    <span className="text-ink-subtle">No System Login Account</span>
+                  )}
+                </span>
+              </div>
             </div>
           </div>
 

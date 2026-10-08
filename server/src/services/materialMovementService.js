@@ -13,15 +13,24 @@ function num(v) { return v === null || v === undefined ? null : Number(v); }
 
 function toMovement(row) {
   if (!row) return null;
+  const costPerUnit = num(row.procurement_purchase_rate) || num(row.procurement_estimated_rate) || num(row.material_default_rate) || 0;
+  const qty = num(row.sent_quantity) != null ? num(row.sent_quantity) : (num(row.requested_quantity) || 0);
+  const totalMaterialCost = num(row.procurement_total_amount) != null
+    ? num(row.procurement_total_amount)
+    : Number((qty * costPerUnit).toFixed(2));
+
   return {
     id: row.id,
     movementNumber: row.movement_number,
-    material: { id: row.material_id, name: row.material_name, category: row.material_category },
+    material: { id: row.material_id, name: row.material_name, category: row.material_category, defaultRate: num(row.material_default_rate) },
     unit: row.unit,
     source: { warehouseId: row.source_warehouse_id, warehouseName: row.source_warehouse_name, contractorId: row.source_contractor_id, contractorName: row.source_contractor_name },
     destination: { warehouseId: row.destination_warehouse_id, warehouseName: row.destination_warehouse_name, contractorId: row.destination_contractor_id, contractorName: row.destination_contractor_name },
     project: row.project_id ? { id: row.project_id, name: row.project_name } : null,
     site: row.site_id ? { id: row.site_id, name: row.site_name } : null,
+    task: row.procurement_task_id ? { id: row.procurement_task_id, name: row.procurement_task_name } : null,
+    costPerUnit,
+    totalMaterialCost,
     requestedQuantity: num(row.requested_quantity),
     sentQuantity: num(row.sent_quantity),
     receivedQuantity: num(row.received_quantity),

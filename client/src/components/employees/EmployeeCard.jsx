@@ -1,4 +1,4 @@
-import { Eye, Pencil, Building2, MapPin, Briefcase, UserCheck, Star, Sparkles } from 'lucide-react';
+import { Eye, Pencil, Building2, MapPin, Briefcase, UserCheck, Star, Sparkles, ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
@@ -93,6 +93,12 @@ export default function EmployeeCard({
                 {employee.department && (
                   <span className="rounded-md bg-canvas px-2 py-0.5 text-[11px] font-semibold text-ink-muted">
                     {employee.department}
+                  </span>
+                )}
+                {employee.user && (
+                  <span className="rounded-md bg-brand-50 border border-brand-200 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700 inline-flex items-center gap-1" title={`User Login: ${employee.user.username || employee.user.email}`}>
+                    <ShieldCheck className="h-2.5 w-2.5 text-brand-600 inline shrink-0" />
+                    {employee.user.roleName || employee.user.role}
                   </span>
                 )}
               </div>

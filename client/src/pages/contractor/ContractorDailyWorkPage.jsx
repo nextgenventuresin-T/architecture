@@ -24,6 +24,8 @@ import {
   Square,
   Eye,
   FileSpreadsheet,
+  DollarSign,
+  AlertTriangle,
 } from 'lucide-react';
 import PageHeader from '../../components/layout/PageHeader';
 import { Card, CardHeader, CardBody } from '../../components/ui/Card';
@@ -71,6 +73,8 @@ export default function ContractorDailyWorkPage() {
   const [miscDescription, setMiscDescription] = useState('');
   const [miscAmount, setMiscAmount] = useState('');
   const [miscRemarks, setMiscRemarks] = useState('');
+  const [currentTaskDetail, setCurrentTaskDetail] = useState(null);
+  const [excessReason, setExcessReason] = useState('');
 
   // Assigned task workers and logged workers
   const [taskAssignedLabour, setTaskAssignedLabour] = useState([]);
@@ -195,16 +199,18 @@ export default function ContractorDailyWorkPage() {
       .finally(() => setTasksLoading(false));
   }, [projectId, siteId, initialTaskId]);
 
-  // When taskId changes, fetch full task details to auto-populate assigned labour
+  // When taskId changes, fetch full task details to auto-populate assigned labour and budget utilization
   useEffect(() => {
     if (!taskId) {
       setTaskAssignedLabour([]);
+      setCurrentTaskDetail(null);
       return;
     }
     tasksApi
       .detail(taskId)
       .then((taskDetail) => {
         if (!taskDetail) return;
+        setCurrentTaskDetail(taskDetail);
         const assigned = (taskDetail.assignedWorkers && taskDetail.assignedWorkers.length > 0)
           ? taskDetail.assignedWorkers
           : (taskDetail.labour || []);
@@ -344,6 +350,40 @@ export default function ContractorDailyWorkPage() {
     });
   }
 
+  // Live calculation of spending for this update
+  const selectedMaterial = inventory.find((m) => String(m.material_id) === String(selectedMaterialId));
+  const liveMaterialCost = useMemo(() => {
+    if (!selectedMaterialId || !quantityUsed || Number(quantityUsed) <= 0) return 0;
+    const rate = Number(selectedMaterial?.costPerUnit || selectedMaterial?.cost_per_unit || selectedMaterial?.default_rate || selectedMaterial?.defaultRate || 0);
+    return Number((Number(quantityUsed) * rate).toFixed(2));
+  }, [selectedMaterialId, quantityUsed, selectedMaterial]);
+
+  const liveMiscCost = useMemo(() => {
+    return miscAmount && Number(miscAmount) > 0 ? Number(miscAmount) : 0;
+  }, [miscAmount]);
+
+  const liveLabourCost = useMemo(() => {
+    return workers
+      .filter((w) => w.isPresent !== false && w.workerName && w.workerName.trim())
+      .reduce((sum, w) => {
+        const isEmployee = w.workerType === 'company_employee' || String(w.labourType || '').toLowerCase().includes('company');
+        if (isEmployee) return sum;
+        const hours = Number(w.hoursWorked || 8);
+        const wage = Number(w.dailyWage || 0);
+        return sum + (hours / 8) * wage;
+      }, 0);
+  }, [workers]);
+
+  const liveUpdateTotal = Number((liveMaterialCost + liveMiscCost + liveLabourCost).toFixed(2));
+
+  // Current task budget and actuals
+  const taskBudgetUtilization = currentTaskDetail?.budgetUtilization;
+  const currentActual = Number(taskBudgetUtilization?.total?.actual || 0);
+  const approvedBudget = Number(taskBudgetUtilization?.total?.effectiveBudget || Number(currentTaskDetail?.total_budget || 0));
+  const projectedTotal = Number((currentActual + liveUpdateTotal).toFixed(2));
+  const isOverBudget = approvedBudget > 0 && projectedTotal > approvedBudget;
+  const excessAmount = Math.max(0, Number((projectedTotal - approvedBudget).toFixed(2)));
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!projectId || !siteId) {
@@ -365,7 +405,12 @@ export default function ContractorDailyWorkPage() {
       return;
     }
 
-    const selectedMaterial = inventory.find((m) => String(m.material_id) === String(selectedMaterialId));
+    if (isOverBudget && !excessReason.trim()) {
+      setError(new Error(`This update will exceed the approved task budget by ₹${excessAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Please provide a mandatory excess budget justification/reason below.`));
+      setSubmitting(false);
+      return;
+    }
+
     if (selectedMaterialId) {
       const qty = Number(quantityUsed);
       if (!(qty > 0)) {
@@ -390,6 +435,7 @@ export default function ContractorDailyWorkPage() {
       formData.append('progress_percentage', progressPercentage);
       formData.append('work_status', workStatus);
       if (remarks.trim()) formData.append('remarks', remarks.trim());
+      if (excessReason.trim()) formData.append('excess_reason', excessReason.trim());
 
       // Only include workers who were marked as present/working
       const presentWorkers = workers.filter((w) => w.isPresent !== false && w.workerName && w.workerName.trim());
@@ -432,6 +478,7 @@ export default function ContractorDailyWorkPage() {
       setSuccessMsg('Daily work update, worker logs, and material usage recorded successfully!');
       setWorkDone('');
       setRemarks('');
+      setExcessReason('');
       setSelectedMaterialId('');
       setQuantityUsed('');
       setMiscDescription('');
@@ -1379,6 +1426,82 @@ export default function ContractorDailyWorkPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Live Task Budget Utilization & Exceeded Alert */}
+                {taskId && currentTaskDetail && (
+                  <div className="rounded-xl border border-line bg-canvas/40 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-2">
+                      <div className="flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-brand-700" />
+                        <span className="text-xs font-semibold text-ink">Task Budget & Cost Impact</span>
+                      </div>
+                      <span className="text-[11px] text-ink-subtle">
+                        Live breakdown based on today's logged work
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 text-xs">
+                      <div className="rounded-lg border border-line bg-white p-2.5">
+                        <span className="text-[10px] uppercase font-medium text-ink-subtle">Approved Budget</span>
+                        <p className="mt-0.5 font-bold text-ink">{formatCurrency(approvedBudget)}</p>
+                      </div>
+                      <div className="rounded-lg border border-line bg-white p-2.5">
+                        <span className="text-[10px] uppercase font-medium text-ink-subtle">Previous Spent</span>
+                        <p className="mt-0.5 font-bold text-ink-muted">{formatCurrency(currentActual)}</p>
+                      </div>
+                      <div className="rounded-lg border border-line bg-white p-2.5">
+                        <span className="text-[10px] uppercase font-medium text-brand-700">Today's New Cost</span>
+                        <p className="mt-0.5 font-bold text-brand-700 tabular-nums">+{formatCurrency(liveUpdateTotal)}</p>
+                        <div className="text-[10px] text-ink-subtle mt-0.5 truncate">
+                          Mat: {formatCurrency(liveMaterialCost)} | Lab: {formatCurrency(liveLabourCost)}
+                        </div>
+                      </div>
+                      <div className={`rounded-lg border p-2.5 ${isOverBudget ? 'border-rose-300 bg-rose-50/60' : 'border-line bg-white'}`}>
+                        <span className={`text-[10px] uppercase font-medium ${isOverBudget ? 'text-rose-700 font-bold' : 'text-ink-subtle'}`}>
+                          Projected Total
+                        </span>
+                        <p className={`mt-0.5 font-bold tabular-nums ${isOverBudget ? 'text-rose-700' : 'text-ink'}`}>
+                          {formatCurrency(projectedTotal)}
+                        </p>
+                        {isOverBudget && (
+                          <div className="text-[10px] font-bold text-rose-700 mt-0.5">
+                            Over by +{formatCurrency(excessAmount)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {isOverBudget && (
+                      <div className="rounded-lg border border-rose-300 bg-rose-50/80 p-3 space-y-2 mt-2">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-xs font-bold text-rose-900">
+                              Task Budget Exceeded: +{formatCurrency(excessAmount)} Pending Admin Approval
+                            </p>
+                            <p className="text-[11px] text-rose-800 mt-0.5">
+                              This update will exceed the approved task budget of {formatCurrency(approvedBudget)}. The excess amount will not be treated as approved until reviewed and approved by Admin. A mandatory justification is required.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-rose-950 mb-1">
+                            Excess Budget Justification / Reason <span className="text-rose-600">*</span>
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={excessReason}
+                            onChange={(e) => setExcessReason(e.target.value)}
+                            required
+                            placeholder="Explain why this excess spending is required (e.g., unforeseen soil rock excavation, structural changes, unexpected price surge)..."
+                            className="w-full rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs text-ink placeholder:text-ink-subtle focus:border-rose-500 focus:outline-hidden"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <Button type="submit" disabled={submitting} className="w-full justify-center">
                   <FileCheck className="h-4 w-4" />

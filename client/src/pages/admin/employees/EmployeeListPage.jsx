@@ -10,6 +10,7 @@ import {
   List as ListIcon,
   Star,
   Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
@@ -242,6 +243,30 @@ export default function EmployeeListPage() {
           {EMPLOYEE_STATUS_LABELS[row.status] ?? row.status}
         </Badge>
       ),
+    },
+    {
+      key: 'userAccess',
+      header: 'User Access (Login)',
+      render: (row) => {
+        if (row.user) {
+          return (
+            <div className="space-y-0.5">
+              <span className="inline-flex items-center gap-1 rounded bg-brand-50 border border-brand-200 px-2 py-0.5 text-[11px] font-semibold text-brand-700">
+                <ShieldCheck className="h-3 w-3 text-brand-600 inline shrink-0" />
+                {row.user.roleName || row.user.role}
+              </span>
+              <p className="text-[10px] text-ink-subtle truncate max-w-[130px]">
+                {row.user.username || row.user.email}
+              </p>
+            </div>
+          );
+        }
+        return (
+          <span className="inline-flex items-center rounded bg-canvas-subtle border border-line px-1.5 py-0.5 text-[10px] text-ink-subtle">
+            No Login
+          </span>
+        );
+      },
     },
     {
       key: 'actions',

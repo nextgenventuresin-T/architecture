@@ -15,10 +15,10 @@ const lookups = asyncHandler(async (req, res) => ok(res, await employeeService.g
 const detail = asyncHandler(async (req, res) => ok(res, await employeeService.getDetail(req.params.id)));
 
 /** POST /api/employees */
-const create = asyncHandler(async (req, res) => ok(res, { employee: await employeeService.create(req.body) }, 201));
+const create = asyncHandler(async (req, res) => ok(res, { employee: await employeeService.create(req.body, req.user?.id) }, 201));
 
 /** PATCH /api/employees/:id */
-const update = asyncHandler(async (req, res) => ok(res, { employee: await employeeService.update(req.params.id, req.body) }));
+const update = asyncHandler(async (req, res) => ok(res, { employee: await employeeService.update(req.params.id, req.body, req.user?.id) }));
 
 /** POST /api/employees/:id/assign */
 const assign = asyncHandler(async (req, res) => ok(res, await employeeService.assign(req.params.id, req.body), 201));

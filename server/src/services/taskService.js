@@ -265,6 +265,11 @@ async function getPlannedMaterials(taskId, hrScope) {
   return { materials };
 }
 
+async function getBudgetApprovals(taskId) {
+  const approvals = await taskModel.getTaskBudgetApprovals(taskId);
+  return { approvals };
+}
+
 module.exports = {
   listTasks,
   getTaskDetail,
@@ -278,4 +283,5 @@ module.exports = {
   unassignWorkerFromTask,
   createQuickWorker,
   getPlannedMaterials,
+  getBudgetApprovals,
 };

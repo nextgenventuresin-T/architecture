@@ -62,6 +62,13 @@ const LIST_SELECT = `
     e.employee_type, e.joining_date, e.experience_years, e.email, e.phone, e.address,
     e.work_location, e.work_mode, e.status, e.availability_status, e.avatar_url, e.notes,
     e.is_active, e.user_id, e.created_at,
+    u.full_name                     AS user_full_name,
+    u.email                         AS user_email,
+    u.username                      AS user_username,
+    u.is_active                     AS user_is_active,
+    r.id                            AS user_role_id,
+    r.name                          AS user_role_name,
+    r.slug                          AS user_role_slug,
     COALESCE(work.project_total, 0) AS project_count,
     COALESCE(work.site_total, 0)    AS site_count,
     COALESCE(sm.labour_total, 0)    AS labour_count,
@@ -71,6 +78,8 @@ const LIST_SELECT = `
     cur.role                        AS \`current_role\`,
     cur_task.task_name              AS current_task
   FROM employees e
+  LEFT JOIN users u ON u.id = e.user_id
+  LEFT JOIN roles r ON r.id = u.role_id
   LEFT JOIN employees mgr ON mgr.id = e.reporting_manager_id
   LEFT JOIN employees mgr2 ON mgr2.id = mgr.reporting_manager_id
   LEFT JOIN (
@@ -342,7 +351,7 @@ const WRITABLE = [
   'employee_code', 'full_name', 'designation', 'department', 'reporting_manager_id',
   'employee_type', 'joining_date', 'experience_years', 'email', 'phone', 'address',
   'work_location', 'work_mode', 'status', 'availability_status', 'avatar_url',
-  'notes', 'is_active',
+  'notes', 'is_active', 'user_id',
 ];
 
 function normalizePayload(payload) {
@@ -357,6 +366,8 @@ function normalizePayload(payload) {
   if (payload.fullName !== undefined) normalized.full_name = payload.fullName;
   if (payload.employeeType !== undefined) normalized.employee_type = payload.employeeType;
   if (payload.joiningDate !== undefined) normalized.joining_date = payload.joiningDate;
+  if (payload.userId !== undefined) normalized.user_id = payload.userId ? Number(payload.userId) : null;
+  if (payload.user_id !== undefined) normalized.user_id = payload.user_id ? Number(payload.user_id) : null;
   return normalized;
 }
 
@@ -590,11 +601,22 @@ async function findDistinctLookups() {
     [desigRows],
     [skillRows],
     [mgrRows],
+    [userRows],
+    [roleRows],
   ] = await Promise.all([
     pool.query("SELECT DISTINCT department FROM employees WHERE department IS NOT NULL AND department <> '' ORDER BY department"),
     pool.query("SELECT DISTINCT designation FROM employees WHERE designation <> '' ORDER BY designation"),
     pool.query("SELECT DISTINCT skill_name FROM employee_skills ORDER BY skill_name"),
     pool.query(`SELECT e.id, e.full_name, ${CODE_EXPR} AS employee_code FROM employees e WHERE e.status = 'active' ORDER BY e.full_name`),
+    pool.query(`
+      SELECT u.id, u.full_name, u.email, u.username, r.slug AS role_slug, r.name AS role_name,
+             (SELECT e2.id FROM employees e2 WHERE e2.user_id = u.id LIMIT 1) AS linked_employee_id
+      FROM users u
+      JOIN roles r ON r.id = u.role_id
+      WHERE u.is_active = 1
+      ORDER BY u.full_name
+    `),
+    pool.query('SELECT id, slug, name FROM roles WHERE is_active = 1 ORDER BY is_system DESC, name'),
   ]);
 
   return {
@@ -602,6 +624,16 @@ async function findDistinctLookups() {
     designations: desigRows.map((r) => r.designation),
     skills: skillRows.map((r) => r.skill_name),
     reportingManagers: mgrRows.map((r) => ({ id: r.id, name: r.full_name, code: r.employee_code })),
+    availableUsers: userRows.map((u) => ({
+      id: u.id,
+      fullName: u.full_name,
+      email: u.email,
+      username: u.username,
+      role: u.role_slug,
+      roleName: u.role_name,
+      linkedEmployeeId: u.linked_employee_id,
+    })),
+    roles: roleRows.map((r) => ({ id: r.id, slug: r.slug, name: r.name })),
   };
 }
 

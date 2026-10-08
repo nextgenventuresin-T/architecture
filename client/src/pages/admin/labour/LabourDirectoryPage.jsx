@@ -118,7 +118,7 @@ export default function LabourDirectoryPage() {
     if (activeTab === 'labour_diary') return;
     setIsLoadingDir(true);
 
-    const workerType = activeTab === 'daily_wage' ? 'labour' : 'company_employee';
+    const workerType = 'labour';
 
     hrApi.labourDirectory
       .list({
@@ -408,7 +408,7 @@ export default function LabourDirectoryPage() {
     <div className="space-y-6 p-6">
       <PageHeader
         title="Workforce Management & Labour Directory"
-        subtitle="Manage assigned daily-wage workers, company staff assignments, and inspect the chronological Labour Diary across projects and sites."
+        description="Manage registered contractor labour, daily-wage workers, trade rates, and inspect the chronological Labour Diary across projects and sites."
         actions={
           <div className="flex items-center gap-2">
             {activeTab === 'daily_wage' && (
@@ -450,7 +450,7 @@ export default function LabourDirectoryPage() {
             }`}
           >
             <HardHat className="h-4 w-4" />
-            Daily Wage Workers
+            Daily Wage & Contractor Labour
             <span
               className={`ml-1.5 rounded-full px-2 py-0.5 text-xs ${
                 activeTab === 'daily_wage'
@@ -459,31 +459,6 @@ export default function LabourDirectoryPage() {
               }`}
             >
               {activeTab === 'daily_wage' ? dirData.total : '•'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('company_employee');
-              setDirPage(1);
-            }}
-            className={`flex items-center gap-2 border-b-2 py-3 px-1 text-sm font-semibold transition-colors ${
-              activeTab === 'company_employee'
-                ? 'border-brand-600 text-brand-600'
-                : 'border-transparent text-ink-muted hover:border-line hover:text-ink'
-            }`}
-          >
-            <Briefcase className="h-4 w-4" />
-            Company Employees
-            <span
-              className={`ml-1.5 rounded-full px-2 py-0.5 text-xs ${
-                activeTab === 'company_employee'
-                  ? 'bg-brand-50 text-brand-700'
-                  : 'bg-canvas-subtle text-ink-subtle'
-              }`}
-            >
-              {activeTab === 'company_employee' ? dirData.total : '•'}
             </span>
           </button>
 

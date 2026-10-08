@@ -40,7 +40,17 @@ const INITIAL_FILTERS = {
 };
 
 const projectName = (row) => row.project?.name || (row.kind === 'central_purchase' ? 'Central warehouse' : '—');
-const amountOf = (row) => (row.totalAmount != null ? row.totalAmount : row.estimatedTotal);
+const amountOf = (row) => {
+  if (row.totalAmount != null && Number(row.totalAmount) > 0) return Number(row.totalAmount);
+  if (row.purchaseRate != null && Number(row.purchaseRate) > 0 && Number(row.quantity) > 0) {
+    return Number((Number(row.purchaseRate) * Number(row.quantity)).toFixed(2));
+  }
+  if (row.estimatedTotal != null && Number(row.estimatedTotal) > 0) return Number(row.estimatedTotal);
+  if (row.estimatedRate != null && Number(row.estimatedRate) > 0 && Number(row.quantity) > 0) {
+    return Number((Number(row.estimatedRate) * Number(row.quantity)).toFixed(2));
+  }
+  return 0;
+};
 
 export default function ProcurementListPage({ basePath = '/admin' }) {
   const modulePath = basePath === '/admin' ? '/admin/procurement' : basePath;

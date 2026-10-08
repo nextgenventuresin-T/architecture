@@ -311,11 +311,11 @@ async function adjustStockSlot({ warehouseId, materialId, projectId = null, site
   const existing = await findStockSlot({ warehouseId, materialId, projectId, siteId }, conn);
 
   if (existing) {
-    await conn.query('UPDATE warehouse_stock SET quantity = quantity + ? WHERE id = ?', [delta, existing.id]);
+    await runner(conn).query('UPDATE warehouse_stock SET quantity = quantity + ? WHERE id = ?', [delta, existing.id]);
     return existing.id;
   }
 
-  const [result] = await conn.query(
+  const [result] = await runner(conn).query(
     `INSERT INTO warehouse_stock (warehouse_id, material_id, project_id, site_id, quantity)
      VALUES (?, ?, ?, ?, ?)`,
     [warehouseId, materialId, projectId ?? null, siteId ?? null, delta]

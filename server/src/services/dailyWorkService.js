@@ -9,6 +9,9 @@ const warehouseModel = require('../models/warehouseModel');
 const warehouseService = require('./warehouseService');
 const financeModel = require('../models/financeModel');
 const taskModel = require('../models/taskModel');
+const approvalModel = require('../models/approvalModel');
+const notificationModel = require('../models/notificationModel');
+const userModel = require('../models/userModel');
 const { PROJECT_PHASES_DEF } = require('../config/projectPhases');
 const { pool } = require('../config/db');
 
@@ -307,18 +310,75 @@ async function create(payload, files, hrScope, userId) {
   let phaseNumber = payload.phase_number ? Number(payload.phase_number) : null;
   let subcategory = (payload.subcategory || '').trim();
 
+  // Parse workers if provided
+  let workersList = [];
+  if (typeof payload.workers === 'string') {
+    try { workersList = JSON.parse(payload.workers); } catch (e) { workersList = []; }
+  } else if (Array.isArray(payload.workers)) {
+    workersList = payload.workers;
+  }
+
+  // Budget exceeded pre-check
+  let budgetExceededInfo = null;
   if (taskId) {
-    const [taskRows] = await pool.query('SELECT * FROM project_tasks WHERE id = ?', [taskId]);
-    if (!taskRows.length) throw ApiError.badRequest('Specified task does not exist.');
-    task = taskRows[0];
-    if (Number(task.project_id) !== projectId) {
+    const taskDetail = await taskModel.findTaskById(taskId);
+    if (!taskDetail) throw ApiError.badRequest('Specified task does not exist.');
+    if (Number(taskDetail.project_id) !== projectId) {
       throw ApiError.badRequest('Specified task does not belong to this project.');
     }
-    if (siteId && task.site_id && Number(task.site_id) !== siteId) {
+    if (siteId && taskDetail.site_id && Number(taskDetail.site_id) !== siteId) {
       throw ApiError.badRequest('Specified task does not belong to this site.');
     }
+    task = taskDetail;
     phaseTitle = task.name;
     if (!subcategory) subcategory = task.name;
+
+    // Calculate this update's incoming costs
+    let incomingMaterialCost = 0;
+    if (materialId && quantityUsed > 0) {
+      const mat = await materialModel.findById(materialId);
+      if (mat) {
+        incomingMaterialCost = Number((quantityUsed * Number(mat.default_rate || 0)).toFixed(2));
+      }
+    }
+
+    const incomingMiscCost = payload.misc_amount ? Number(payload.misc_amount) : 0;
+
+    let incomingLabourCost = 0;
+    for (const w of workersList) {
+      const name = (w.worker_name || w.workerName || '').trim();
+      const workerType = w.worker_type || w.workerType || (String(w.labour_type || w.labourType || '').toLowerCase().includes('company') ? 'company_employee' : 'labour');
+      if (name && workerType !== 'company_employee') {
+        const hours = Number(w.hours_worked || w.hoursWorked || 8.0);
+        const wage = Number(w.daily_wage || w.dailyWage || 0.0);
+        incomingLabourCost += (hours / 8.0) * wage;
+      }
+    }
+    incomingLabourCost = Number(incomingLabourCost.toFixed(2));
+    const thisUpdateCost = Number((incomingMaterialCost + incomingMiscCost + incomingLabourCost).toFixed(2));
+
+    if (thisUpdateCost > 0) {
+      const currentActual = Number(taskDetail.budgetUtilization?.total?.actual || 0);
+      const effectiveApprovedBudget = Number(taskDetail.budgetUtilization?.total?.effectiveBudget || Number(task.total_budget || 0));
+      const projectedTotal = Number((currentActual + thisUpdateCost).toFixed(2));
+
+      if (projectedTotal > effectiveApprovedBudget) {
+        const excessReason = (payload.excess_reason || '').trim();
+        if (!excessReason) {
+          throw ApiError.badRequest(
+            `This update will exceed the approved task budget of ₹${effectiveApprovedBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })} by ₹${(projectedTotal - effectiveApprovedBudget).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (projected total: ₹${projectedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}). A mandatory excess budget reason/justification is required before submission.`
+          );
+        }
+        budgetExceededInfo = {
+          approvedBudget: effectiveApprovedBudget,
+          currentActual,
+          thisUpdateCost,
+          projectedTotal,
+          requestedExcess: Number((projectedTotal - effectiveApprovedBudget).toFixed(2)),
+          excessReason,
+        };
+      }
+    }
   } else if (phaseNumber) {
     const phaseDef = PROJECT_PHASES_DEF.find((p) => p.phase_number === phaseNumber);
     if (phaseDef) {
@@ -472,13 +532,6 @@ async function create(payload, files, hrScope, userId) {
     }
 
     // Process workers if submitted with daily update
-    let workersList = [];
-    if (typeof payload.workers === 'string') {
-      try { workersList = JSON.parse(payload.workers); } catch (e) { workersList = []; }
-    } else if (Array.isArray(payload.workers)) {
-      workersList = payload.workers;
-    }
-
     for (const w of workersList) {
       const name = (w.worker_name || w.workerName || '').trim();
       if (name) {
@@ -500,6 +553,83 @@ async function create(payload, files, hrScope, userId) {
           created_by: userId,
         });
       }
+    }
+
+    // If task budget was exceeded, create approval request, audit record, and notify admin
+    if (budgetExceededInfo) {
+      let requesterName = 'Contractor';
+      if (userId) {
+        const u = await userModel.findById(userId).catch(() => null);
+        if (u?.full_name) requesterName = u.full_name;
+      }
+
+      // 1. Create approval request
+      const approvalReqId = await approvalModel.create({
+        project_id: projectId,
+        site_id: siteId,
+        request_type: 'task_budget_exceeded',
+        title: `Task Budget Exceeded: ${task.name} (+₹${budgetExceededInfo.requestedExcess.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`,
+        requested_by: requesterName,
+        amount: budgetExceededInfo.requestedExcess,
+        details: JSON.stringify({
+          taskId: task.id,
+          taskName: task.name,
+          originalBudget: Number(task.total_budget || 0),
+          approvedAdditional: Number(task.approved_additional_budget || 0),
+          currentApprovedBudget: budgetExceededInfo.approvedBudget,
+          currentActual: budgetExceededInfo.currentActual,
+          incomingCost: budgetExceededInfo.thisUpdateCost,
+          projectedTotal: budgetExceededInfo.projectedTotal,
+          requestedExcess: budgetExceededInfo.requestedExcess,
+          reason: budgetExceededInfo.excessReason,
+        }),
+        requested_on: workDate,
+      });
+
+      // 2. Insert into task_budget_approvals audit trail
+      await pool.query(
+        `INSERT INTO task_budget_approvals
+         (task_id, project_id, site_id, category, budget_amount, actual_amount, requested_excess, reason, status, requested_by, approval_request_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [
+          task.id,
+          projectId,
+          siteId,
+          'Task Total',
+          budgetExceededInfo.approvedBudget,
+          budgetExceededInfo.projectedTotal,
+          budgetExceededInfo.requestedExcess,
+          budgetExceededInfo.excessReason,
+          userId,
+          approvalReqId,
+        ]
+      );
+
+      // 3. Update task pending_excess_budget and excess_reason (original total_budget is UNCHANGED!)
+      await pool.query(
+        `UPDATE project_tasks
+         SET pending_excess_budget = pending_excess_budget + ?,
+             excess_reason = ?
+         WHERE id = ?`,
+        [budgetExceededInfo.requestedExcess, budgetExceededInfo.excessReason, task.id]
+      );
+
+      // 4. Create admin notification
+      await notificationModel.create({
+        role: 'admin',
+        title: `Task Budget Exceeded: ${task.name}`,
+        message: `Task "${task.name}" in project "${project.name}" requires excess budget approval of ₹${budgetExceededInfo.requestedExcess.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Reason: ${budgetExceededInfo.excessReason}`,
+        type: 'warning',
+        category: 'approvals',
+        actionUrl: '/admin/approvals',
+        metadata: {
+          taskId: task.id,
+          projectId,
+          siteId,
+          approvalRequestId: approvalReqId,
+          requestedExcess: budgetExceededInfo.requestedExcess,
+        },
+      });
     }
   } else if (phaseNumber) {
     // Legacy phase progress update

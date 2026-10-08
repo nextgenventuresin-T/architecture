@@ -88,13 +88,14 @@ export default function VendorListPage() {
     <div className="space-y-6 p-6">
       <PageHeader
         title="Vendors & Suppliers"
-        subtitle="Manage approved raw material and machinery vendors supplying Central Warehouse procurement."
-      >
-        <Button variant="primary" onClick={handleCreate}>
-          <Plus className="h-4 w-4 mr-1.5" />
-          Add Vendor
-        </Button>
-      </PageHeader>
+        description="Manage approved raw material and machinery vendors supplying Central Warehouse procurement."
+        actions={
+          <Button variant="primary" onClick={handleCreate}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            Add Vendor
+          </Button>
+        }
+      />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -224,7 +225,12 @@ export default function VendorListPage() {
               ) : vendors.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-12 text-center text-xs text-ink-subtle">
-                    No vendors registered yet. Click &ldquo;Add Vendor&rdquo; above to register suppliers.
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <p>No vendors registered yet.</p>
+                      <Button size="sm" variant="outline" onClick={handleCreate}>
+                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Vendor
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ) : (

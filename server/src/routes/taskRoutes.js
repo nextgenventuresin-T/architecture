@@ -111,6 +111,13 @@ router.get(
   controller.plannedMaterials
 );
 
+router.get(
+  '/:id/budget-approvals',
+  [param('id').isInt({ min: 1 })],
+  validate,
+  controller.budgetApprovals
+);
+
 router.post('/workers/quick-create', controller.createWorker);
 
 router.get('/:id/assignments', [param('id').isInt({ min: 1 })], validate, controller.assignments);

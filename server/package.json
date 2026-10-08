@@ -15,7 +15,6 @@
     "test:additive-demo": "node scripts_test/additive_demo_smoke_test.js"
   },
   "dependencies": {
-    "architecture-erp": "file:..",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",

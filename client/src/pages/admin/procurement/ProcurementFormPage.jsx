@@ -167,13 +167,41 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
 
   const set = (key) => (event) => {
     const { value } = event.target;
-    setValues((current) => ({
-      ...current,
-      [key]: value,
-      ...(key === 'project_id' ? { site_id: '', task_id: '', material_id: '' } : null),
-      ...(key === 'site_id' ? { task_id: '', material_id: '' } : null),
-      ...(key === 'task_id' ? { material_id: '' } : null),
-    }));
+    setValues((current) => {
+      const next = {
+        ...current,
+        [key]: value,
+        ...(key === 'project_id' ? { site_id: '', task_id: '', material_id: '' } : null),
+        ...(key === 'site_id' ? { task_id: '', material_id: '' } : null),
+        ...(key === 'task_id' ? { material_id: '' } : null),
+      };
+
+      // Auto-calculate total cost when quantity or unit cost changes
+      if (key === 'quantity' || key === 'purchase_rate' || key === 'estimated_rate') {
+        const qty = parseFloat(key === 'quantity' ? value : next.quantity);
+        const pRate = parseFloat(key === 'purchase_rate' ? value : next.purchase_rate);
+        const eRate = parseFloat(key === 'estimated_rate' ? value : next.estimated_rate);
+
+        // Keep unit cost fields in sync if one is filled and other is empty
+        if (key === 'purchase_rate' && value && (!next.estimated_rate || next.estimated_rate === '0')) {
+          next.estimated_rate = value;
+        } else if (key === 'estimated_rate' && value && !next.purchase_rate) {
+          next.purchase_rate = value;
+        }
+
+        const effectiveRate = !isNaN(pRate) && pRate >= 0 ? pRate : (!isNaN(eRate) && eRate >= 0 ? eRate : null);
+
+        if (!isNaN(qty) && qty > 0 && effectiveRate !== null) {
+          next.total_amount = String(Number((qty * effectiveRate).toFixed(2)));
+        } else if (key === 'quantity' && (!value || qty <= 0)) {
+          if (!next.purchase_rate && !next.estimated_rate) {
+            next.total_amount = '';
+          }
+        }
+      }
+
+      return next;
+    });
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
     setFormError(null);
   };
@@ -195,18 +223,29 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     const { value } = event.target;
     const pm = plannedMaterials.find((m) => String(m.materialId) === value);
     const material = materials.find((m) => String(m.id) === value);
-    setValues((current) => ({
-      ...current,
-      material_id: value,
-      unit: pm?.unit || current.unit || material?.unit || '',
-      estimated_rate: pm?.costPerUnit
-        ? String(pm.costPerUnit)
-        : current.estimated_rate && current.estimated_rate !== '0'
-          ? current.estimated_rate
-          : material?.purchaseRate
-            ? String(material.purchaseRate)
-            : current.estimated_rate,
-    }));
+    const rateToUse = pm?.costPerUnit
+      ? String(pm.costPerUnit)
+      : material?.purchaseRate
+        ? String(material.purchaseRate)
+        : '';
+    setValues((current) => {
+      const nextEstRate = rateToUse || current.estimated_rate;
+      const nextPurchaseRate = current.purchase_rate || rateToUse;
+      const qty = parseFloat(current.quantity);
+      const effectiveRate = parseFloat(nextPurchaseRate || nextEstRate);
+      const nextTotal = (!isNaN(qty) && qty > 0 && !isNaN(effectiveRate) && effectiveRate > 0)
+        ? String(Number((qty * effectiveRate).toFixed(2)))
+        : current.total_amount;
+
+      return {
+        ...current,
+        material_id: value,
+        unit: pm?.unit || current.unit || material?.unit || '',
+        estimated_rate: nextEstRate,
+        purchase_rate: nextPurchaseRate,
+        total_amount: nextTotal,
+      };
+    });
     setFieldErrors((current) => ({ ...current, material_id: undefined }));
   };
 
@@ -339,14 +378,14 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       supplier_contact: values.supplier_contact.trim() || null,
       quantity: Number(values.quantity),
       unit: values.unit.trim() || undefined,
-      estimated_rate: values.estimated_rate ? Number(values.estimated_rate) : 0,
+      estimated_rate: values.purchase_rate ? Number(values.purchase_rate) : (values.estimated_rate ? Number(values.estimated_rate) : 0),
       required_date: values.required_date || null,
       priority: values.priority,
       reason: values.reason.trim() || null,
       notes: values.notes.trim() || null,
       // External purchase / bill details (ignored server-side for internal moves).
       purchase_rate: values.purchase_rate ? Number(values.purchase_rate) : null,
-      total_amount: values.total_amount ? Number(values.total_amount) : null,
+      total_amount: values.total_amount ? Number(values.total_amount) : (values.purchase_rate && values.quantity ? Number((Number(values.quantity) * Number(values.purchase_rate)).toFixed(2)) : null),
       purchase_date: values.purchase_date || null,
       bill_reference: values.bill_reference.trim() || null,
       vehicle_number: values.vehicle_number ? values.vehicle_number.trim() : null,
@@ -717,8 +756,32 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                   }))}
                   className="sm:col-span-2"
                 />
-                <InputField label="Purchase rate" type="number" min="0" step="0.01" value={values.purchase_rate} onChange={set('purchase_rate')} error={fieldErrors.purchase_rate} hint="Per unit." />
-                <InputField label="Total amount" type="number" min="0" step="0.01" value={values.total_amount} onChange={set('total_amount')} error={fieldErrors.total_amount} />
+                <InputField
+                  label="Cost per unit"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={values.purchase_rate}
+                  onChange={set('purchase_rate')}
+                  error={fieldErrors.purchase_rate}
+                  hint="Vendor cost per unit."
+                  placeholder="0.00"
+                />
+                <InputField
+                  label="Total cost"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={values.total_amount}
+                  onChange={set('total_amount')}
+                  error={fieldErrors.total_amount}
+                  hint={
+                    values.quantity && (values.purchase_rate || values.estimated_rate)
+                      ? `Auto-calculated: ${values.quantity} ${values.unit || 'units'} × ₹${values.purchase_rate || values.estimated_rate} = ₹${values.total_amount || '0'}`
+                      : 'Calculated automatically: Quantity × Cost per unit.'
+                  }
+                  placeholder="0.00"
+                />
                 <InputField label="Purchase date" type="date" value={values.purchase_date} onChange={set('purchase_date')} error={fieldErrors.purchase_date} />
                 <InputField label="Bill / PO reference" value={values.bill_reference} onChange={set('bill_reference')} error={fieldErrors.bill_reference} placeholder="Bill / PO number" />
 
@@ -840,16 +903,18 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                 placeholder="bags"
                 hint="Prefilled from the material; change if this order differs."
               />
-              <InputField
-                label="Estimated rate"
-                type="number"
-                min="0"
-                step="0.01"
-                value={values.estimated_rate}
-                onChange={set('estimated_rate')}
-                error={fieldErrors.estimated_rate}
-                hint="Per unit — used to estimate the total request value."
-              />
+              {!(((!isContractor && ['central_purchase', 'contractor_supply', 'project_site'].includes(values.procurement_kind) && (values.source_type === 'supplier' || values.procurement_kind === 'central_purchase' || values.procurement_kind === 'project_site')) || (isContractor && values.source_choice === 'supplier'))) && (
+                <InputField
+                  label="Cost per unit"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={values.estimated_rate}
+                  onChange={set('estimated_rate')}
+                  error={fieldErrors.estimated_rate}
+                  placeholder="0.00"
+                />
+              )}
               <SelectField
                 label="Priority"
                 value={values.priority}

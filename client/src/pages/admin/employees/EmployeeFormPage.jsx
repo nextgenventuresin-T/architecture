@@ -76,6 +76,19 @@ export default function EmployeeFormPage({ mode = 'create' }) {
     departments: [],
     designations: [],
     reportingManagers: [],
+    availableUsers: [],
+    roles: [],
+  });
+
+  // System User Access State: 'none' | 'link' | 'create'
+  const [userAccessMode, setUserAccessMode] = useState('none');
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [newUserAccess, setNewUserAccess] = useState({
+    email: '',
+    username: '',
+    role: 'project_manager',
+    password: '',
+    confirmPassword: '',
   });
 
   const [fieldErrors, setFieldErrors] = useState({});
@@ -97,6 +110,8 @@ export default function EmployeeFormPage({ mode = 'create' }) {
         departments: data.departments || [],
         designations: data.designations || [],
         reportingManagers: data.reportingManagers || [],
+        availableUsers: data.availableUsers || [],
+        roles: data.roles || [],
       });
     }).catch(() => {});
     return () => {
@@ -108,6 +123,14 @@ export default function EmployeeFormPage({ mode = 'create' }) {
     if (!existing?.employee) return;
     const e = existing.employee;
     const p360 = e.profile360 || {};
+
+    if (e.userId) {
+      setUserAccessMode('link');
+      setSelectedUserId(String(e.userId));
+    } else {
+      setUserAccessMode('none');
+      setSelectedUserId('');
+    }
 
     setValues({
       employee_code: e.employeeCode ?? '',
@@ -223,6 +246,36 @@ export default function EmployeeFormPage({ mode = 'create' }) {
 
     for (const key of ['employee_code', 'joining_date', 'phone', 'email', 'address', 'work_location', 'notes']) {
       if (payload[key] === '') payload[key] = null;
+    }
+
+    if (userAccessMode === 'link') {
+      payload.user_id = selectedUserId ? Number(selectedUserId) : null;
+    } else if (userAccessMode === 'create') {
+      const email = (newUserAccess.email || values.email)?.trim();
+      if (!email) {
+        setFieldErrors((prev) => ({ ...prev, email: 'Enter an email address for the user login account.' }));
+        setIsSaving(false);
+        return;
+      }
+      if (!newUserAccess.password || newUserAccess.password.length < 12) {
+        setFieldErrors((prev) => ({ ...prev, user_password: 'Password must be at least 12 characters.' }));
+        setIsSaving(false);
+        return;
+      }
+      if (newUserAccess.password !== newUserAccess.confirmPassword) {
+        setFieldErrors((prev) => ({ ...prev, user_confirmPassword: 'Passwords do not match.' }));
+        setIsSaving(false);
+        return;
+      }
+      payload.createUserAccess = {
+        email,
+        username: newUserAccess.username?.trim() || null,
+        password: newUserAccess.password,
+        confirmPassword: newUserAccess.confirmPassword,
+        role: newUserAccess.role || 'project_manager',
+      };
+    } else if (userAccessMode === 'none') {
+      payload.user_id = null;
     }
 
     try {
@@ -459,6 +512,170 @@ export default function EmployeeFormPage({ mode = 'create' }) {
                 className="sm:col-span-2"
                 placeholder="Internal HR/admin notes about this employee…"
               />
+            </CardBody>
+          </Card>
+
+          {/* SECTION 3: System User Access (ERP Login Account) */}
+          <Card>
+            <CardHeader
+              title="System User Access (ERP Login Account)"
+              description="Connect this company employee to an ERP login account for permissions and workspace access."
+            />
+            <CardBody className="space-y-5">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setUserAccessMode('none')}
+                  className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-all ${
+                    userAccessMode === 'none'
+                      ? 'border-brand-600 bg-brand-50 text-brand-800 ring-2 ring-brand-500/20 shadow-xs'
+                      : 'border-line bg-white text-ink-muted hover:border-brand-300 hover:text-ink'
+                  }`}
+                >
+                  <X className="h-4 w-4" />
+                  No System Login (Field / Offline Only)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setUserAccessMode('link')}
+                  className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-all ${
+                    userAccessMode === 'link'
+                      ? 'border-brand-600 bg-brand-50 text-brand-800 ring-2 ring-brand-500/20 shadow-xs'
+                      : 'border-line bg-white text-ink-muted hover:border-brand-300 hover:text-ink'
+                  }`}
+                >
+                  <ShieldCheck className="h-4 w-4 text-brand-600" />
+                  Link Existing User Account
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setUserAccessMode('create')}
+                  className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-all ${
+                    userAccessMode === 'create'
+                      ? 'border-brand-600 bg-brand-50 text-brand-800 ring-2 ring-brand-500/20 shadow-xs'
+                      : 'border-line bg-white text-ink-muted hover:border-brand-300 hover:text-ink'
+                  }`}
+                >
+                  <Plus className="h-4 w-4 text-brand-600" />
+                  Create New Login Account for Employee
+                </button>
+              </div>
+
+              {userAccessMode === 'link' && (
+                <div className="rounded-xl border border-line bg-canvas/40 p-4 space-y-3">
+                  <SelectField
+                    label="Select Existing User Account"
+                    value={selectedUserId}
+                    onChange={(e) => setSelectedUserId(e.target.value)}
+                    error={fieldErrors.user_id}
+                    hint="Only active ERP users are listed. Accounts already linked to other employees are marked."
+                    options={[
+                      { value: '', label: '— Choose an existing user account —' },
+                      ...(lookups.availableUsers || []).map((u) => {
+                        const isCurrentLinked = isEdit && existing?.employee?.userId === u.id;
+                        const isOtherLinked = u.linkedEmployeeId && !isCurrentLinked;
+                        return {
+                          value: String(u.id),
+                          label: `${u.fullName} (${u.email}) · Role: ${u.roleName || u.role}${
+                            isOtherLinked ? ' [Already Linked to Another Employee]' : ''
+                          }${isCurrentLinked ? ' [Currently Linked]' : ''}`,
+                          disabled: Boolean(isOtherLinked),
+                        };
+                      }),
+                    ]}
+                  />
+                  {selectedUserId && (
+                    <div className="flex items-center gap-2 text-xs text-brand-700 bg-brand-50 p-2.5 rounded-lg border border-brand-200">
+                      <ShieldCheck className="h-4 w-4 shrink-0 text-brand-600" />
+                      <span>
+                        This employee will be linked to user account ID #{selectedUserId}. Their system login and permissions are governed under Users & Access.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {userAccessMode === 'create' && (
+                <div className="rounded-xl border border-line bg-canvas/40 p-4 space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <InputField
+                      label="Login Email"
+                      required
+                      type="email"
+                      value={newUserAccess.email || values.email}
+                      onChange={(e) => setNewUserAccess((prev) => ({ ...prev, email: e.target.value }))}
+                      error={fieldErrors.user_email || fieldErrors.email}
+                      placeholder="employee@architecture-erp.com"
+                    />
+
+                    <InputField
+                      label="Login Username (Optional)"
+                      value={newUserAccess.username}
+                      onChange={(e) => setNewUserAccess((prev) => ({ ...prev, username: e.target.value }))}
+                      error={fieldErrors.user_username || fieldErrors.username}
+                      placeholder={values.full_name ? values.full_name.toLowerCase().replace(/\s+/g, '.') : 'arjun.sharma'}
+                    />
+
+                    <SelectField
+                      label="Assigned System Role"
+                      required
+                      value={newUserAccess.role}
+                      onChange={(e) => setNewUserAccess((prev) => ({ ...prev, role: e.target.value }))}
+                      options={[
+                        ...(lookups.roles?.length ? lookups.roles : [
+                          { slug: 'project_manager', name: 'Project Manager' },
+                          { slug: 'employee', name: 'Employee' },
+                          { slug: 'finance', name: 'Finance' },
+                          { slug: 'hr', name: 'Human Resources' },
+                          { slug: 'procurement', name: 'Procurement' },
+                          { slug: 'warehouse', name: 'Warehouse' },
+                          { slug: 'admin', name: 'Administrator' },
+                        ]).map((r) => ({ value: r.slug, label: r.name })),
+                      ]}
+                    />
+
+                    <div>
+                      <InputField
+                        label="Account Password"
+                        required
+                        type="password"
+                        value={newUserAccess.password}
+                        onChange={(e) => setNewUserAccess((prev) => ({ ...prev, password: e.target.value }))}
+                        error={fieldErrors.user_password || fieldErrors.password}
+                        placeholder="At least 12 characters (mix letters & numbers)"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const randomPass = 'ArchERP@' + Math.random().toString(36).slice(-6) + '123';
+                          setNewUserAccess((prev) => ({ ...prev, password: randomPass, confirmPassword: randomPass }));
+                        }}
+                        className="mt-1 text-[11px] text-brand-600 hover:underline font-medium"
+                      >
+                        ⚡ Generate secure password
+                      </button>
+                    </div>
+
+                    <InputField
+                      label="Confirm Password"
+                      required
+                      type="password"
+                      value={newUserAccess.confirmPassword}
+                      onChange={(e) => setNewUserAccess((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                      error={fieldErrors.user_confirmPassword || fieldErrors.confirmPassword}
+                      placeholder="Repeat password"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+                    <span>
+                      A new user login account will be automatically created with the selected role and linked to this employee upon saving.
+                    </span>
+                  </div>
+                </div>
+              )}
             </CardBody>
           </Card>
 

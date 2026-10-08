@@ -34,9 +34,7 @@ async function getDirectory({
     effectiveContractorId = Number(contractorId);
   }
 
-  // Base Union Query for workforce members
-  // 1. Contractor Workers (worker_type = 'labour')
-  // 2. Company Employees (worker_type = 'company_employee')
+  // Query exclusively for Contractor Labour & Daily Wage Workers
   let unionQuery = `
     SELECT
       w.id AS raw_id,
@@ -106,76 +104,6 @@ async function getDirectory({
       JOIN project_tasks pt2 ON pt2.id = twl.task_id
       WHERE twl.work_date = CURDATE()
     ) today_log ON (today_log.worker_id = w.id OR today_log.worker_name = w.full_name) AND today_log.rn = 1
-
-    UNION ALL
-
-    SELECT
-      e.id AS raw_id,
-      'company_employee' AS worker_type,
-      'Company Employee' AS worker_type_label,
-      COALESCE(e.employee_code, CONCAT('EMP-', LPAD(e.id, 4, '0'))) AS code,
-      e.full_name AS name,
-      e.phone,
-      NULL AS aadhaar_number,
-      e.department AS department,
-      e.designation AS trade,
-      0.00 AS daily_rate,
-      e.status,
-      NULL AS contractor_id,
-      'Company Internal' AS contractor_name,
-      cur_task.task_id,
-      cur_task.task_name,
-      cur_task.project_id,
-      cur_task.project_name,
-      cur_task.site_id,
-      cur_task.site_name,
-      cur_task.start_date,
-      cur_task.end_date,
-      cur_task.expected_days,
-      cur_task.remarks AS assignment_remarks,
-      today_log.id AS today_log_id,
-      today_log.hours_worked AS today_hours,
-      today_log.work_performed AS today_work,
-      today_log.task_id AS today_task_id,
-      today_log.task_name AS today_task_name
-    FROM employees e
-    LEFT JOIN (
-      SELECT
-        ta.worker_id,
-        ta.task_id,
-        pt.name AS task_name,
-        pt.project_id,
-        p.name AS project_name,
-        pt.site_id,
-        s.name AS site_name,
-        ta.start_date,
-        ta.end_date,
-        ta.expected_days,
-        ta.remarks,
-        ROW_NUMBER() OVER (PARTITION BY ta.worker_id ORDER BY ta.id DESC) AS rn
-      FROM (
-        SELECT worker_id, task_id, start_date, end_date, expected_days, remarks, id FROM task_assigned_workers WHERE worker_type = 'company_employee'
-        UNION ALL
-        SELECT worker_id, task_id, start_date, end_date, working_days AS expected_days, remarks, id FROM task_labour WHERE worker_type = 'company_employee' AND worker_id IS NOT NULL
-      ) ta
-      JOIN project_tasks pt ON pt.id = ta.task_id
-      JOIN projects p ON p.id = pt.project_id
-      LEFT JOIN sites s ON s.id = pt.site_id
-    ) cur_task ON cur_task.worker_id = e.id AND cur_task.rn = 1
-    LEFT JOIN (
-      SELECT
-        twl.id,
-        twl.worker_id,
-        twl.worker_name,
-        twl.hours_worked,
-        twl.work_performed,
-        twl.task_id,
-        pt2.name AS task_name,
-        ROW_NUMBER() OVER (PARTITION BY COALESCE(twl.worker_id, twl.worker_name) ORDER BY twl.id DESC) AS rn
-      FROM task_worker_logs twl
-      JOIN project_tasks pt2 ON pt2.id = twl.task_id
-      WHERE twl.work_date = CURDATE()
-    ) today_log ON (today_log.worker_id = e.id OR today_log.worker_name = e.full_name) AND today_log.rn = 1
   `;
 
   // Apply filters on the unified result set

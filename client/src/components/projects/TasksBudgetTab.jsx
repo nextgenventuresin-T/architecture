@@ -310,44 +310,87 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                   </div>
 
                   {/* Right: Total Budget & Actions */}
-                  <div className="flex flex-col items-end gap-2 shrink-0">
-                    <div className="text-right">
-                      <p className="text-[11px] text-ink-subtle">Total Task Budget</p>
-                      <p className="text-lg font-bold text-ink tabular-nums">
-                        {formatCurrency(task.totalBudget || 0)}
-                      </p>
-                    </div>
+                  {(() => {
+                    const util = task.budgetUtilization || {
+                      materials: { budgeted: task.materialBudget || 0, actual: 0, remaining: task.materialBudget || 0, utilization: 0, isExceeded: false },
+                      tools: { budgeted: task.toolBudget || 0, actual: 0, remaining: task.toolBudget || 0, utilization: 0, isExceeded: false },
+                      labour: { budgeted: task.labourBudget || 0, actual: 0, remaining: task.labourBudget || 0, utilization: 0, isExceeded: false },
+                      misc: { budgeted: task.miscBudget || 0, actual: 0, remaining: task.miscBudget || 0, utilization: 0, isExceeded: false },
+                      total: {
+                        budgeted: task.totalBudget || 0,
+                        approvedAdditional: task.approvedAdditionalBudget || 0,
+                        effectiveBudget: (task.totalBudget || 0) + (task.approvedAdditionalBudget || 0),
+                        pendingExcess: task.pendingExcessBudget || 0,
+                        actual: 0,
+                        remaining: task.totalBudget || 0,
+                        utilization: 0,
+                        isExceeded: false,
+                        exceededAmount: 0,
+                      },
+                    };
 
-                    <div className="flex items-center gap-1.5 pt-1">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setViewingTaskId(task.id)}
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                        View Detail
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setEditingTask(task);
-                          setIsCreateOpen(true);
-                        }}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDelete(task.id, task.name)}
-                        disabled={deletingId === task.id}
-                        className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
+                    return (
+                      <div className="flex flex-col items-end gap-2 shrink-0">
+                        <div className="text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <p className="text-[11px] text-ink-subtle">Budget vs Actual</p>
+                            {util.total.pendingExcess > 0 ? (
+                              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                                ⚠️ +{formatCurrency(util.total.pendingExcess)} Pending
+                              </span>
+                            ) : util.total.isExceeded ? (
+                              <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800">
+                                ⚠️ Over Budget
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="flex items-baseline justify-end gap-1.5">
+                            <span className="text-sm font-semibold text-ink-muted">
+                              {formatCurrency(util.total.actual)}
+                            </span>
+                            <span className="text-xs text-ink-subtle">/</span>
+                            <span className="text-base font-bold text-ink tabular-nums">
+                              {formatCurrency(util.total.effectiveBudget)}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-ink-subtle">
+                            {util.total.remaining > 0 ? `₹${formatNumber(util.total.remaining)} remaining` : 'Fully utilized'}{' '}
+                            · <span className="font-semibold text-brand-700">{util.total.utilization}% used</span>
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 pt-1">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => setViewingTaskId(task.id)}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View Detail
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditingTask(task);
+                              setIsCreateOpen(true);
+                            }}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(task.id, task.name)}
+                            disabled={deletingId === task.id}
+                            className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Progress bar */}
@@ -366,37 +409,170 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                   </div>
                 </div>
 
-                {/* Task Budget Breakdown Badges */}
-                <div className="mt-3.5 grid grid-cols-2 gap-2 sm:grid-cols-4 border-t border-line/60 pt-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <Package className="h-3.5 w-3.5 text-brand-600 shrink-0" />
-                    <div>
-                      <span className="text-[11px] text-ink-subtle">Materials:</span>{' '}
-                      <span className="font-semibold text-ink">{formatCurrency(task.materialBudget || 0)}</span>
+                {/* Task Budget Breakdown: 5 Categories (Materials, Tools, Labour, Misc, Total) */}
+                {(() => {
+                  const util = task.budgetUtilization || {
+                    materials: { budgeted: task.materialBudget || 0, actual: 0, remaining: task.materialBudget || 0, utilization: 0, isExceeded: false },
+                    tools: { budgeted: task.toolBudget || 0, actual: 0, remaining: task.toolBudget || 0, utilization: 0, isExceeded: false },
+                    labour: { budgeted: task.labourBudget || 0, actual: 0, remaining: task.labourBudget || 0, utilization: 0, isExceeded: false },
+                    misc: { budgeted: task.miscBudget || 0, actual: 0, remaining: task.miscBudget || 0, utilization: 0, isExceeded: false },
+                    total: {
+                      budgeted: task.totalBudget || 0,
+                      approvedAdditional: task.approvedAdditionalBudget || 0,
+                      effectiveBudget: (task.totalBudget || 0) + (task.approvedAdditionalBudget || 0),
+                      pendingExcess: task.pendingExcessBudget || 0,
+                      actual: 0,
+                      remaining: task.totalBudget || 0,
+                      utilization: 0,
+                      isExceeded: false,
+                      exceededAmount: 0,
+                    },
+                  };
+
+                  return (
+                    <div className="mt-4 border-t border-line/60 pt-3 space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        {/* 1. Materials */}
+                        <div className={`rounded-lg border p-2.5 ${util.materials.isExceeded ? 'border-rose-200 bg-rose-50/40' : 'border-line bg-canvas/40'}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-semibold text-xs text-ink">
+                              <Package className="h-3.5 w-3.5 text-brand-600 shrink-0" /> Materials
+                            </span>
+                            <span className={`text-[10px] font-bold rounded px-1.5 py-0.2 ${util.materials.isExceeded ? 'bg-rose-100 text-rose-700' : 'bg-brand-50 text-brand-700'}`}>
+                              {util.materials.utilization}%
+                            </span>
+                          </div>
+                          <div className="mt-1.5 grid grid-cols-3 gap-1 text-[11px]">
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Budgeted</span>
+                              <span className="font-medium text-ink">{formatCurrency(util.materials.budgeted)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Used / Actual</span>
+                              <span className="font-semibold text-brand-700">{formatCurrency(util.materials.actual)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Remaining</span>
+                              <span className={`font-semibold ${util.materials.remaining <= 0 && util.materials.isExceeded ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {formatCurrency(util.materials.remaining)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 2. Machines / Tools */}
+                        <div className={`rounded-lg border p-2.5 ${util.tools.isExceeded ? 'border-rose-200 bg-rose-50/40' : 'border-line bg-canvas/40'}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-semibold text-xs text-ink">
+                              <Wrench className="h-3.5 w-3.5 text-amber-600 shrink-0" /> Machines / Tools
+                            </span>
+                            <span className={`text-[10px] font-bold rounded px-1.5 py-0.2 ${util.tools.isExceeded ? 'bg-rose-100 text-rose-700' : 'bg-amber-50 text-amber-700'}`}>
+                              {util.tools.utilization}%
+                            </span>
+                          </div>
+                          <div className="mt-1.5 grid grid-cols-3 gap-1 text-[11px]">
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Budgeted</span>
+                              <span className="font-medium text-ink">{formatCurrency(util.tools.budgeted)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Used / Actual</span>
+                              <span className="font-semibold text-amber-700">{formatCurrency(util.tools.actual)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Remaining</span>
+                              <span className={`font-semibold ${util.tools.remaining <= 0 && util.tools.isExceeded ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {formatCurrency(util.tools.remaining)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 3. Labour */}
+                        <div className={`rounded-lg border p-2.5 ${util.labour.isExceeded ? 'border-rose-200 bg-rose-50/40' : 'border-line bg-canvas/40'}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-semibold text-xs text-ink">
+                              <Users className="h-3.5 w-3.5 text-emerald-600 shrink-0" /> Labour
+                            </span>
+                            <span className={`text-[10px] font-bold rounded px-1.5 py-0.2 ${util.labour.isExceeded ? 'bg-rose-100 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                              {util.labour.utilization}%
+                            </span>
+                          </div>
+                          <div className="mt-1.5 grid grid-cols-3 gap-1 text-[11px]">
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Budgeted</span>
+                              <span className="font-medium text-ink">{formatCurrency(util.labour.budgeted)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Used / Actual</span>
+                              <span className="font-semibold text-emerald-700">{formatCurrency(util.labour.actual)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Remaining</span>
+                              <span className={`font-semibold ${util.labour.remaining <= 0 && util.labour.isExceeded ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {formatCurrency(util.labour.remaining)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 4. Miscellaneous */}
+                        <div className={`rounded-lg border p-2.5 ${util.misc.isExceeded ? 'border-rose-200 bg-rose-50/40' : 'border-line bg-canvas/40'}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-semibold text-xs text-ink">
+                              <DollarSign className="h-3.5 w-3.5 text-indigo-600 shrink-0" /> Miscellaneous
+                            </span>
+                            <span className={`text-[10px] font-bold rounded px-1.5 py-0.2 ${util.misc.isExceeded ? 'bg-rose-100 text-rose-700' : 'bg-indigo-50 text-indigo-700'}`}>
+                              {util.misc.utilization}%
+                            </span>
+                          </div>
+                          <div className="mt-1.5 grid grid-cols-3 gap-1 text-[11px]">
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Budgeted</span>
+                              <span className="font-medium text-ink">{formatCurrency(util.misc.budgeted)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Used / Actual</span>
+                              <span className="font-semibold text-indigo-700">{formatCurrency(util.misc.actual)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-ink-subtle">Remaining</span>
+                              <span className={`font-semibold ${util.misc.remaining <= 0 && util.misc.isExceeded ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {formatCurrency(util.misc.remaining)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 5. Task Total Strip */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-2 text-xs border border-line/60">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-ink">Task Total:</span>
+                          <span className="text-ink-muted">Budget: <strong className="text-ink">{formatCurrency(util.total.effectiveBudget)}</strong></span>
+                          {util.total.approvedAdditional > 0 && (
+                            <span className="text-[10px] text-emerald-700 font-semibold">({formatCurrency(util.total.budgeted)} base + {formatCurrency(util.total.approvedAdditional)} approved addl)</span>
+                          )}
+                          <span className="text-ink-subtle">|</span>
+                          <span className="text-ink-muted">Actual Used: <strong className="text-brand-800">{formatCurrency(util.total.actual)}</strong></span>
+                          <span className="text-ink-subtle">|</span>
+                          <span className="text-ink-muted">Remaining: <strong className={util.total.remaining > 0 ? "text-emerald-700" : "text-ink-muted"}>{formatCurrency(util.total.remaining)}</strong></span>
+                          <span className="text-ink-subtle">|</span>
+                          <span className="font-bold text-brand-700">Utilization: {util.total.utilization}%</span>
+                        </div>
+                        {util.total.pendingExcess > 0 ? (
+                          <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                            ⚠️ Over Budget by +{formatCurrency(util.total.pendingExcess)} (Pending Admin Approval)
+                          </span>
+                        ) : util.total.isExceeded ? (
+                          <span className="rounded bg-rose-100 px-2 py-0.5 text-[11px] font-bold text-rose-800">
+                            ⚠️ Over Budget by +{formatCurrency(util.total.exceededAmount)}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Wrench className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-                    <div>
-                      <span className="text-[11px] text-ink-subtle">Tools/Machines:</span>{' '}
-                      <span className="font-semibold text-ink">{formatCurrency(task.toolBudget || 0)}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Users className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                    <div>
-                      <span className="text-[11px] text-ink-subtle">Labour:</span>{' '}
-                      <span className="font-semibold text-ink">{formatCurrency(task.labourBudget || 0)}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-                    <div>
-                      <span className="text-[11px] text-ink-subtle">Miscellaneous:</span>{' '}
-                      <span className="font-semibold text-ink">{formatCurrency(task.miscBudget || 0)}</span>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
             </div>
           ))}

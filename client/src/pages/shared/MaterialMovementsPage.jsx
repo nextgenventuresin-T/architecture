@@ -162,12 +162,20 @@ export default function MaterialMovementsPage() {
     { key: 'movement', header: 'Movement', value: (r) => r.movementNumber, render: (r) => (
       <div><p className="font-medium text-ink">{r.movementNumber}</p><p className="text-xs text-ink-subtle">{formatDate(r.sentAt)}</p></div>
     ) },
-    { key: 'material', header: 'Material', value: (r) => r.material.name, render: (r) => <span className="text-ink">{r.material.name}</span> },
+    { key: 'material', header: 'Material', value: (r) => r.material.name, render: (r) => (
+      <div>
+        <p className="text-ink font-medium">{r.material.name}</p>
+        {r.task?.name && <p className="text-[11px] text-brand-700">Task: {r.task.name}</p>}
+        {r.project?.name && <p className="text-[10px] text-ink-subtle">{r.project.name}{r.site?.name ? ` · ${r.site.name}` : ''}</p>}
+      </div>
+    ) },
     { key: 'source', header: 'From', value: (r) => r.source.contractorName || r.source.warehouseName, render: (r) => <span className="text-xs text-ink-muted">{r.source.contractorName || r.source.warehouseName}</span> },
     { key: 'destination', header: 'To', value: (r) => r.destination.contractorName || r.destination.warehouseName, render: (r) => <span className="text-xs text-ink-muted">{r.destination.contractorName || r.destination.warehouseName}</span> },
     { key: 'requested', header: 'Requested', align: 'right', value: (r) => r.requestedQuantity ?? 0, render: (r) => <span className="tabular-nums text-ink-subtle">{r.requestedQuantity != null ? formatNumber(r.requestedQuantity) : '—'}</span> },
     { key: 'sent', header: 'Sent', align: 'right', value: (r) => r.sentQuantity, render: (r) => <span className="tabular-nums text-ink">{formatNumber(r.sentQuantity)}</span> },
     { key: 'received', header: 'Received', align: 'right', value: (r) => r.receivedQuantity ?? 0, render: (r) => <span className="tabular-nums text-ink-muted">{r.receivedQuantity != null ? formatNumber(r.receivedQuantity) : '—'}</span> },
+    { key: 'rate', header: 'Cost / Unit', align: 'right', value: (r) => r.costPerUnit || 0, render: (r) => <span className="tabular-nums text-ink font-medium">{formatCurrency(r.costPerUnit || 0)}</span> },
+    { key: 'cost', header: 'Material Cost', align: 'right', value: (r) => r.totalMaterialCost || 0, render: (r) => <span className="tabular-nums font-bold text-ink">{formatCurrency(r.totalMaterialCost || 0)}</span> },
     { key: 'vehicle', header: 'Vehicle', value: (r) => r.vehicleNumber || '', render: (r) => <span className="text-xs text-ink-subtle">{r.vehicleNumber || '—'}</span> },
     { key: 'driver', header: 'Driver', value: (r) => r.driverName || '', render: (r) => <span className="text-xs text-ink-subtle">{r.driverName || '—'}{r.driverPhone ? ` · ${r.driverPhone}` : ''}</span> },
     { key: 'transport', header: 'Transport', align: 'right', value: (r) => r.transportCost, render: (r) => <span className="tabular-nums text-ink-subtle">{formatCurrency(r.transportCost)}</span> },

@@ -67,10 +67,20 @@ export default function OverviewTab({ request, movement }) {
               },
               ...(request.vendor?.phone ? [{ label: 'Vendor Phone', value: request.vendor.phone }] : []),
               { label: 'Quantity requested', value: `${formatNumber(request.quantity)} ${request.unit}` },
-              { label: 'Estimated rate', value: formatCurrency(request.estimatedRate) },
-              { label: 'Estimated total', value: formatCurrency(request.estimatedTotal) },
-              ...(request.purchaseRate != null ? [{ label: 'Purchase rate', value: formatCurrency(request.purchaseRate) }] : []),
-              ...(request.totalAmount != null ? [{ label: 'Total amount', value: formatCurrency(request.totalAmount) }] : []),
+              {
+                label: 'Cost per unit',
+                value: formatCurrency(request.purchaseRate != null ? request.purchaseRate : (request.estimatedRate || 0)),
+              },
+              {
+                label: 'Total cost',
+                value: formatCurrency(
+                  request.totalAmount != null
+                    ? request.totalAmount
+                    : (request.purchaseRate != null
+                        ? Number((Number(request.quantity || 0) * Number(request.purchaseRate)).toFixed(2))
+                        : (request.estimatedTotal || 0))
+                ),
+              },
               { label: 'Priority', value: <Badge tone={PRIORITY_TONE[request.priority]}>{PRIORITY_LABELS[request.priority]}</Badge> },
             ]}
           />

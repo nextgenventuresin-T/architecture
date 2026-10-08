@@ -417,11 +417,29 @@ async function resolveFlow(payload, hrScope) {
     // Legacy behaviour, unchanged: a project is required.
     await assertContractorLocation(payload, hrScope);
     const { material } = await assertRelationships(payload);
+    let destWarehouseId = null;
+    if (payload.site_id) {
+      const site = await siteModel.findById(payload.site_id).catch(() => null);
+      if (site?.contractor_id) {
+        destWarehouseId = await getContractorWarehouseId(site.contractor_id).catch(() => null);
+      }
+    }
+    if (!destWarehouseId && payload.project_id) {
+      const project = await projectModel.findById(payload.project_id).catch(() => null);
+      if (project?.contractor_id) {
+        destWarehouseId = await getContractorWarehouseId(project.contractor_id).catch(() => null);
+      }
+    }
+    if (!destWarehouseId) {
+      destWarehouseId = await getCentralWarehouseId().catch(() => null);
+    }
+
     return {
       material,
       columns: {
         procurement_kind: 'project_site',
         destination_type: 'project_site',
+        destination_warehouse_id: destWarehouseId,
         source_type: 'supplier',
         project_id: payload.project_id,
         site_id: payload.site_id ?? null,
@@ -626,7 +644,18 @@ async function create(payload, userId, hrScope) {
     });
   }
 
-  const purchaseRate = payload.purchase_rate ?? payload.estimated_rate ?? 0;
+  const fallbackRate = Number(material.default_rate || material.purchase_rate || 0);
+  const effectivePurchaseRate = payload.purchase_rate != null && Number(payload.purchase_rate) > 0
+    ? Number(payload.purchase_rate)
+    : (payload.estimated_rate != null && Number(payload.estimated_rate) > 0
+        ? Number(payload.estimated_rate)
+        : (fallbackRate > 0 ? fallbackRate : null));
+
+  const effectiveTotalAmount = payload.total_amount != null && Number(payload.total_amount) > 0
+    ? Number(payload.total_amount)
+    : (effectivePurchaseRate != null && payload.quantity
+        ? Number((effectivePurchaseRate * Number(payload.quantity)).toFixed(2))
+        : null);
 
   const id = await procurementModel.create({
     request_number: requestNumber,
@@ -635,7 +664,7 @@ async function create(payload, userId, hrScope) {
     supplier_contact: payload.supplier_contact ?? null,
     quantity: payload.quantity,
     unit: payload.unit?.trim() || material.unit,
-    estimated_rate: payload.estimated_rate ?? purchaseRate ?? 0,
+    estimated_rate: effectivePurchaseRate ?? 0,
     required_date: payload.required_date ?? null,
     priority: PRIORITIES.includes(payload.priority) ? payload.priority : 'medium',
     requested_by: payload.requested_by ?? userId ?? null,
@@ -649,8 +678,8 @@ async function create(payload, userId, hrScope) {
     planned_quantity_at_request: plannedQtyAtReq,
     procured_quantity_at_request: procuredQtyAtReq,
     // financials only meaningful for external purchases, but harmless to store.
-    purchase_rate: payload.purchase_rate ?? null,
-    total_amount: payload.total_amount ?? null,
+    purchase_rate: effectivePurchaseRate ?? null,
+    total_amount: effectiveTotalAmount,
     purchase_date: payload.purchase_date ?? null,
     bill_reference: payload.bill_reference ?? null,
     vendor_id: payload.vendor_id ? Number(payload.vendor_id) : null,
@@ -731,7 +760,18 @@ async function update(id, payload, hrScope, userId) {
     throw ApiError.badRequest('Check the highlighted fields.', { quantity: 'Enter a quantity greater than zero.' });
   }
 
-  await procurementModel.update(id, payload);
+  const updatePayload = { ...payload };
+  if (updatePayload.total_amount === undefined || updatePayload.total_amount === null) {
+    const finalQty = updatePayload.quantity !== undefined ? Number(updatePayload.quantity) : Number(request.quantity);
+    const finalRate = updatePayload.purchase_rate !== undefined
+      ? (updatePayload.purchase_rate !== null ? Number(updatePayload.purchase_rate) : null)
+      : (request.purchase_rate !== null ? Number(request.purchase_rate) : null);
+    if (finalRate !== null && finalQty > 0) {
+      updatePayload.total_amount = Number((finalQty * finalRate).toFixed(2));
+    }
+  }
+
+  await procurementModel.update(id, updatePayload);
   return getById(id, hrScope, userId);
 }
 
@@ -958,7 +998,24 @@ async function receive(id, payload, userId) {
   });
 
   // If this procurement delivers into Central Warehouse or a Destination Warehouse, record transaction & update stock
-  const targetWarehouseId = request.destination_warehouse_id || (request.procurement_kind === 'central_purchase' ? await getCentralWarehouseId() : null);
+  let targetWarehouseId = request.destination_warehouse_id || (request.procurement_kind === 'central_purchase' ? await getCentralWarehouseId() : null);
+  if (!targetWarehouseId && request.project_id) {
+    if (request.site_id) {
+      const site = await siteModel.findById(request.site_id).catch(() => null);
+      if (site?.contractor_id) {
+        targetWarehouseId = await getContractorWarehouseId(site.contractor_id).catch(() => null);
+      }
+    }
+    if (!targetWarehouseId) {
+      const project = await projectModel.findById(request.project_id).catch(() => null);
+      if (project?.contractor_id) {
+        targetWarehouseId = await getContractorWarehouseId(project.contractor_id).catch(() => null);
+      }
+    }
+    if (!targetWarehouseId) {
+      targetWarehouseId = await getCentralWarehouseId().catch(() => null);
+    }
+  }
   if (targetWarehouseId) {
     try {
       const nextTxNum = await warehouseModel.nextTransactionNumber('receipt');
@@ -1145,7 +1202,12 @@ async function fulfil(id, payload = {}, userId) {
   if (request.source_type === 'supplier') {
     // Outside purchase -> receipt into the destination warehouse.
     tx = await warehouseService.receiveStock(
-      { ...base, warehouse_id: request.destination_warehouse_id, site_id: request.destination_site_id ?? null },
+      {
+        ...base,
+        warehouse_id: request.destination_warehouse_id,
+        site_id: request.destination_site_id ?? null,
+        project_id: request.project_id ?? null,
+      },
       userId
     );
   } else {
@@ -1159,6 +1221,7 @@ async function fulfil(id, payload = {}, userId) {
         warehouse_id: request.source_warehouse_id,
         destination_warehouse_id: request.destination_warehouse_id,
         site_id: request.destination_site_id ?? null,
+        project_id: request.project_id ?? null,
       },
       userId
     );

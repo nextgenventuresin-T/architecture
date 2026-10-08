@@ -8,6 +8,7 @@
  */
 const ROLES = Object.freeze({
   ADMIN: 'admin',
+  PROJECT_MANAGER: 'project_manager',
   FINANCE: 'finance',
   HR: 'hr',
   PROCUREMENT: 'procurement',

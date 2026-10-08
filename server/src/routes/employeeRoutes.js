@@ -55,6 +55,9 @@ const employeeRules = (isCreate) => {
     body('developmentAreas').optional(),
     body('career_interests').optional(),
     body('careerInterests').optional(),
+    body('user_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('userId').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('createUserAccess').optional({ nullable: true }).isObject(),
   ];
 };
 

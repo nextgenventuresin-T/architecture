@@ -20,7 +20,7 @@ const LIST_SELECT = `
     mm.procurement_request_id, mm.issue_transaction_id, mm.receive_transaction_id,
     mm.sent_by, mm.sent_at, mm.received_by, mm.received_at,
     mm.created_at, mm.updated_at,
-    m.name AS material_name, m.category AS material_category,
+    m.name AS material_name, m.category AS material_category, m.default_rate AS material_default_rate,
     sw.name AS source_warehouse_name, sw.contractor_id AS source_warehouse_contractor_id,
     dw.name AS destination_warehouse_name, dw.contractor_id AS destination_warehouse_contractor_id,
     sc.name AS source_contractor_name, dc.name AS destination_contractor_name,
@@ -30,6 +30,11 @@ const LIST_SELECT = `
     pr.requested_by AS procurement_requested_by,
     pr.source_contractor_id AS procurement_source_contractor_id,
     pr.destination_contractor_id AS procurement_dest_contractor_id,
+    pr.purchase_rate AS procurement_purchase_rate,
+    pr.estimated_rate AS procurement_estimated_rate,
+    pr.total_amount AS procurement_total_amount,
+    pr.task_id AS procurement_task_id,
+    pt.name AS procurement_task_name,
     pr.procurement_kind
   FROM material_movements mm
   JOIN materials m ON m.id = mm.material_id
@@ -42,6 +47,7 @@ const LIST_SELECT = `
   LEFT JOIN users su ON su.id = mm.sent_by
   LEFT JOIN users ru ON ru.id = mm.received_by
   LEFT JOIN procurement_requests pr ON pr.id = mm.procurement_request_id
+  LEFT JOIN project_tasks pt ON pt.id = pr.task_id
 `;
 
 function buildFilters({ status, materialId, contractorId, userId, incomingForContractorId, direction }) {

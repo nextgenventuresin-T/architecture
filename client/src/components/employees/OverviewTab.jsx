@@ -91,6 +91,22 @@ export default function OverviewTab({ employee }) {
                       </Badge>
                     ),
                   },
+                  {
+                    label: 'System User Access',
+                    value: employee.user ? (
+                      <span className="inline-flex items-center gap-1.5 font-medium text-ink">
+                        <span className="inline-flex items-center gap-1 rounded bg-brand-50 border border-brand-200 px-2 py-0.5 text-xs text-brand-700 font-semibold">
+                          <ShieldCheck className="h-3 w-3 text-brand-600 inline shrink-0" />
+                          {employee.user.roleName || employee.user.role}
+                        </span>
+                        <span className="text-xs text-ink-subtle">
+                          ({employee.user.username || employee.user.email})
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-xs text-ink-subtle">No Login Account Linked</span>
+                    ),
+                  },
                 ]}
               />
 

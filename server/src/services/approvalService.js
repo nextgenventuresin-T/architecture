@@ -3,6 +3,7 @@
 const ApiError = require('../utils/ApiError');
 const approvalModel = require('../models/approvalModel');
 const userModel = require('../models/userModel');
+const { pool } = require('../config/db');
 const {
   ACTIONS,
   NORMALISED,
@@ -53,6 +54,46 @@ async function decide(id, decision, userId, note) {
 
   const updated = await approvalModel.decide(id, { status: decision, decidedBy: userId, note });
   if (!updated) throw ApiError.badRequest('This request was decided by someone else just now.');
+
+  // Handle task_budget_approvals hook if linked
+  const [tbaRows] = await pool.query(
+    'SELECT * FROM task_budget_approvals WHERE approval_request_id = ?',
+    [id]
+  );
+  if (tbaRows.length > 0) {
+    const tba = tbaRows[0];
+    const excess = Number(tba.requested_excess || 0);
+    if (decision === 'approved') {
+      await pool.query(
+        `UPDATE task_budget_approvals
+         SET status = 'approved', decided_by = ?, decision_note = ?, decided_at = NOW()
+         WHERE id = ?`,
+        [userId, note || null, tba.id]
+      );
+      // Keep original budget (total_budget) strictly UNCHANGED!
+      // Add approved additional amount to approved_additional_budget and clear from pending_excess_budget!
+      await pool.query(
+        `UPDATE project_tasks
+         SET approved_additional_budget = approved_additional_budget + ?,
+             pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
+         WHERE id = ?`,
+        [excess, excess, tba.task_id]
+      );
+    } else if (decision === 'rejected') {
+      await pool.query(
+        `UPDATE task_budget_approvals
+         SET status = 'rejected', decided_by = ?, decision_note = ?, decided_at = NOW()
+         WHERE id = ?`,
+        [userId, note || null, tba.id]
+      );
+      await pool.query(
+        `UPDATE project_tasks
+         SET pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
+         WHERE id = ?`,
+        [excess, tba.task_id]
+      );
+    }
+  }
 
   return approvalModel.findById(id);
 }

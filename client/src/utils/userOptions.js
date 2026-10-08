@@ -44,6 +44,7 @@ export const moduleLabel = (slug) =>
 
 export const ROLE_TONE = {
   admin: 'brand',
+  project_manager: 'brand',
   finance: 'positive',
   hr: 'warning',
   procurement: 'brand',

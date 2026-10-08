@@ -137,6 +137,26 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
   const actualLabourCost = taskData?.actualLabourCost ?? task?.actuals?.actualLabourCost ?? 0;
   const totalActualExpenses = taskData?.totalActualExpenses ?? task?.actuals?.totalActualExpenses ?? 0;
 
+  const util = taskData?.budgetUtilization || task?.budgetUtilization || {
+    materials: { budgeted: Number(task?.material_budget || task?.materialBudget || 0), actual: 0, remaining: Number(task?.material_budget || 0), utilization: 0, isExceeded: false, exceededAmount: 0 },
+    tools: { budgeted: Number(task?.tool_budget || task?.toolBudget || 0), actual: 0, remaining: Number(task?.tool_budget || 0), utilization: 0, isExceeded: false, exceededAmount: 0 },
+    labour: { budgeted: Number(task?.labour_budget || task?.labourBudget || 0), actual: 0, remaining: Number(task?.labour_budget || 0), utilization: 0, isExceeded: false, exceededAmount: 0 },
+    misc: { budgeted: Number(task?.misc_budget || task?.miscBudget || 0), actual: 0, remaining: Number(task?.misc_budget || 0), utilization: 0, isExceeded: false, exceededAmount: 0 },
+    total: {
+      budgeted: Number(task?.total_budget || task?.totalBudget || 0),
+      approvedAdditional: Number(task?.approved_additional_budget || task?.approvedAdditionalBudget || 0),
+      effectiveBudget: Number(task?.total_budget || 0) + Number(task?.approved_additional_budget || 0),
+      pendingExcess: Number(task?.pending_excess_budget || task?.pendingExcessBudget || 0),
+      actual: 0,
+      remaining: Number(task?.total_budget || 0),
+      utilization: 0,
+      isExceeded: false,
+      exceededAmount: 0,
+      excessReason: task?.excess_reason || task?.excessReason || null,
+    },
+  };
+  const budgetApprovals = taskData?.budgetApprovals || task?.budgetApprovals || [];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4 sm:p-6">
       <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col rounded-2xl bg-white shadow-2xl">
@@ -289,39 +309,317 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                     </div>
 
                     <div className="rounded-xl border border-line p-4 space-y-3">
-                      <h4 className="text-xs font-semibold text-ink uppercase tracking-wider">Budget Breakdown (Admin Planned)</h4>
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-semibold text-ink uppercase tracking-wider">Approved Budget Summary</h4>
+                        {util.total.pendingExcess > 0 ? (
+                          <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                            ⚠️ +{formatCurrency(util.total.pendingExcess)} Pending Admin Approval
+                          </span>
+                        ) : util.total.isExceeded ? (
+                          <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                            ⚠️ Over Budget
+                          </span>
+                        ) : (
+                          <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                            Within Budget
+                          </span>
+                        )}
+                      </div>
                       <div className="space-y-2 text-xs">
                         <div className="flex justify-between py-1 border-b border-line/60">
-                          <span className="text-ink-muted flex items-center gap-1.5">
-                            <Package className="h-3.5 w-3.5 text-brand-600" /> Materials:
-                          </span>
-                          <span className="font-semibold text-ink">{formatCurrency(task.material_budget || 0)}</span>
+                          <span className="text-ink-muted">Base Task Budget:</span>
+                          <span className="font-semibold text-ink">{formatCurrency(util.total.budgeted)}</span>
+                        </div>
+                        {util.total.approvedAdditional > 0 && (
+                          <div className="flex justify-between py-1 border-b border-line/60 text-emerald-700 font-medium">
+                            <span>Approved Additional:</span>
+                            <span>+{formatCurrency(util.total.approvedAdditional)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between py-1 border-b border-line/60">
+                          <span className="text-ink-muted">Total Effective Budget:</span>
+                          <span className="font-bold text-ink">{formatCurrency(util.total.effectiveBudget)}</span>
                         </div>
                         <div className="flex justify-between py-1 border-b border-line/60">
-                          <span className="text-ink-muted flex items-center gap-1.5">
-                            <Wrench className="h-3.5 w-3.5 text-amber-600" /> Tools & Machines:
-                          </span>
-                          <span className="font-semibold text-ink">{formatCurrency(task.tool_budget || 0)}</span>
-                        </div>
-                        <div className="flex justify-between py-1 border-b border-line/60">
-                          <span className="text-ink-muted flex items-center gap-1.5">
-                            <Users className="h-3.5 w-3.5 text-emerald-600" /> Labour:
-                          </span>
-                          <span className="font-semibold text-ink">{formatCurrency(task.labour_budget || 0)}</span>
-                        </div>
-                        <div className="flex justify-between py-1 border-b border-line/60">
-                          <span className="text-ink-muted flex items-center gap-1.5">
-                            <DollarSign className="h-3.5 w-3.5 text-indigo-600" /> Miscellaneous:
-                          </span>
-                          <span className="font-semibold text-ink">{formatCurrency(task.misc_budget || 0)}</span>
+                          <span className="text-ink-muted">Actual Amount Used:</span>
+                          <span className="font-bold text-brand-700">{formatCurrency(util.total.actual)}</span>
                         </div>
                         <div className="flex justify-between py-1.5 bg-canvas/60 px-2 rounded-lg font-bold text-sm">
-                          <span className="text-ink">Total Task Budget:</span>
-                          <span className="text-brand-800">{formatCurrency(task.total_budget || 0)}</span>
+                          <span className="text-ink">Remaining Amount:</span>
+                          <span className={util.total.remaining > 0 ? "text-emerald-700" : "text-rose-700"}>
+                            {formatCurrency(util.total.remaining)}
+                          </span>
                         </div>
                       </div>
                     </div>
                   </div>
+
+                  {/* 1. TASK BUDGET VS ACTUAL UTILIZATION TABLE */}
+                  <div className="rounded-xl border border-line bg-white overflow-hidden space-y-3 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-xs font-bold text-ink uppercase tracking-wider">
+                          Task Budget vs Actual Utilization
+                        </h4>
+                        <p className="text-[11px] text-ink-subtle">
+                          Live real-time calculations from contractor updates, procurement, usage, wages, and expenses
+                        </p>
+                      </div>
+                      <span className="rounded-md bg-brand-50 px-2.5 py-1 text-xs font-bold text-brand-700 border border-brand-200">
+                        Overall Utilization: {util.total.utilization}%
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border border-line">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-canvas text-ink-muted uppercase font-medium">
+                          <tr>
+                            <th className="py-2.5 px-3">Budget Category</th>
+                            <th className="py-2.5 px-3 text-right">Estimated / Budgeted</th>
+                            <th className="py-2.5 px-3 text-right">Actual / Used</th>
+                            <th className="py-2.5 px-3 text-right">Remaining Amount</th>
+                            <th className="py-2.5 px-3 text-right">Utilization %</th>
+                            <th className="py-2.5 px-3 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-line">
+                          {/* Materials */}
+                          <tr className={util.materials.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
+                            <td className="py-2.5 px-3 font-semibold text-ink flex items-center gap-2">
+                              <Package className="h-4 w-4 text-brand-600 shrink-0" />
+                              Materials
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-medium tabular-nums text-ink">
+                              {formatCurrency(util.materials.budgeted)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold tabular-nums text-brand-700">
+                              {formatCurrency(util.materials.actual)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-emerald-700">
+                              {formatCurrency(util.materials.remaining)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
+                              {util.materials.utilization}%
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {util.materials.isExceeded ? (
+                                <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                                  Exceeded (+{formatCurrency(util.materials.exceededAmount)})
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                  On Track
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+
+                          {/* Machines / Tools */}
+                          <tr className={util.tools.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
+                            <td className="py-2.5 px-3 font-semibold text-ink flex items-center gap-2">
+                              <Wrench className="h-4 w-4 text-amber-600 shrink-0" />
+                              Machines & Tools
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-medium tabular-nums text-ink">
+                              {formatCurrency(util.tools.budgeted)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold tabular-nums text-amber-700">
+                              {formatCurrency(util.tools.actual)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-emerald-700">
+                              {formatCurrency(util.tools.remaining)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
+                              {util.tools.utilization}%
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {util.tools.isExceeded ? (
+                                <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                                  Exceeded (+{formatCurrency(util.tools.exceededAmount)})
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                  On Track
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+
+                          {/* Labour */}
+                          <tr className={util.labour.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
+                            <td className="py-2.5 px-3 font-semibold text-ink flex items-center gap-2">
+                              <Users className="h-4 w-4 text-emerald-600 shrink-0" />
+                              Labour
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-medium tabular-nums text-ink">
+                              {formatCurrency(util.labour.budgeted)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold tabular-nums text-emerald-700">
+                              {formatCurrency(util.labour.actual)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-emerald-700">
+                              {formatCurrency(util.labour.remaining)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
+                              {util.labour.utilization}%
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {util.labour.isExceeded ? (
+                                <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                                  Exceeded (+{formatCurrency(util.labour.exceededAmount)})
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                  On Track
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+
+                          {/* Miscellaneous */}
+                          <tr className={util.misc.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
+                            <td className="py-2.5 px-3 font-semibold text-ink flex items-center gap-2">
+                              <DollarSign className="h-4 w-4 text-indigo-600 shrink-0" />
+                              Miscellaneous
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-medium tabular-nums text-ink">
+                              {formatCurrency(util.misc.budgeted)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold tabular-nums text-indigo-700">
+                              {formatCurrency(util.misc.actual)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-emerald-700">
+                              {formatCurrency(util.misc.remaining)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
+                              {util.misc.utilization}%
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {util.misc.isExceeded ? (
+                                <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                                  Exceeded (+{formatCurrency(util.misc.exceededAmount)})
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                  On Track
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+
+                          {/* Task Total */}
+                          <tr className="bg-canvas font-bold border-t-2 border-line">
+                            <td className="py-3 px-3 text-ink font-bold flex items-center gap-2">
+                              <Layers className="h-4 w-4 text-ink shrink-0" />
+                              Task Total
+                            </td>
+                            <td className="py-3 px-3 text-right tabular-nums text-ink">
+                              {formatCurrency(util.total.effectiveBudget)}
+                              {util.total.approvedAdditional > 0 && (
+                                <div className="text-[10px] text-emerald-700 font-normal">
+                                  ({formatCurrency(util.total.budgeted)} + {formatCurrency(util.total.approvedAdditional)} addl)
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-right tabular-nums text-brand-800 font-bold">
+                              {formatCurrency(util.total.actual)}
+                            </td>
+                            <td className="py-3 px-3 text-right tabular-nums text-emerald-700 font-bold">
+                              {formatCurrency(util.total.remaining)}
+                            </td>
+                            <td className="py-3 px-3 text-right tabular-nums text-brand-800 font-bold">
+                              {util.total.utilization}%
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              {util.total.pendingExcess > 0 ? (
+                                <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                                  Pending Approval (+{formatCurrency(util.total.pendingExcess)})
+                                </span>
+                              ) : util.total.isExceeded ? (
+                                <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                                  Over Budget (+{formatCurrency(util.total.exceededAmount)})
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                                  Within Budget
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* 2. AUDIT TRAIL: BUDGET APPROVALS & CHANGES */}
+                  {budgetApprovals.length > 0 && (
+                    <div className="rounded-xl border border-line bg-white p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-brand-700" />
+                          <h4 className="text-xs font-bold text-ink uppercase tracking-wider">
+                            Budget Approvals & Excess Requests Audit Trail ({budgetApprovals.length})
+                          </h4>
+                        </div>
+                        <span className="text-[11px] text-ink-subtle">
+                          Original approved budget stays unchanged; approved additional tracked separately
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto rounded-lg border border-line">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-canvas text-ink-muted uppercase font-medium">
+                            <tr>
+                              <th className="py-2.5 px-3">Date</th>
+                              <th className="py-2.5 px-3">Category</th>
+                              <th className="py-2.5 px-3 text-right">Requested Excess</th>
+                              <th className="py-2.5 px-3">Mandatory Reason</th>
+                              <th className="py-2.5 px-3">Requested By</th>
+                              <th className="py-2.5 px-3 text-center">Status</th>
+                              <th className="py-2.5 px-3">Decision Note</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-line">
+                            {budgetApprovals.map((ba) => (
+                              <tr key={ba.id} className="hover:bg-canvas/30">
+                                <td className="py-2.5 px-3 text-ink-muted whitespace-nowrap">
+                                  {formatDate(ba.createdAt)}
+                                </td>
+                                <td className="py-2.5 px-3 font-semibold text-ink">
+                                  {ba.category || 'Task Total'}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-bold text-rose-700 tabular-nums">
+                                  +{formatCurrency(ba.requestedExcess)}
+                                </td>
+                                <td className="py-2.5 px-3 text-ink max-w-xs break-words">
+                                  {ba.reason}
+                                </td>
+                                <td className="py-2.5 px-3 text-ink-muted">
+                                  {ba.requestedByName || 'Contractor'}
+                                </td>
+                                <td className="py-2.5 px-3 text-center">
+                                  <span
+                                    className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                                      ba.status === 'approved'
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : ba.status === 'rejected'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                    }`}
+                                  >
+                                    {ba.status ? ba.status.toUpperCase() : 'PENDING'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-ink-muted max-w-xs truncate">
+                                  {ba.decisionNote ? `${ba.decisionNote} (by ${ba.decidedByName || 'Admin'})` : (ba.status === 'pending' ? 'Pending Admin review' : '—')}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

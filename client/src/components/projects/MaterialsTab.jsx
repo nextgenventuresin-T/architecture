@@ -47,7 +47,21 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
       if (dateTo) params.dateTo = dateTo;
 
       const res = await projectsApi.materialsTracking(projectId, params);
-      setData(res || { summary: { totalReceived: 0, totalUsed: 0, balance: 0, usedCost: 0 }, received: [], used: [] });
+      const summary = res?.summary
+        ? (Array.isArray(res.summary)
+            ? {
+                totalReceived: res.summary.reduce((s, m) => s + (m.received || 0), 0),
+                totalUsed: res.summary.reduce((s, m) => s + (m.used || 0), 0),
+                balance: res.summary.reduce((s, m) => s + (m.balance || 0), 0),
+                usedCost: res.summary.reduce((s, m) => s + (m.usedCost || 0), 0),
+              }
+            : res.summary)
+        : { totalReceived: 0, totalUsed: 0, balance: 0, usedCost: 0 };
+      setData({
+        summary,
+        received: res?.received || [],
+        used: res?.used || [],
+      });
     } catch (err) {
       console.error('Failed to load materials tracking:', err);
       // Fallback from detail if available
@@ -91,39 +105,45 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
   const availablePhases = useMemo(() => {
     const set = new Set();
     data.used.forEach((u) => {
-      if (u.phase_name) set.add(u.phase_name);
+      const p = u.phase_name || u.phaseTitle;
+      if (p) set.add(p);
     });
     return Array.from(set).sort();
   }, [data.used]);
 
   const availableContractors = useMemo(() => {
     const set = new Set();
-    data.received.forEach((r) => { if (r.contractor_name) set.add(r.contractor_name); });
-    data.used.forEach((u) => { if (u.contractor_name) set.add(u.contractor_name); });
+    data.received.forEach((r) => { const c = r.contractor_name || r.contractorName; if (c) set.add(c); });
+    data.used.forEach((u) => { const c = u.contractor_name || u.contractorName; if (c) set.add(c); });
     return Array.from(set).sort();
   }, [data.received, data.used]);
 
   const availableMaterials = useMemo(() => {
     const set = new Set();
-    data.received.forEach((r) => { if (r.material_name) set.add(r.material_name); });
-    data.used.forEach((u) => { if (u.material_name) set.add(u.material_name); });
+    data.received.forEach((r) => { const m = r.material_name || r.materialName; if (m) set.add(m); });
+    data.used.forEach((u) => { const m = u.material_name || u.materialName; if (m) set.add(m); });
     return Array.from(set).sort();
   }, [data.received, data.used]);
 
   // Filtered rows
   const filteredReceived = useMemo(() => {
     return data.received.filter((row) => {
-      if (materialFilter && !row.material_name?.toLowerCase().includes(materialFilter.toLowerCase())) return false;
-      if (contractorFilter && row.contractor_name !== contractorFilter) return false;
+      const mat = (row.material_name || row.materialName || '').toLowerCase();
+      const cont = row.contractor_name || row.contractorName;
+      if (materialFilter && !mat.includes(materialFilter.toLowerCase())) return false;
+      if (contractorFilter && cont !== contractorFilter) return false;
       return true;
     });
   }, [data.received, materialFilter, contractorFilter]);
 
   const filteredUsed = useMemo(() => {
     return data.used.filter((row) => {
-      if (materialFilter && !row.material_name?.toLowerCase().includes(materialFilter.toLowerCase())) return false;
-      if (phaseFilter && row.phase_name !== phaseFilter) return false;
-      if (contractorFilter && row.contractor_name !== contractorFilter) return false;
+      const mat = (row.material_name || row.materialName || '').toLowerCase();
+      const phase = row.phase_name || row.phaseTitle;
+      const cont = row.contractor_name || row.contractorName;
+      if (materialFilter && !mat.includes(materialFilter.toLowerCase())) return false;
+      if (phaseFilter && phase !== phaseFilter) return false;
+      if (contractorFilter && cont !== contractorFilter) return false;
       return true;
     });
   }, [data.used, materialFilter, phaseFilter, contractorFilter]);
@@ -134,10 +154,10 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
       header: 'Material / Tool',
       render: (row) => (
         <div>
-          <p className="font-medium text-ink">{row.material_name}</p>
+          <p className="font-medium text-ink">{row.material_name || row.materialName || 'Material'}</p>
           <p className="mt-0.5 text-xs text-ink-subtle">
-            {row.material_code && `${row.material_code} · `}
-            {row.category}
+            {(row.material_code || row.materialCode) && `${row.material_code || row.materialCode} · `}
+            {row.category || row.material_category || 'Site Consumable'}
           </p>
         </div>
       ),
@@ -155,29 +175,29 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
     {
       key: 'source',
       header: 'Source',
-      render: (row) => <span className="text-ink-muted">{row.source_warehouse_name || 'Central Store'}</span>,
+      render: (row) => <span className="text-ink-muted">{row.source_warehouse_name || row.source || 'Central Store'}</span>,
     },
     {
       key: 'destination',
       header: 'Destination / Contractor',
       render: (row) => (
         <div>
-          <p className="font-medium text-ink">{row.destination_warehouse_name || row.contractor_name || 'Site Warehouse'}</p>
-          {row.site_name && <p className="text-xs text-ink-subtle">Site: {row.site_name}</p>}
+          <p className="font-medium text-ink">{row.destination_warehouse_name || row.destination || row.contractor_name || row.contractorName || 'Site Warehouse'}</p>
+          {(row.site_name || row.siteName) && <p className="text-xs text-ink-subtle">Site: {row.site_name || row.siteName}</p>}
         </div>
       ),
     },
     {
       key: 'date',
       header: 'Received Date',
-      render: (row) => <span className="whitespace-nowrap text-ink-muted">{formatDate(row.transaction_date)}</span>,
+      render: (row) => <span className="whitespace-nowrap text-ink-muted">{formatDate(row.transaction_date || row.date)}</span>,
     },
     {
       key: 'reference',
       header: 'Ref / Transaction',
       render: (row) => (
         <span className="font-mono text-xs text-ink-subtle">
-          {row.transaction_number || row.reference || '—'}
+          {row.transaction_number || row.transactionNumber || row.reference || '—'}
         </span>
       ),
     },
@@ -189,10 +209,10 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
       header: 'Material Consumed',
       render: (row) => (
         <div>
-          <p className="font-medium text-ink">{row.material_name}</p>
+          <p className="font-medium text-ink">{row.material_name || row.materialName || 'Material'}</p>
           <p className="mt-0.5 text-xs text-ink-subtle">
-            {row.material_code && `${row.material_code} · `}
-            {row.category || 'Site Consumable'}
+            {(row.material_code || row.materialCode) && `${row.material_code || row.materialCode} · `}
+            {row.category || row.material_category || 'Site Consumable'}
           </p>
         </div>
       ),
@@ -203,19 +223,19 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
       align: 'right',
       render: (row) => (
         <span className="font-semibold tabular-nums text-amber-700">
-          {formatNumber(row.quantity_used)} <span className="text-xs font-normal text-ink-subtle">{row.unit}</span>
+          {formatNumber(row.quantity_used ?? row.quantityUsed)} <span className="text-xs font-normal text-ink-subtle">{row.unit}</span>
         </span>
       ),
     },
     {
       key: 'date',
       header: 'Usage Date',
-      render: (row) => <span className="whitespace-nowrap text-ink">{formatDate(row.work_date)}</span>,
+      render: (row) => <span className="whitespace-nowrap text-ink">{formatDate(row.work_date || row.usage_date || row.usageDate)}</span>,
     },
     {
       key: 'contractor',
       header: 'Contractor',
-      render: (row) => <span className="font-medium text-ink">{row.contractor_name || 'Direct / General'}</span>,
+      render: (row) => <span className="font-medium text-ink">{row.contractor_name || row.contractorName || 'Direct / General'}</span>,
     },
     {
       key: 'phase_site',
@@ -223,11 +243,11 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
       render: (row) => (
         <div>
           <p className="font-medium text-ink">
-            {row.task_name ? `Task: ${row.task_name}` : (row.phase_name || 'General Construction')}
+            {row.task_name || row.taskName ? `Task: ${row.task_name || row.taskName}` : (row.phase_name || row.phaseTitle || 'General Construction')}
           </p>
           <p className="text-xs text-ink-subtle">
-            {row.subcategory_name ? row.subcategory_name : 'Daily Work'}
-            {row.site_name ? ` · ${row.site_name}` : ''}
+            {row.subcategory_name || row.subcategory ? (row.subcategory_name || row.subcategory) : 'Daily Work'}
+            {(row.site_name || row.siteName) ? ` · ${row.site_name || row.siteName}` : ''}
           </p>
         </div>
       ),
@@ -238,7 +258,7 @@ export default function MaterialsTab({ detail, projectId: propProjectId, siteId:
       align: 'right',
       render: (row) => (
         <span className="tabular-nums text-ink-muted">
-          {formatNumber(row.remaining_quantity)} {row.unit}
+          {formatNumber(row.remaining_quantity ?? row.remainingQuantity)} {row.unit}
         </span>
       ),
     },

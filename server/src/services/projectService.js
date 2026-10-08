@@ -119,10 +119,12 @@ async function getDetail(id, hrScope) {
   let taskTools = [];
   let taskLabour = [];
   let taskMisc = [];
+  let taskWorkerLogs = [];
+  let taskDailyWork = [];
 
   if (taskIds.length > 0) {
     const placeholders = taskIds.map(() => '?').join(',');
-    const [tmRows, ttRows, tlRows, tmcRows] = await Promise.all([
+    const [tmRows, ttRows, tlRows, tmcRows, twlRows, tdwRows] = await Promise.all([
       pool.query(
         `SELECT tm.*, m.name AS material_name, m.unit AS material_unit, m.category AS material_category
          FROM task_materials tm
@@ -145,38 +147,63 @@ async function getDetail(id, hrScope) {
         `SELECT * FROM task_misc WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
         taskIds
       ),
+      pool.query(
+        `SELECT * FROM task_worker_logs WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
+        taskIds
+      ),
+      pool.query(
+        `SELECT * FROM daily_work_updates WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
+        taskIds
+      ),
     ]);
     taskMaterials = tmRows[0];
     taskTools = ttRows[0];
     taskLabour = tlRows[0];
     taskMisc = tmcRows[0];
+    taskWorkerLogs = twlRows[0];
+    taskDailyWork = tdwRows[0];
   }
 
-  const formattedTasks = tasks.map((t) => ({
-    id: t.id,
-    projectId: t.project_id,
-    siteId: t.site_id,
-    siteName: t.site_name,
-    name: t.name,
-    description: t.description,
-    status: t.status,
-    progress: Number(t.progress || 0),
-    startDate: t.start_date || t.planned_start,
-    endDate: t.end_date || t.planned_end,
-    durationDays: Number(t.duration_days || 0),
-    materialBudget: Number(t.material_budget || 0),
-    toolBudget: Number(t.tool_budget || 0),
-    labourBudget: Number(t.labour_budget || 0),
-    miscBudget: Number(t.misc_budget || 0),
-    totalBudget: Number(t.total_budget || 0),
-    workerEntriesCount: Number(t.worker_entries_count || 0),
-    uniqueWorkersCount: Number(t.unique_workers_count || 0),
-    actualLabourCost: Number(t.actual_labour_cost || 0),
-    actualMaterialCost: Number(t.actual_material_cost || 0),
-    actualTaskExpenses: Number(t.actual_task_expenses || 0),
-    actualCost: Number((Number(t.actual_labour_cost || 0) + Number(t.actual_material_cost || 0) + Number(t.actual_task_expenses || 0)).toFixed(2)),
-    variance: Number((Number(t.total_budget || 0) - (Number(t.actual_labour_cost || 0) + Number(t.actual_material_cost || 0) + Number(t.actual_task_expenses || 0))).toFixed(2)),
-    dailyUpdatesCount: Number(t.daily_updates_count || 0),
+  const formattedTasks = tasks.map((t) => {
+    const tMaterials = taskMaterials.filter((m) => m.task_id === t.id);
+    const tTools = taskTools.filter((tl) => tl.task_id === t.id);
+    const tLabour = taskLabour.filter((l) => l.task_id === t.id);
+    const tMisc = taskMisc.filter((mc) => mc.task_id === t.id);
+    const tWorkerLogs = taskWorkerLogs.filter((w) => w.task_id === t.id);
+    const tDailyWork = taskDailyWork.filter((dw) => dw.task_id === t.id);
+    const tExpenses = (expenses || []).filter((e) => e.task_id === t.id);
+
+    const budgetUtilization = taskModel.computeTaskBudgetUtilization(t, tMaterials, tDailyWork, tWorkerLogs, tExpenses);
+
+    return {
+      id: t.id,
+      projectId: t.project_id,
+      siteId: t.site_id,
+      siteName: t.site_name,
+      name: t.name,
+      description: t.description,
+      status: t.status,
+      progress: Number(t.progress || 0),
+      startDate: t.start_date || t.planned_start,
+      endDate: t.end_date || t.planned_end,
+      durationDays: Number(t.duration_days || 0),
+      materialBudget: Number(t.material_budget || 0),
+      toolBudget: Number(t.tool_budget || 0),
+      labourBudget: Number(t.labour_budget || 0),
+      miscBudget: Number(t.misc_budget || 0),
+      totalBudget: Number(t.total_budget || 0),
+      approvedAdditionalBudget: Number(t.approved_additional_budget || 0),
+      pendingExcessBudget: Number(t.pending_excess_budget || 0),
+      excessReason: t.excess_reason || null,
+      budgetUtilization,
+      workerEntriesCount: Number(t.worker_entries_count || 0),
+      uniqueWorkersCount: Number(t.unique_workers_count || 0),
+      actualLabourCost: budgetUtilization.labour.actual,
+      actualMaterialCost: budgetUtilization.materials.actual,
+      actualTaskExpenses: Number((budgetUtilization.tools.actual + budgetUtilization.misc.actual).toFixed(2)),
+      actualCost: budgetUtilization.total.actual,
+      variance: Number((budgetUtilization.total.effectiveBudget - budgetUtilization.total.actual).toFixed(2)),
+      dailyUpdatesCount: Number(t.daily_updates_count || 0),
     materials: taskMaterials
       .filter((m) => m.task_id === t.id)
       .map((m) => ({
@@ -218,7 +245,8 @@ async function getDetail(id, hrScope) {
         description: mc.description,
         amount: Number(mc.amount || 0),
       })),
-  }));
+    };
+  });
 
   const plannedMaterialBudget = formattedTasks.reduce((sum, t) => sum + t.materialBudget, 0);
   const plannedLabourBudget = formattedTasks.reduce((sum, t) => sum + t.labourBudget, 0);
@@ -509,20 +537,21 @@ async function getMaterialTracking(projectId, query = {}) {
 
   const [usedRows] = await pool.query(
     `SELECT e.id AS expense_id, e.expense_number, e.amount, e.expense_date, e.reference, e.notes,
-            COALESCE(m.id, dwu.material_id) AS material_id,
+            COALESCE(dwu.material_id, m.id) AS material_id,
             COALESCE(m.name, e.party_name) AS material_name,
             m.code AS material_code, m.category AS material_category,
             COALESCE(dwu.unit, m.unit, 'unit') AS unit,
             COALESCE(m.default_rate, 0) AS default_rate,
             dwu.id AS work_update_id, dwu.quantity_used, dwu.phase_number, dwu.phase_title, dwu.subcategory,
+            dwu.work_date,
             s.id AS site_id, s.name AS site_name,
             c.id AS contractor_id, c.name AS contractor_name,
             wt.transaction_number
      FROM expenses e
      LEFT JOIN daily_work_updates dwu ON dwu.expense_id = e.id
      LEFT JOIN materials m ON (m.id = dwu.material_id OR m.name = e.party_name)
-     LEFT JOIN sites s ON s.id = e.site_id
-     LEFT JOIN contractors c ON c.id = e.contractor_id
+     LEFT JOIN sites s ON s.id = COALESCE(dwu.site_id, e.site_id)
+     LEFT JOIN contractors c ON c.id = COALESCE(dwu.contractor_id, e.contractor_id)
      LEFT JOIN warehouse_transactions wt ON (wt.transaction_number = e.reference OR wt.id = dwu.warehouse_transaction_id)
      WHERE ${usedWhere.join(' AND ')}
      ORDER BY e.expense_date DESC, e.id DESC`,
@@ -557,16 +586,29 @@ async function getMaterialTracking(projectId, query = {}) {
      LEFT JOIN warehouses w_dst ON w_dst.id = wt.destination_warehouse_id
      LEFT JOIN contractors c ON c.id = w_src.contractor_id
      LEFT JOIN contractors c_dst ON c_dst.id = w_dst.contractor_id
-     WHERE (wt.project_id = ? OR wt.destination_warehouse_id IN (
-       SELECT w.id FROM warehouses w
-       JOIN projects prj ON prj.id = ?
-       LEFT JOIN sites st ON st.project_id = prj.id
-       WHERE (w.contractor_id = prj.contractor_id OR w.contractor_id = st.contractor_id)
-     ))
+     WHERE (
+       wt.project_id = ?
+       OR wt.warehouse_id IN (
+         SELECT w.id FROM warehouses w
+         JOIN projects prj ON prj.id = ?
+         LEFT JOIN sites st ON st.project_id = prj.id
+         WHERE (w.contractor_id = prj.contractor_id OR w.contractor_id = st.contractor_id)
+       )
+       OR wt.destination_warehouse_id IN (
+         SELECT w.id FROM warehouses w
+         JOIN projects prj ON prj.id = ?
+         LEFT JOIN sites st ON st.project_id = prj.id
+         WHERE (w.contractor_id = prj.contractor_id OR w.contractor_id = st.contractor_id)
+       )
+       OR wt.id IN (
+         SELECT pr.warehouse_transaction_id FROM procurement_requests pr
+         WHERE pr.project_id = ? AND pr.warehouse_transaction_id IS NOT NULL
+       )
+     )
      AND wt.transaction_type IN ('transfer', 'receipt', 'adjust')
      AND wt.quantity > 0
      ORDER BY wt.transaction_date DESC, wt.id DESC`,
-    [pId, pId]
+    [pId, pId, pId, pId]
   );
 
   let filteredReceived = recRows;
@@ -685,25 +727,44 @@ async function getMaterialTracking(projectId, query = {}) {
     const unitRate = Number(u.default_rate || 0);
     const qty = u.quantity_used != null ? Number(u.quantity_used) : (unitRate > 0 ? Number((Number(u.amount) / unitRate).toFixed(2)) : 1);
     const matSummary = materialMap.get(Number(u.material_id));
+    const workDate = u.work_date || u.expense_date;
     return {
-      id: u.expense_id,
+      id: u.expense_id || u.work_update_id,
       expenseNumber: u.expense_number,
+      expense_number: u.expense_number,
       materialId: u.material_id,
+      material_id: u.material_id,
       materialName: u.material_name,
+      material_name: u.material_name,
       materialCode: u.material_code,
+      material_code: u.material_code,
       category: u.material_category,
+      material_category: u.material_category,
       quantityUsed: qty,
+      quantity_used: qty,
       unit: u.unit,
       rate: unitRate,
       totalCost: Number(u.amount || 0),
-      usageDate: u.expense_date,
-      contractorName: u.contractor_name || '—',
+      total_cost: Number(u.amount || 0),
+      usageDate: workDate,
+      usage_date: workDate,
+      work_date: workDate,
+      contractorName: u.contractor_name || 'Direct / General',
+      contractor_name: u.contractor_name || 'Direct / General',
       phaseNumber: u.phase_number,
-      phaseTitle: u.phase_title || (u.phase_number ? `Phase ${u.phase_number}` : '—'),
-      subcategory: u.subcategory || '—',
+      phase_number: u.phase_number,
+      phaseTitle: u.phase_title || (u.phase_number ? `Phase ${u.phase_number}` : 'General Construction'),
+      phase_name: u.phase_title || (u.phase_number ? `Phase ${u.phase_number}` : 'General Construction'),
+      taskName: u.phase_title || u.subcategory || 'General Construction',
+      task_name: u.phase_title || u.subcategory || 'General Construction',
+      subcategory: u.subcategory || 'Daily Work',
+      subcategory_name: u.subcategory || 'Daily Work',
       siteName: u.site_name || 'All Sites',
-      remainingQuantity: matSummary?.balance ?? null,
+      site_name: u.site_name || 'All Sites',
+      remainingQuantity: matSummary?.balance ?? 0,
+      remaining_quantity: matSummary?.balance ?? 0,
       status: 'Verified & Deducted',
+      verified_by_engineer: true,
       reference: u.reference || u.transaction_number || u.expense_number,
       remarks: u.notes,
     };
@@ -712,25 +773,43 @@ async function getMaterialTracking(projectId, query = {}) {
   const receivedItems = filteredReceived.map((r) => ({
     id: r.id,
     transactionNumber: r.transaction_number,
+    transaction_number: r.transaction_number,
     materialId: r.material_id,
+    material_id: r.material_id,
     materialName: r.material_name,
+    material_name: r.material_name,
     materialCode: r.material_code,
+    material_code: r.material_code,
     category: r.material_category,
     quantity: Number(r.quantity || 0),
     unit: r.unit,
     source: r.source_name || 'Main Store (WH-001)',
+    source_warehouse_name: r.source_name || 'Main Store (WH-001)',
     destination: r.destination_name || 'Contractor Store',
-    contractorName: r.contractor_name,
+    destination_warehouse_name: r.destination_name || 'Contractor Store',
+    contractorName: r.contractor_name || '—',
+    contractor_name: r.contractor_name || '—',
     siteName: r.site_name || 'Central Store',
+    site_name: r.site_name || 'Central Store',
     date: r.transaction_date,
+    transaction_date: r.transaction_date,
     reference: r.reference || r.transaction_number,
     notes: r.notes,
   }));
 
+  const summaryTotals = {
+    totalReceived: Number(materialSummaries.reduce((s, m) => s + m.received, 0).toFixed(2)),
+    totalUsed: Number(materialSummaries.reduce((s, m) => s + m.used, 0).toFixed(2)),
+    balance: Number(materialSummaries.reduce((s, m) => s + m.balance, 0).toFixed(2)),
+    usedCost: Number(materialSummaries.reduce((s, m) => s + m.usedCost, 0).toFixed(2)),
+    byMaterial: materialSummaries,
+  };
+
   return {
     projectId: pId,
     projectName: project.name,
-    summary: materialSummaries,
+    summary: summaryTotals,
+    materials: materialSummaries,
     received: receivedItems,
     used: usedItems,
   };

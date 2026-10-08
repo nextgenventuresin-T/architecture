@@ -5,8 +5,180 @@ const { pool } = require('../config/db');
 /**
  * Task Data Access Model.
  * Handles Project -> Site -> Task creation, budgeting, tracking,
- * worker logging, material usage, and actual expenses.
+ * worker logging, material usage, actual expenses, and budget utilization.
  */
+
+function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], workerLogs = [], expenses = []) {
+  // 1. Materials
+  const budgetedMaterial = Number(task.material_budget || task.materialBudget || 0);
+  const materialRateMap = new Map();
+  materials.forEach((m) => {
+    materialRateMap.set(Number(m.material_id || m.materialId), Number(m.cost_per_unit || m.costPerUnit || 0));
+  });
+
+  let actualMaterial = 0;
+  dailyWork.forEach((dw) => {
+    const matId = Number(dw.material_id || dw.materialId);
+    const qtyUsed = Number(dw.quantity_used || dw.quantityUsed || 0);
+    if (matId && qtyUsed > 0) {
+      const unitRate = materialRateMap.get(matId) || Number(dw.cost_per_unit || dw.unit_rate || dw.default_rate || 0);
+      actualMaterial += qtyUsed * unitRate;
+    }
+  });
+  actualMaterial = Number(actualMaterial.toFixed(2));
+  const remainingMaterial = Math.max(0, Number((budgetedMaterial - actualMaterial).toFixed(2)));
+  const utilizationMaterial = budgetedMaterial > 0 ? Number(((actualMaterial / budgetedMaterial) * 100).toFixed(1)) : 0;
+  const isExceededMaterial = actualMaterial > budgetedMaterial;
+  const exceededMaterial = Math.max(0, Number((actualMaterial - budgetedMaterial).toFixed(2)));
+
+  // 2. Tools / Machines
+  const budgetedTools = Number(task.tool_budget || task.toolBudget || 0);
+  const toolExpenseCategories = new Set(['Equipment Rental', 'Tools', 'Machinery', 'Equipment', 'Tools & Equipment']);
+  let actualTools = 0;
+  expenses.forEach((e) => {
+    if (toolExpenseCategories.has(e.category)) {
+      actualTools += Number(e.amount || 0);
+    }
+  });
+  actualTools = Number(actualTools.toFixed(2));
+  const remainingTools = Math.max(0, Number((budgetedTools - actualTools).toFixed(2)));
+  const utilizationTools = budgetedTools > 0 ? Number(((actualTools / budgetedTools) * 100).toFixed(1)) : 0;
+  const isExceededTools = actualTools > budgetedTools;
+  const exceededTools = Math.max(0, Number((actualTools - budgetedTools).toFixed(2)));
+
+  // 3. Labour
+  const budgetedLabour = Number(task.labour_budget || task.labourBudget || 0);
+  let actualLabour = 0;
+  if (workerLogs.length > 0) {
+    workerLogs.forEach((w) => {
+      if (w.worker_type !== 'company_employee' && w.workerType !== 'company_employee') {
+        const hours = Number(w.hours_worked || w.hoursWorked || 8);
+        const wage = Number(w.daily_wage || w.dailyWage || 0);
+        actualLabour += (hours / 8) * wage;
+      }
+    });
+  } else if (dailyWork.length > 0) {
+    const distinctDates = new Set(dailyWork.map((d) => (d.work_date || d.workDate ? String(d.work_date || d.workDate).slice(0, 10) : null)).filter(Boolean));
+    const completedDays = distinctDates.size;
+    const durationDays = Number(task.duration_days || task.durationDays || 0) || 1;
+    const dailyLabourCost = budgetedLabour / durationDays;
+    actualLabour = completedDays * dailyLabourCost;
+  }
+  actualLabour = Number(actualLabour.toFixed(2));
+  const remainingLabour = Math.max(0, Number((budgetedLabour - actualLabour).toFixed(2)));
+  const utilizationLabour = budgetedLabour > 0 ? Number(((actualLabour / budgetedLabour) * 100).toFixed(1)) : 0;
+  const isExceededLabour = actualLabour > budgetedLabour;
+  const exceededLabour = Math.max(0, Number((actualLabour - budgetedLabour).toFixed(2)));
+
+  // 4. Miscellaneous
+  const budgetedMisc = Number(task.misc_budget || task.miscBudget || 0);
+  let actualMisc = 0;
+  dailyWork.forEach((dw) => {
+    if (dw.misc_amount || dw.miscAmount) {
+      actualMisc += Number(dw.misc_amount || dw.miscAmount || 0);
+    }
+  });
+  expenses.forEach((e) => {
+    if (['Miscellaneous', 'Misc', 'Operational Misc'].includes(e.category)) {
+      actualMisc += Number(e.amount || 0);
+    }
+  });
+  actualMisc = Number(actualMisc.toFixed(2));
+  const remainingMisc = Math.max(0, Number((budgetedMisc - actualMisc).toFixed(2)));
+  const utilizationMisc = budgetedMisc > 0 ? Number(((actualMisc / budgetedMisc) * 100).toFixed(1)) : 0;
+  const isExceededMisc = actualMisc > budgetedMisc;
+  const exceededMisc = Math.max(0, Number((actualMisc - budgetedMisc).toFixed(2)));
+
+  // 5. Task Total
+  const budgetedTotal = Number(task.total_budget || task.totalBudget || 0);
+  const approvedAdditional = Number(task.approved_additional_budget || task.approvedAdditionalBudget || 0);
+  const pendingExcess = Number(task.pending_excess_budget || task.pendingExcessBudget || 0);
+  const effectiveBudget = Number((budgetedTotal + approvedAdditional).toFixed(2));
+  const actualTotal = Number((actualMaterial + actualTools + actualLabour + actualMisc).toFixed(2));
+  const remainingTotal = Math.max(0, Number((effectiveBudget - actualTotal).toFixed(2)));
+  const utilizationTotal = effectiveBudget > 0 ? Number(((actualTotal / effectiveBudget) * 100).toFixed(1)) : 0;
+  const isExceededTotal = actualTotal > effectiveBudget;
+  const exceededTotal = Math.max(0, Number((actualTotal - effectiveBudget).toFixed(2)));
+
+  return {
+    materials: {
+      budgeted: budgetedMaterial,
+      actual: actualMaterial,
+      remaining: remainingMaterial,
+      utilization: utilizationMaterial,
+      isExceeded: isExceededMaterial,
+      exceededAmount: exceededMaterial,
+    },
+    tools: {
+      budgeted: budgetedTools,
+      actual: actualTools,
+      remaining: remainingTools,
+      utilization: utilizationTools,
+      isExceeded: isExceededTools,
+      exceededAmount: exceededTools,
+    },
+    labour: {
+      budgeted: budgetedLabour,
+      actual: actualLabour,
+      remaining: remainingLabour,
+      utilization: utilizationLabour,
+      isExceeded: isExceededLabour,
+      exceededAmount: exceededLabour,
+    },
+    misc: {
+      budgeted: budgetedMisc,
+      actual: actualMisc,
+      remaining: remainingMisc,
+      utilization: utilizationMisc,
+      isExceeded: isExceededMisc,
+      exceededAmount: exceededMisc,
+    },
+    total: {
+      budgeted: budgetedTotal,
+      approvedAdditional,
+      effectiveBudget,
+      pendingExcess,
+      actual: actualTotal,
+      remaining: remainingTotal,
+      utilization: utilizationTotal,
+      isExceeded: isExceededTotal,
+      exceededAmount: exceededTotal,
+      excessReason: task.excess_reason || task.excessReason || null,
+    },
+  };
+}
+
+async function getTaskBudgetApprovals(taskId) {
+  const [rows] = await pool.query(
+    `SELECT tba.*, u.full_name AS requested_by_name, du.full_name AS decided_by_name
+     FROM task_budget_approvals tba
+     LEFT JOIN users u ON u.id = tba.requested_by
+     LEFT JOIN users du ON du.id = tba.decided_by
+     WHERE tba.task_id = ?
+     ORDER BY tba.created_at DESC`,
+    [Number(taskId)]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    taskId: r.task_id,
+    projectId: r.project_id,
+    siteId: r.site_id,
+    category: r.category,
+    budgetAmount: Number(r.budget_amount || 0),
+    actualAmount: Number(r.actual_amount || 0),
+    requestedExcess: Number(r.requested_excess || 0),
+    reason: r.reason,
+    status: r.status,
+    requestedBy: r.requested_by,
+    requestedByName: r.requested_by_name,
+    approvalRequestId: r.approval_request_id,
+    decidedBy: r.decided_by,
+    decidedByName: r.decided_by_name,
+    decisionNote: r.decision_note,
+    createdAt: r.created_at,
+    decidedAt: r.decided_at,
+  }));
+}
 
 async function createTask(payload) {
   const connection = await pool.getConnection();
@@ -523,10 +695,17 @@ async function findTaskById(taskId) {
   );
 
   // Actual labour cost from worker logs + daily labour records
-  const actualLabourCost = workerLogs.reduce(
-    (sum, w) => sum + (Number(w.daily_wage || 0) * (Number(w.hours_worked || 8) / 8)),
+  let actualLabourCost = workerLogs.reduce(
+    (sum, w) => sum + (w.worker_type !== 'company_employee' ? (Number(w.daily_wage || 0) * (Number(w.hours_worked || 8) / 8)) : 0),
     0
   );
+  if (workerLogs.length === 0 && dailyWork.length > 0) {
+    const distinctDates = new Set(dailyWork.map((d) => (d.work_date ? String(d.work_date).slice(0, 10) : null)).filter(Boolean));
+    const completedDays = distinctDates.size;
+    const durationDays = Number(task.duration_days || 0) || 1;
+    const dailyLabourCost = Number(task.labour_budget || 0) / durationDays;
+    actualLabourCost = completedDays * dailyLabourCost;
+  }
 
   // Actual material consumption
   const materialUsageList = dailyWork
@@ -542,7 +721,9 @@ async function findTaskById(taskId) {
       remarks: u.remarks,
     }));
 
-  const totalActualExpenses = taskExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0) + actualLabourCost;
+  const budgetUtilization = computeTaskBudgetUtilization(task, materials, dailyWork, workerLogs, taskExpenses);
+  const budgetApprovals = await getTaskBudgetApprovals(taskId);
+  const totalActualExpenses = budgetUtilization.total.actual;
 
   return {
     id: task.id,
@@ -586,21 +767,35 @@ async function findTaskById(taskId) {
     misc_budget: Number(task.misc_budget || 0),
     totalBudget: Number(task.total_budget || 0),
     total_budget: Number(task.total_budget || 0),
+    approvedAdditionalBudget: Number(task.approved_additional_budget || 0),
+    approved_additional_budget: Number(task.approved_additional_budget || 0),
+    pendingExcessBudget: Number(task.pending_excess_budget || 0),
+    pending_excess_budget: Number(task.pending_excess_budget || 0),
+    excessReason: task.excess_reason || null,
+    excess_reason: task.excess_reason || null,
     budget: {
       materialBudget: Number(task.material_budget || 0),
       toolBudget: Number(task.tool_budget || 0),
       labourBudget: Number(task.labour_budget || 0),
       miscBudget: Number(task.misc_budget || 0),
       totalBudget: Number(task.total_budget || 0),
+      approvedAdditionalBudget: Number(task.approved_additional_budget || 0),
+      effectiveBudget: budgetUtilization.total.effectiveBudget,
+      pendingExcessBudget: Number(task.pending_excess_budget || 0),
     },
     actuals: {
       totalActualExpenses,
-      actualLabourCost,
+      actualLabourCost: budgetUtilization.labour.actual,
+      actualMaterialCost: budgetUtilization.materials.actual,
+      actualToolsCost: budgetUtilization.tools.actual,
+      actualMiscCost: budgetUtilization.misc.actual,
       workerLogsCount: workerLogs.length,
       materialsConsumedCount: materialUsageList.length,
       dailyUpdatesCount: dailyWork.length,
     },
-    actualLabourCost,
+    budgetUtilization,
+    budgetApprovals,
+    actualLabourCost: budgetUtilization.labour.actual,
     totalActualExpenses,
     materials: materials.map((m) => {
       const originalPlanned = Number(m.quantity || 0);
@@ -788,33 +983,80 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
     params
   );
 
-  return rows.map((r) => ({
-    id: r.id,
-    projectId: r.project_id,
-    projectName: r.project_name,
-    projectCode: r.project_code,
-    siteId: r.site_id,
-    siteName: r.site_name,
-    contractorName: r.contractor_name,
-    name: r.name,
-    description: r.description,
-    status: r.status,
-    progress: Number(r.progress || 0),
-    startDate: r.start_date || r.planned_start,
-    endDate: r.end_date || r.planned_end,
-    durationDays: Number(r.duration_days || 0),
-    materialBudget: Number(r.material_budget || 0),
-    toolBudget: Number(r.tool_budget || 0),
-    labourBudget: Number(r.labour_budget || 0),
-    miscBudget: Number(r.misc_budget || 0),
-    totalBudget: Number(r.total_budget || 0),
-    workerEntriesCount: Number(r.worker_entries_count || 0),
-    uniqueWorkersCount: Number(r.unique_workers_count || 0),
-    actualLabourCost: Number(r.actual_labour_cost || 0),
-    materialUsedCount: Number(r.material_used_count || 0),
-    dailyUpdatesCount: Number(r.daily_updates_count || 0),
-    createdAt: r.created_at,
-  }));
+  const taskIds = rows.map((r) => r.id);
+  const taskMaterialsMap = new Map();
+  const taskDailyWorkMap = new Map();
+  const taskWorkerLogsMap = new Map();
+  const taskExpensesMap = new Map();
+
+  if (taskIds.length) {
+    const placeholders = taskIds.map(() => '?').join(',');
+    const [tmRows, dwRows, wlRows, exRows] = await Promise.all([
+      pool.query(`SELECT tm.* FROM task_materials tm WHERE tm.task_id IN (${placeholders})`, taskIds).then(([r]) => r),
+      pool.query(`SELECT dwu.* FROM daily_work_updates dwu WHERE dwu.task_id IN (${placeholders})`, taskIds).then(([r]) => r),
+      pool.query(`SELECT twl.* FROM task_worker_logs twl WHERE twl.task_id IN (${placeholders})`, taskIds).then(([r]) => r),
+      pool.query(`SELECT e.* FROM expenses e WHERE e.task_id IN (${placeholders}) AND e.status NOT IN ('rejected', 'cancelled')`, taskIds).then(([r]) => r),
+    ]);
+
+    tmRows.forEach((m) => {
+      if (!taskMaterialsMap.has(m.task_id)) taskMaterialsMap.set(m.task_id, []);
+      taskMaterialsMap.get(m.task_id).push(m);
+    });
+    dwRows.forEach((d) => {
+      if (!taskDailyWorkMap.has(d.task_id)) taskDailyWorkMap.set(d.task_id, []);
+      taskDailyWorkMap.get(d.task_id).push(d);
+    });
+    wlRows.forEach((w) => {
+      if (!taskWorkerLogsMap.has(w.task_id)) taskWorkerLogsMap.set(w.task_id, []);
+      taskWorkerLogsMap.get(w.task_id).push(w);
+    });
+    exRows.forEach((e) => {
+      if (!taskExpensesMap.has(e.task_id)) taskExpensesMap.set(e.task_id, []);
+      taskExpensesMap.get(e.task_id).push(e);
+    });
+  }
+
+  return rows.map((r) => {
+    const budgetUtilization = computeTaskBudgetUtilization(
+      r,
+      taskMaterialsMap.get(r.id) || [],
+      taskDailyWorkMap.get(r.id) || [],
+      taskWorkerLogsMap.get(r.id) || [],
+      taskExpensesMap.get(r.id) || []
+    );
+
+    return {
+      id: r.id,
+      projectId: r.project_id,
+      projectName: r.project_name,
+      projectCode: r.project_code,
+      siteId: r.site_id,
+      siteName: r.site_name,
+      contractorName: r.contractor_name,
+      name: r.name,
+      description: r.description,
+      status: r.status,
+      progress: Number(r.progress || 0),
+      startDate: r.start_date || r.planned_start,
+      endDate: r.end_date || r.planned_end,
+      durationDays: Number(r.duration_days || 0),
+      materialBudget: Number(r.material_budget || 0),
+      toolBudget: Number(r.tool_budget || 0),
+      labourBudget: Number(r.labour_budget || 0),
+      miscBudget: Number(r.misc_budget || 0),
+      totalBudget: Number(r.total_budget || 0),
+      approvedAdditionalBudget: Number(r.approved_additional_budget || 0),
+      pendingExcessBudget: Number(r.pending_excess_budget || 0),
+      excessReason: r.excess_reason || null,
+      budgetUtilization,
+      workerEntriesCount: Number(r.worker_entries_count || 0),
+      uniqueWorkersCount: Number(r.unique_workers_count || 0),
+      actualLabourCost: budgetUtilization.labour.actual,
+      materialUsedCount: Number(r.material_used_count || 0),
+      dailyUpdatesCount: Number(r.daily_updates_count || 0),
+      createdAt: r.created_at,
+    };
+  });
 }
 
 async function addWorkerLog({
@@ -1340,4 +1582,6 @@ module.exports = {
   unassignWorkerFromTask,
   createQuickWorker,
   findPlannedMaterials,
+  computeTaskBudgetUtilization,
+  getTaskBudgetApprovals,
 };
