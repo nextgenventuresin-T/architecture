@@ -60,7 +60,8 @@ export default function AttendanceTab({ readOnly = false }) {
 
   // Load dropdown lookups
   useEffect(() => {
-    if (!isContractor) {
+    // An employee only sees their own attendance and cannot list contractors.
+    if (!isContractor && user?.role !== ROLES.EMPLOYEE) {
       contractorsApi.list({ pageSize: 100 })
         .then((r) => setContractorsList(r.contractors ?? []))
         .catch(() => setContractorsList([]));
@@ -68,7 +69,7 @@ export default function AttendanceTab({ readOnly = false }) {
     projectsApi.list({ pageSize: 100 })
       .then((r) => setProjectsList(r.projects ?? []))
       .catch(() => setProjectsList([]));
-  }, [isContractor]);
+  }, [isContractor, user?.role]);
 
   const load = useCallback(
     () =>

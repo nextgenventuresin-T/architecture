@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const taskModel = require('../models/taskModel');
 const projectModel = require('../models/projectModel');
 const siteModel = require('../models/siteModel');
+const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 
 async function listTasks(query = {}, hrScope) {
   let contractorId = null;
@@ -155,6 +156,7 @@ async function logWorker(taskId, payload, userId, hrScope) {
   }
 
   const workDate = payload.work_date || new Date().toISOString().slice(0, 10);
+  const subtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
 
   const isCompany = (payload.worker_type === 'company_labour' || payload.worker_type === 'company_employee' || payload.workerType === 'company_labour' || payload.workerType === 'company_employee' || String(payload.labour_type || '').toLowerCase().includes('company'));
   const workerType = isCompany ? 'company_labour' : (payload.worker_type || payload.workerType || 'daily_wage');
@@ -162,6 +164,7 @@ async function logWorker(taskId, payload, userId, hrScope) {
 
   const logId = await taskModel.addWorkerLog({
     task_id: taskId,
+    subtask_id: subtask ? subtask.id : null,
     project_id: task.projectId,
     site_id: task.siteId,
     contractor_id: contractorId,
@@ -170,7 +173,7 @@ async function logWorker(taskId, payload, userId, hrScope) {
     worker_type: workerType,
     worker_name: payload.worker_name.trim(),
     worker_code: payload.worker_code || payload.workerCode || null,
-    labour_type: (payload.labour_type || (isEmployee ? 'Company Employee' : 'Labour')).trim(),
+    labour_type: (payload.labour_type || (isCompany ? 'Company Labour' : 'Labour')).trim(),
     work_date: workDate,
     hours_worked: Number(payload.hours_worked || payload.hoursWorked || 8.0),
     daily_wage: dailyWage,
@@ -206,9 +209,11 @@ async function assignWorkerToTask(taskId, payload, userId, hrScope) {
   if (hrScope?.role === 'contractor') {
     contractorId = Number(hrScope.contractorId);
   }
+  const subtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
 
   const assignmentId = await taskModel.assignWorkerToTask({
     taskId,
+    subtaskId: subtask ? subtask.id : null,
     projectId: task.projectId,
     siteId: task.siteId,
     contractorId,
@@ -226,6 +231,11 @@ async function assignWorkerToTask(taskId, payload, userId, hrScope) {
     plannedCost: Number(payload.planned_cost || payload.plannedCost || 0),
     remarks: payload.remarks || null,
     assignedBy: userId,
+  }).catch((err) => {
+    // The model signals duplicate / missing-reason cases with err.status.
+    if (err.status === 409) throw new ApiError(409, 'CONFLICT', err.message);
+    if (err.status === 400) throw ApiError.badRequest(err.message);
+    throw err;
   });
 
   const assignments = await taskModel.getTaskAssignments(taskId);
@@ -251,7 +261,7 @@ async function createQuickWorker(payload, userId, hrScope) {
   return { worker, message: 'New daily-wage worker created successfully.' };
 }
 
-async function getPlannedMaterials(taskId, hrScope) {
+async function getPlannedMaterials(taskId, hrScope, rawSubtaskId) {
   const task = await taskModel.findTaskById(taskId);
   if (!task) throw ApiError.notFound('Task not found.');
 
@@ -267,7 +277,10 @@ async function getPlannedMaterials(taskId, hrScope) {
     }
   }
 
-  const materials = await taskModel.findPlannedMaterials(taskId);
+  // With a subtask: that subtask's plan. Without: the whole task (unchanged behaviour)
+  // unless `subtaskId=direct` asks for the main task's own rows.
+  const scope = rawSubtaskId === 'direct' ? null : (await resolveSubtask(taskId, rawSubtaskId))?.id;
+  const materials = await taskModel.findPlannedMaterials(taskId, scope === undefined ? undefined : scope);
   return { materials };
 }
 
@@ -276,11 +289,95 @@ async function getPlannedMaterials(taskId, hrScope) {
  * Whether the machine is rented or purchased is Admin's decision, so a contractor gets
  * the plan and its estimate but not the rent / purchase mode.
  */
-async function getPlannedTools(taskId, hrScope) {
+async function getPlannedTools(taskId, hrScope, rawSubtaskId) {
   await getPlannedMaterials(taskId, hrScope); // same existence + contractor assignment check
-  const tools = await taskModel.findPlannedTools(taskId);
+  const scope = rawSubtaskId === 'direct' ? null : (await resolveSubtask(taskId, rawSubtaskId))?.id;
+  const tools = await taskModel.findPlannedTools(taskId, undefined, scope === undefined ? undefined : scope);
   if (hrScope?.role === 'contractor') return { tools: tools.map(({ rentalType, ...t }) => t) };
   return { tools };
+}
+
+// ---------------------------------------------------------------------------
+// Subtasks
+// ---------------------------------------------------------------------------
+
+/** Existence + contractor assignment check without loading the full task detail. */
+async function assertTaskAccess(taskId, hrScope) {
+  const [[row]] = await require('../config/db').pool.query(
+    'SELECT id, project_id, site_id, name FROM project_tasks WHERE id = ?',
+    [Number(taskId)]
+  );
+  if (!row) throw ApiError.notFound('Task not found.');
+  if (hrScope?.role === 'contractor'
+      && !(await isContractorAssignedToProjectOrSite(Number(hrScope.contractorId), row.project_id, row.site_id))) {
+    throw ApiError.notFound('Task not found or not assigned to your organization.');
+  }
+  return row;
+}
+
+async function loadSubtaskOfTask(taskId, subtaskId) {
+  const st = await taskModel.findSubtaskRow(subtaskId);
+  if (!st || Number(st.task_id) !== Number(taskId)) throw ApiError.notFound('Subtask not found on this task.');
+  return st;
+}
+
+function assertSubtaskPayload(payload, isCreate) {
+  if (isCreate && !String(payload.name || '').trim()) {
+    throw ApiError.badRequest('Check the highlighted fields.', { name: 'Subtask name is required.' });
+  }
+  const s = payload.start_date || payload.startDate;
+  const e = payload.end_date || payload.endDate;
+  if (s && e && String(e).slice(0, 10) < String(s).slice(0, 10)) {
+    throw ApiError.badRequest('Check the highlighted fields.', { end_date: 'End date cannot be before the start date.' });
+  }
+}
+
+async function listSubtasks(taskId, hrScope) {
+  await assertTaskAccess(taskId, hrScope);
+  return { subtasks: await taskModel.listSubtasksForTask(taskId) };
+}
+
+async function createSubtask(taskId, payload, userId, hrScope) {
+  if (hrScope?.role === 'contractor') {
+    throw ApiError.forbidden('Contractors cannot create subtasks or their budgets. Only Admin can plan subtasks.');
+  }
+  await assertTaskAccess(taskId, hrScope);
+  assertSubtaskPayload(payload, true);
+  try {
+    const subtaskId = await taskModel.createSubtask(Number(taskId), payload, userId);
+    return { subtaskId, ...(await getTaskDetail(taskId, hrScope)) };
+  } catch (err) {
+    if (err.status === 404) throw ApiError.notFound(err.message);
+    throw err;
+  }
+}
+
+async function updateSubtask(taskId, subtaskId, payload, userId, hrScope) {
+  await assertTaskAccess(taskId, hrScope);
+  await loadSubtaskOfTask(taskId, subtaskId);
+  const isContractor = hrScope?.role === 'contractor';
+  if (isContractor) {
+    const planningKeys = ['name', 'description', 'start_date', 'end_date', 'duration_days', 'materials', 'tools', 'labour', 'misc'];
+    if (planningKeys.some((k) => payload[k] !== undefined)) {
+      throw ApiError.forbidden('Contractors cannot modify Admin-planned subtask budgets or planning.');
+    }
+  }
+  assertSubtaskPayload(payload, false);
+  await taskModel.updateSubtask(Number(subtaskId), payload, { progressOnly: isContractor });
+  return getTaskDetail(taskId, hrScope);
+}
+
+async function deleteSubtask(taskId, subtaskId, hrScope) {
+  if (hrScope?.role === 'contractor') throw ApiError.forbidden('Contractors cannot delete subtasks.');
+  await assertTaskAccess(taskId, hrScope);
+  await loadSubtaskOfTask(taskId, subtaskId);
+  try {
+    await taskModel.deleteSubtask(Number(subtaskId));
+  } catch (err) {
+    if (err.status === 409) throw new ApiError(409, 'CONFLICT', err.message);
+    throw err;
+  }
+  return getTaskDetail(taskId, hrScope);
 }
 
 async function getBudgetApprovals(taskId) {
@@ -303,4 +400,8 @@ module.exports = {
   getPlannedMaterials,
   getPlannedTools,
   getBudgetApprovals,
+  listSubtasks,
+  createSubtask,
+  updateSubtask,
+  deleteSubtask,
 };

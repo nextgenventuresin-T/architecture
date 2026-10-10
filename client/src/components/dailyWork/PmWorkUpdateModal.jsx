@@ -5,6 +5,7 @@ import Alert from '../ui/Alert';
 import { InputField, SelectField, TextAreaField } from '../ui/Field';
 import { pmApi } from '../../api/pmApi';
 import { dailyWorkApi } from '../../api/dailyWorkApi';
+import { tasksApi } from '../../api/tasksApi';
 import { toApiError } from '../../api/axiosClient';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -16,7 +17,8 @@ const today = () => new Date().toISOString().slice(0, 10);
  */
 export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
   const [scope, setScope] = useState({ projects: [] });
-  const [v, setV] = useState({ project_id: '', site_id: '', task_id: '', work_date: today(), work_done: '', progress_percentage: '', work_status: 'in-progress', remarks: '' });
+  const [subtasks, setSubtasks] = useState([]);
+  const [v, setV] = useState({ project_id: '', site_id: '', task_id: '', subtask_id: '', work_date: today(), work_done: '', progress_percentage: '', work_status: 'in-progress', remarks: '' });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -26,12 +28,20 @@ export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
     pmApi.scope().then(setScope).catch((e) => setError(toApiError(e).message));
   }, [isOpen]);
 
+  // Subtasks of the chosen main task (progress can be reported per subtask).
+  useEffect(() => {
+    if (!isOpen || !v.task_id) { setSubtasks([]); return undefined; }
+    let active = true;
+    tasksApi.listSubtasks(v.task_id).then((list) => active && setSubtasks(list || [])).catch(() => active && setSubtasks([]));
+    return () => { active = false; };
+  }, [isOpen, v.task_id]);
+
   if (!isOpen) return null;
 
   const project = scope.projects.find((p) => String(p.id) === String(v.project_id));
   const site = project?.sites.find((s) => String(s.id) === String(v.site_id));
   const set = (k) => (e) => {
-    setV((c) => ({ ...c, [k]: e.target.value, ...(k === 'project_id' ? { site_id: '', task_id: '' } : {}), ...(k === 'site_id' ? { task_id: '' } : {}) }));
+    setV((c) => ({ ...c, [k]: e.target.value, ...(k === 'project_id' ? { site_id: '', task_id: '', subtask_id: '' } : {}), ...(k === 'site_id' ? { task_id: '', subtask_id: '' } : {}), ...(k === 'task_id' ? { subtask_id: '' } : {}) }));
     setErrors((c) => ({ ...c, [k]: undefined }));
   };
 
@@ -48,6 +58,7 @@ export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
       form.append('project_id', v.project_id);
       form.append('site_id', v.site_id);
       if (v.task_id) form.append('task_id', v.task_id);
+      if (v.task_id && v.subtask_id) form.append('subtask_id', v.subtask_id);
       form.append('work_date', v.work_date);
       form.append('work_done', v.work_done.trim());
       form.append('work_status', v.work_status);
@@ -101,6 +112,15 @@ export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
           placeholder="No specific task"
           options={(site?.tasks ?? []).map((t) => ({ value: String(t.id), label: t.name }))}
         />
+        {subtasks.length > 0 && (
+          <SelectField
+            label="Subtask"
+            value={v.subtask_id}
+            onChange={set('subtask_id')}
+            placeholder="Main task (not a specific subtask)"
+            options={subtasks.map((st) => ({ value: String(st.id), label: `${st.name} (${st.progress}%)` }))}
+          />
+        )}
         <InputField label="Date" type="date" value={v.work_date} max={today()} onChange={set('work_date')} />
         <TextAreaField className="sm:col-span-2" label="Work done" required rows={3} value={v.work_done} onChange={set('work_done')} error={errors.work_done} />
         <InputField label="Progress (%)" type="number" min="0" max="100" value={v.progress_percentage} onChange={set('progress_percentage')} />

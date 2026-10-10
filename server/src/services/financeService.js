@@ -14,6 +14,7 @@ const materialModel = require('../models/materialModel');
 const dailyWorkModel = require('../models/dailyWorkModel');
 const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const { PROJECT_PHASES_DEF } = require('../config/projectPhases');
+const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 
 const EXPENSE_STATUSES = ['pending', 'approved', 'paid', 'rejected', 'cancelled'];
 
@@ -88,6 +89,8 @@ function toExpense(row) {
     project: { id: row.project_id, name: row.project_name, code: row.project_code },
     site: row.site_id ? { id: row.site_id, name: row.site_name } : null,
     contractor: row.contractor_id ? { id: row.contractor_id, name: row.contractor_name } : null,
+    task: row.task_id ? { id: row.task_id, name: row.task_name || null } : null,
+    subtask: row.subtask_id ? { id: row.subtask_id, name: row.subtask_name || null } : null,
     category: row.category,
     description: row.description,
     amount: Number(row.amount || 0),
@@ -387,6 +390,19 @@ async function createExpense(payload, userId, hrScope, file) {
 
   const category = EXPENSE_CATEGORIES.includes(payload.category) ? payload.category : 'other';
 
+  // Optional Main Task / Subtask the expense is spent on.
+  const expenseTaskId = payload.task_id ? Number(payload.task_id) : null;
+  if (expenseTaskId) {
+    const [[t]] = await pool.query('SELECT id, project_id, site_id FROM project_tasks WHERE id = ?', [expenseTaskId]);
+    if (!t || Number(t.project_id) !== Number(payload.project_id)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { task_id: 'That task does not belong to the selected project.' });
+    }
+    if (payload.site_id && t.site_id && Number(t.site_id) !== Number(payload.site_id)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { task_id: 'That task does not belong to the selected site.' });
+    }
+  }
+  const expenseSubtask = await resolveSubtask(expenseTaskId, subtaskIdFrom(payload));
+
   // Invoice Payment requires Party Name
   if (category === 'Invoice Payment') {
     const partyName = (payload.party_name || payload.paid_by || '').trim();
@@ -427,6 +443,8 @@ async function createExpense(payload, userId, hrScope, file) {
     status,
     notes: (payload.remarks || payload.notes || '').trim() || null,
     created_by: userId ?? null,
+    task_id: expenseTaskId,
+    subtask_id: expenseSubtask ? expenseSubtask.id : null,
   });
 
   return getExpense(id, hrScope);
@@ -805,11 +823,14 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
 
   // Task-wise only: material is used against the task it was procured for.
   if (!taskId) throw ApiError.badRequest('Check the highlighted fields.', { task_id: 'Select the task - material is used task-wise.' });
-  const taskLines = await require('./dailyWorkService').getTaskMaterials(taskId, cId);
+  const consumptionSubtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
+  const consumptionSubtaskId = consumptionSubtask ? consumptionSubtask.id : null;
+  const scopeLabel = consumptionSubtask ? `subtask "${consumptionSubtask.name}"` : 'this task';
+  const taskLines = await require('./dailyWorkService').getTaskMaterials(taskId, cId, consumptionSubtaskId);
   const taskLine = taskLines.find((x) => Number(x.material_id) === materialId);
-  if (!taskLine) throw ApiError.badRequest('Check the highlighted fields.', { material_id: 'That material was not procured for this task.' });
+  if (!taskLine) throw ApiError.badRequest('Check the highlighted fields.', { material_id: `That material was not procured for ${scopeLabel}.` });
   if (quantityUsed > taskLine.taskAvailable + 1e-9) {
-    throw ApiError.badRequest('Check the highlighted fields.', { quantity_used: `Only ${taskLine.taskAvailable} ${taskLine.unit} procured for this task is still unused.` });
+    throw ApiError.badRequest('Check the highlighted fields.', { quantity_used: `Only ${taskLine.taskAvailable} ${taskLine.unit} procured for ${scopeLabel} is still unused.` });
   }
 
   // 1. Resolve contractor warehouse
@@ -856,6 +877,7 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
     site_id: siteId,
     contractor_id: cId,
     task_id: taskId || null,
+    subtask_id: consumptionSubtaskId,
     source_type: 'daily_work_material',
     category: 'Material Consumption',
     description: `Consumed ${quantityUsed} ${material.unit} of ${material.name} (${phaseTitle}${subcategory ? ` · ${subcategory}` : ''})`,
@@ -878,6 +900,7 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
       site_id: siteId,
       contractor_id: cId,
       task_id: taskId,
+      subtask_id: consumptionSubtaskId,
       phase_number: phaseNumber,
       phase_title: phaseTitle,
       subcategory,

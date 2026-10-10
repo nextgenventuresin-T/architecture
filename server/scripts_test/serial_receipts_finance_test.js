@@ -69,6 +69,11 @@ async function mkUser(email, roleSlug, name) {
 
 (async () => {
   await migrate(await pool.getConnection(), () => {});
+  // Later migrations the code depends on (all idempotent), as in src/db/migrate.js.
+  for (const m of ['20261010_task_tool_days', '20261010_transport_expenses', '20261011_task_subtasks']) {
+    const c = await pool.getConnection();
+    try { await require(`../src/db/migrations/${m}`).up(c); } finally { c.release(); }
+  }
   const server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 

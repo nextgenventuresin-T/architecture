@@ -66,14 +66,27 @@ async function getDetail(id) {
     taskDailyWork = tdwRows[0];
   }
 
+  const subtaskMap = await taskModel.findSubtaskSummaries(taskIds);
+  // Task-linked expenses (machine usage, transport, misc, ...) are part of each
+  // task's actual cost here exactly as in the task detail and task list.
+  let taskExpenses = snapshot.expenses || [];
+  if (taskIds.length && !snapshot.expenses) {
+    const [exRows] = await pool.query(
+      `SELECT * FROM expenses WHERE task_id IN (${taskIds.map(() => '?').join(',')}) AND status NOT IN ('rejected', 'cancelled')`,
+      taskIds
+    );
+    taskExpenses = exRows;
+  }
+
   const formattedTasks = (snapshot.tasks || []).map((t) => {
+    const subtasks = subtaskMap.get(t.id) || [];
     const tMaterials = taskMaterials.filter((m) => m.task_id === t.id);
     const tTools = taskTools.filter((tl) => tl.task_id === t.id);
     const tLabour = taskLabour.filter((l) => l.task_id === t.id);
     const tMisc = taskMisc.filter((mc) => mc.task_id === t.id);
     const tWorkerLogs = taskWorkerLogs.filter((w) => w.task_id === t.id);
     const tDailyWork = taskDailyWork.filter((dw) => dw.task_id === t.id);
-    const tExpenses = (snapshot.expenses || []).filter((e) => e.task_id === t.id);
+    const tExpenses = taskExpenses.filter((e) => e.task_id === t.id && !['rejected', 'cancelled'].includes(e.status));
 
     const budgetUtilization = taskModel.computeTaskBudgetUtilization(t, tMaterials, tDailyWork, tWorkerLogs, tExpenses);
     const actualLabourCost = budgetUtilization.labour.actual;
@@ -115,6 +128,9 @@ async function getDetail(id) {
       uniqueWorkersCount: Number(t.unique_workers_count || 0),
       updatesCount: Number(t.updates_count || 0),
       dailyUpdatesCount: Number(t.updates_count || 0),
+      // Subtask spend is already inside this main task's actuals (same task_id).
+      subtaskCount: subtasks.length,
+      subtasks,
     };
   });
 
@@ -126,8 +142,8 @@ async function getDetail(id) {
 
   const actualLabourCost = formattedTasks.reduce((sum, t) => sum + t.actualLabourCost, 0);
   const actualMaterialCost = formattedTasks.reduce((sum, t) => sum + t.actualMaterialCost, 0);
-  const actualToolCost = formattedTasks.reduce((sum, t) => sum + (t.toolBudget > 0 ? t.actualTaskExpenses : 0), 0);
-  const actualMiscCost = formattedTasks.reduce((sum, t) => sum + (t.toolBudget === 0 ? t.actualTaskExpenses : 0), 0);
+  const actualToolCost = formattedTasks.reduce((sum, t) => sum + t.actualToolCost, 0);
+  const actualMiscCost = formattedTasks.reduce((sum, t) => sum + t.actualMiscCost, 0);
   const actualTotalCost = actualMaterialCost + actualLabourCost + actualToolCost + actualMiscCost;
   const remainingTotalBudget = plannedTotalBudget - actualTotalCost;
   const utilizationPercentage = plannedTotalBudget > 0 ? Math.min(100, Math.round((actualTotalCost / plannedTotalBudget) * 100)) : 0;
@@ -151,6 +167,7 @@ async function getDetail(id) {
       plannedBudget: t.totalBudget,
       actualCost: t.actualCost,
       variance: t.variance,
+      subtasks: t.subtasks,
     })),
   };
 

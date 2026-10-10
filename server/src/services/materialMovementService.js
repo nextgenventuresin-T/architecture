@@ -43,6 +43,7 @@ function toMovement(row) {
     project: row.project_id ? { id: row.project_id, name: row.project_name } : null,
     site: row.site_id ? { id: row.site_id, name: row.site_name } : null,
     task: row.procurement_task_id ? { id: row.procurement_task_id, name: row.procurement_task_name } : null,
+    subtask: row.procurement_subtask_id ? { id: row.procurement_subtask_id, name: row.procurement_subtask_name } : null,
     costPerUnit,
     totalMaterialCost,
     requestedQuantity: num(row.requested_quantity),

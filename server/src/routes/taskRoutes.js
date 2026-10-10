@@ -104,16 +104,18 @@ router.get(
   controller.labourSummary
 );
 
+const subtaskQuery = query('subtaskId').optional().custom((v) => v === 'direct' || Number(v) > 0).withMessage('Invalid subtask.');
+
 router.get(
   '/:id/planned-materials',
-  [param('id').isInt({ min: 1 })],
+  [param('id').isInt({ min: 1 }), subtaskQuery],
   validate,
   controller.plannedMaterials
 );
 
 router.get(
   '/:id/planned-tools',
-  [param('id').isInt({ min: 1 })],
+  [param('id').isInt({ min: 1 }), subtaskQuery],
   validate,
   controller.plannedTools
 );
@@ -149,6 +151,53 @@ router.delete(
   ],
   validate,
   controller.unassignWorker
+);
+
+// ---- Subtasks: Main Task -> Subtask, each with its own plan & budget
+const subtaskBodyRules = (isCreate) => [
+  (isCreate ? body('name').trim().notEmpty().withMessage('Subtask name is required.') : body('name').optional().trim().notEmpty())
+    .isLength({ max: 180 }),
+  body('description').optional({ nullable: true }).trim(),
+  body('status').optional().isIn(['on-track', 'attention', 'delayed', 'completed']),
+  body('progress').optional().isInt({ min: 0, max: 100 }),
+  body('start_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+  body('end_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+  body('duration_days').optional({ nullable: true }).isInt({ min: 0 }),
+  body('materials').optional().isArray(),
+  body('tools').optional().isArray(),
+  body('labour').optional().isArray(),
+  body('misc').optional().isArray(),
+];
+
+router.get('/:id/subtasks', [param('id').isInt({ min: 1 })], validate, controller.listSubtasks);
+
+router.post(
+  '/:id/subtasks',
+  requirePermission('projects', 'create'),
+  [param('id').isInt({ min: 1 }), ...subtaskBodyRules(true)],
+  validate,
+  controller.createSubtask
+);
+
+// Contractors may update progress / status only (enforced in the service);
+// every other role needs the same 'projects:edit' permission as main tasks.
+const canEditSubtask = (req, res, next) =>
+  (req.user?.role === 'contractor' ? next() : requirePermission('projects', 'edit')(req, res, next));
+
+router.put(
+  '/:id/subtasks/:subtaskId',
+  canEditSubtask,
+  [param('id').isInt({ min: 1 }), param('subtaskId').isInt({ min: 1 }), ...subtaskBodyRules(false)],
+  validate,
+  controller.updateSubtask
+);
+
+router.delete(
+  '/:id/subtasks/:subtaskId',
+  requirePermission('projects', 'delete'),
+  [param('id').isInt({ min: 1 }), param('subtaskId').isInt({ min: 1 })],
+  validate,
+  controller.removeSubtask
 );
 
 module.exports = router;

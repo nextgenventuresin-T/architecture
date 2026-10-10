@@ -168,7 +168,7 @@ export default function MaterialMovementsPage() {
     { key: 'material', header: 'Material', value: (r) => r.material.name, render: (r) => (
       <div>
         <p className="text-ink font-medium">{r.material.name}</p>
-        {r.task?.name && <p className="text-[11px] text-brand-700">Task: {r.task.name}</p>}
+        {r.task?.name && <p className="text-[11px] text-brand-700">Task: {r.task.name}{r.subtask?.name ? ` › ${r.subtask.name}` : ''}</p>}
         {r.project?.name && <p className="text-[10px] text-ink-subtle">{r.project.name}{r.site?.name ? ` · ${r.site.name}` : ''}</p>}
       </div>
     ) },

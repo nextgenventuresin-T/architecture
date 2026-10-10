@@ -65,7 +65,7 @@ function toContractor(row) {
 
 async function list(query) {
   const page = Math.max(1, Number(query.page) || 1);
-  const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 10));
+  const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 10));
 
   const { rows, total } = await contractorModel.findAll({ ...query, page, pageSize });
 

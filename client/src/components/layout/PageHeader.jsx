@@ -1,12 +1,26 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ChevronRight, ArrowLeft } from 'lucide-react';
 
 /**
  * Breadcrumb, description, back control and primary action. Every module screen
  * uses this so the navigation experience stays identical across the ERP.
  */
+/**
+ * Admin screens are reused inside other workspaces (/finance, /procurement, /warehouse,
+ * /pm, /contractor ...) with breadcrumbs written for /admin. Outside the Admin workspace,
+ * "Dashboard" (/admin) goes to the user's own workspace home and any other /admin link is
+ * shown as plain text, so a breadcrumb never sends someone to the Unauthorised page.
+ */
+function workspaceLink(to, pathname) {
+  if (!to || !to.startsWith('/admin')) return to;
+  const workspace = `/${pathname.split('/')[1] || ''}`;
+  if (workspace === '/admin') return to;
+  return to === '/admin' ? workspace : null;
+}
+
 export default function PageHeader({ title, description, breadcrumbs = [], actions, showBack = false }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
 
   return (
     <div className="mb-6">
@@ -15,13 +29,14 @@ export default function PageHeader({ title, description, breadcrumbs = [], actio
           <ol className="flex flex-wrap items-center gap-1 text-sm text-ink-muted">
             {breadcrumbs.map((crumb, index) => {
               const isLast = index === breadcrumbs.length - 1;
+              const to = workspaceLink(crumb.to, pathname);
               return (
                 <li key={crumb.label} className="flex items-center gap-1">
                   {index > 0 && (
                     <ChevronRight className="h-3.5 w-3.5 text-ink-subtle" aria-hidden="true" />
                   )}
-                  {crumb.to && !isLast ? (
-                    <Link to={crumb.to} className="rounded hover:text-brand-700 hover:underline">
+                  {to && !isLast ? (
+                    <Link to={to} className="rounded hover:text-brand-700 hover:underline">
                       {crumb.label}
                     </Link>
                   ) : (

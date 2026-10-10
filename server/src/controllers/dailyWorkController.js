@@ -37,7 +37,8 @@ const getPhoto = asyncHandler(async (req, res) => {
 
 const taskMaterials = asyncHandler(async (req, res) => {
   const cId = req.hrScope?.role === 'contractor' ? req.hrScope.contractorId : Number(req.query.contractorId);
-  res.json({ success: true, data: { materials: await dailyWorkService.getTaskMaterials(Number(req.query.taskId), cId) } });
+  const subtaskId = req.query.subtaskId ? Number(req.query.subtaskId) : null;
+  res.json({ success: true, data: { materials: await dailyWorkService.getTaskMaterials(Number(req.query.taskId), cId, subtaskId) } });
 });
 
 module.exports = { list, detail, create, getPhoto, taskMaterials };

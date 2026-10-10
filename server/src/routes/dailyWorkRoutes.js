@@ -21,13 +21,19 @@ router.get(
     query('projectId').optional().isInt({ min: 1 }).toInt(),
     query('siteId').optional().isInt({ min: 1 }).toInt(),
     query('taskId').optional().isInt({ min: 1 }).toInt(),
+    query('subtaskId').optional().isInt({ min: 1 }).toInt(),
     query('date').optional().isISO8601(),
   ],
   validate,
   controller.list
 );
 
-router.get('/task-materials', [query('taskId').isInt({ min: 1 })], validate, controller.taskMaterials);
+router.get(
+  '/task-materials',
+  [query('taskId').isInt({ min: 1 }), query('subtaskId').optional({ checkFalsy: true }).isInt({ min: 1 })],
+  validate,
+  controller.taskMaterials
+);
 
 router.get('/photos/:photoId', [param('photoId').isInt({ min: 1 })], validate, controller.getPhoto);
 
@@ -43,6 +49,7 @@ router.post(
     body('project_id').isInt({ min: 1 }).withMessage('Project is required.'),
     body('site_id').optional({ nullable: true }).isInt({ min: 1 }),
     body('task_id').optional({ nullable: true }).isInt({ min: 1 }),
+    body('subtask_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
     body('phase_number').optional({ nullable: true }).isInt({ min: 1, max: 8 }),
     body('subcategory').optional({ nullable: true }).trim(),
     body('work_done').optional({ nullable: true }).trim(),

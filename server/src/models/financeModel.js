@@ -29,6 +29,7 @@ const EXPENSE_SELECT = `
     e.amount, e.expense_date, e.paid_by, e.party_name, e.payment_method, e.reference,
     e.bill_file_path, e.bill_file_name, e.bill_file_type, e.bill_file_size, e.bill_uploaded_at,
     e.status, e.notes, e.created_by, e.created_at, e.updated_at,
+    e.task_id, et.name AS task_name, e.subtask_id, est.name AS subtask_name,
     p.name AS project_name, p.code AS project_code,
     s.name AS site_name,
     c.name AS contractor_name,
@@ -38,6 +39,8 @@ const EXPENSE_SELECT = `
   LEFT JOIN sites s ON s.id = e.site_id
   LEFT JOIN contractors c ON c.id = e.contractor_id
   LEFT JOIN users u ON u.id = e.created_by
+  LEFT JOIN project_tasks et ON et.id = e.task_id
+  LEFT JOIN task_subtasks est ON est.id = e.subtask_id
 `;
 
 const EXPENSE_COUNT_FROM = `
@@ -145,7 +148,7 @@ const EXPENSE_WRITABLE = [
   'bill_file_path', 'bill_file_name', 'bill_file_type', 'bill_file_size', 'bill_uploaded_at',
   'status', 'notes', 'created_by',
   // Linkage: which Task it belongs to and which source transaction produced it.
-  'task_id', 'source_type', 'source_id', 'tool_unit_id',
+  'task_id', 'subtask_id', 'source_type', 'source_id', 'tool_unit_id',
 ];
 
 async function createExpense(payload) {

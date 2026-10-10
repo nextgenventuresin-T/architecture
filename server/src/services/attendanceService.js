@@ -43,7 +43,7 @@ function scopeContractorId(hrScope, requestedContractorId) {
 
 async function list(query, hrScope) {
   const page = Math.max(1, Number(query.page) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+  const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20));
   const contractorId = scopeContractorId(hrScope, query.contractorId);
 
   // An EMPLOYEE may only ever see their own attendance history — never

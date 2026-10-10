@@ -7,6 +7,7 @@ async function createUpdate({
   site_id,
   contractor_id,
   task_id,
+  subtask_id,
   phase_number,
   phase_title,
   subcategory,
@@ -34,17 +35,18 @@ async function createUpdate({
 }) {
   const [result] = await pool.query(
     `INSERT INTO daily_work_updates
-      (project_id, site_id, contractor_id, task_id, phase_number, phase_title, subcategory,
+      (project_id, site_id, contractor_id, task_id, subtask_id, phase_number, phase_title, subcategory,
        material_id, quantity_used, unit, warehouse_transaction_id, expense_id,
        work_date, work_done, work_status, progress_percentage, remarks, created_by,
        misc_description, misc_amount, misc_remarks, misc_receipt_path,
        tool_id, tool_name, tool_cost, tool_remarks, unit_cost, material_cost)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       project_id,
       site_id || null,
       contractor_id,
       task_id || null,
+      task_id && subtask_id ? subtask_id : null,
       phase_number || null,
       phase_title || null,
       subcategory || null,
@@ -79,6 +81,7 @@ async function addPhoto({
   project_id,
   site_id,
   task_id,
+  subtask_id,
   phase_number,
   subcategory,
   file_path,
@@ -88,13 +91,14 @@ async function addPhoto({
 }) {
   const [result] = await pool.query(
     `INSERT INTO daily_work_photos
-      (work_update_id, project_id, site_id, task_id, phase_number, subcategory, file_path, file_name, file_type, file_size)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (work_update_id, project_id, site_id, task_id, subtask_id, phase_number, subcategory, file_path, file_name, file_type, file_size)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       work_update_id,
       project_id,
       site_id,
       task_id || null,
+      task_id && subtask_id ? subtask_id : null,
       phase_number || null,
       subcategory || null,
       file_path,
@@ -110,13 +114,14 @@ async function findById(id) {
   const [rows] = await pool.query(
     `SELECT dwu.*, p.name AS project_name, p.code AS project_code,
             s.name AS site_name, c.name AS contractor_name, u.email AS created_by_email,
-            pt.name AS task_name, pt.status AS task_status,
+            pt.name AS task_name, pt.status AS task_status, dst.name AS subtask_name,
             m.name AS material_name, m.code AS material_code, m.category AS material_category,
             wt.transaction_number AS transaction_number
      FROM daily_work_updates dwu
      JOIN projects p ON p.id = dwu.project_id
      LEFT JOIN sites s ON s.id = dwu.site_id
      LEFT JOIN project_tasks pt ON pt.id = dwu.task_id
+     LEFT JOIN task_subtasks dst ON dst.id = dwu.subtask_id
      JOIN contractors c ON c.id = dwu.contractor_id
      LEFT JOIN users u ON u.id = dwu.created_by
      LEFT JOIN materials m ON m.id = dwu.material_id
@@ -134,7 +139,7 @@ async function findById(id) {
   return { ...rows[0], photos };
 }
 
-async function findAll({ projectId, siteId, contractorId, taskId, date, pmProjectIds, page = 1, pageSize = 20 } = {}) {
+async function findAll({ projectId, siteId, contractorId, taskId, subtaskId, date, pmProjectIds, page = 1, pageSize = 20 } = {}) {
   const where = [];
   const params = [];
 
@@ -160,6 +165,10 @@ async function findAll({ projectId, siteId, contractorId, taskId, date, pmProjec
     where.push('dwu.task_id = ?');
     params.push(Number(taskId));
   }
+  if (subtaskId) {
+    where.push('dwu.subtask_id = ?');
+    params.push(Number(subtaskId));
+  }
   if (date) {
     where.push('dwu.work_date = ?');
     params.push(date);
@@ -171,13 +180,14 @@ async function findAll({ projectId, siteId, contractorId, taskId, date, pmProjec
   const [rows] = await pool.query(
     `SELECT dwu.*, p.name AS project_name, p.code AS project_code,
             s.name AS site_name, c.name AS contractor_name,
-            pt.name AS task_name, pt.status AS task_status,
+            pt.name AS task_name, pt.status AS task_status, dst.name AS subtask_name,
             m.name AS material_name, m.code AS material_code, m.category AS material_category,
             wt.transaction_number AS transaction_number
      FROM daily_work_updates dwu
      JOIN projects p ON p.id = dwu.project_id
      LEFT JOIN sites s ON s.id = dwu.site_id
      LEFT JOIN project_tasks pt ON pt.id = dwu.task_id
+     LEFT JOIN task_subtasks dst ON dst.id = dwu.subtask_id
      JOIN contractors c ON c.id = dwu.contractor_id
      LEFT JOIN materials m ON m.id = dwu.material_id
      LEFT JOIN warehouse_transactions wt ON wt.id = dwu.warehouse_transaction_id

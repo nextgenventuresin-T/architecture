@@ -485,7 +485,7 @@ function HistoryModal({ unit, onClose }) {
                     {detail.allocations.map((a) => (
                       <tr key={a.id}>
                         <td className="px-3 py-2">{a.contractor?.name ?? '—'}</td>
-                        <td className="px-3 py-2">{[a.project?.name, a.site?.name, a.task?.name].filter(Boolean).join(' · ') || '—'}</td>
+                        <td className="px-3 py-2">{[a.project?.name, a.site?.name, a.task?.name, a.subtask?.name].filter(Boolean).join(' · ') || '—'}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{a.startDate} → {a.returnedDate ?? 'in use'}</td>
                         <td className="px-3 py-2 text-right">{a.usageDays ?? '—'}</td>
                         <td className="px-3 py-2 text-right">{a.status === 'returned' ? formatCurrency(a.usageCharge) : a.accruedUsageCharge != null ? `${formatCurrency(a.accruedUsageCharge)} (accruing)` : '—'}</td>

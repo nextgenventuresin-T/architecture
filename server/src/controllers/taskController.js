@@ -62,17 +62,37 @@ const createWorker = asyncHandler(async (req, res) => {
 });
 
 const plannedMaterials = asyncHandler(async (req, res) => {
-  const result = await taskService.getPlannedMaterials(req.params.id, req.hrScope);
+  const result = await taskService.getPlannedMaterials(req.params.id, req.hrScope, req.query.subtaskId);
   return ok(res, result);
 });
 
 const plannedTools = asyncHandler(async (req, res) => {
-  const result = await taskService.getPlannedTools(req.params.id, req.hrScope);
+  const result = await taskService.getPlannedTools(req.params.id, req.hrScope, req.query.subtaskId);
   return ok(res, result);
 });
 
 const budgetApprovals = asyncHandler(async (req, res) => {
   const result = await taskService.getBudgetApprovals(req.params.id);
+  return ok(res, result);
+});
+
+const listSubtasks = asyncHandler(async (req, res) => {
+  const result = await taskService.listSubtasks(req.params.id, req.hrScope);
+  return ok(res, result);
+});
+
+const createSubtask = asyncHandler(async (req, res) => {
+  const result = await taskService.createSubtask(req.params.id, req.body, req.user?.id, req.hrScope);
+  return ok(res, result, 201);
+});
+
+const updateSubtask = asyncHandler(async (req, res) => {
+  const result = await taskService.updateSubtask(req.params.id, req.params.subtaskId, req.body, req.user?.id, req.hrScope);
+  return ok(res, result);
+});
+
+const removeSubtask = asyncHandler(async (req, res) => {
+  const result = await taskService.deleteSubtask(req.params.id, req.params.subtaskId, req.hrScope);
   return ok(res, result);
 });
 
@@ -91,4 +111,8 @@ module.exports = {
   plannedMaterials,
   plannedTools,
   budgetApprovals,
+  listSubtasks,
+  createSubtask,
+  updateSubtask,
+  removeSubtask,
 };

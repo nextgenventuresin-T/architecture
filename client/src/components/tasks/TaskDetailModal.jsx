@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   X,
   Calendar,
@@ -27,6 +27,8 @@ import { tasksApi } from '../../api/tasksApi';
 import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
 import AssignWorkerModal from './AssignWorkerModal';
 import QuickAddWorkerModal from './QuickAddWorkerModal';
+import TaskFormModal from './TaskFormModal';
+import SubtasksPanel, { SubtaskSummaryTable } from './SubtasksPanel';
 
 const STATUS_TONES = {
   'on-track': 'success',
@@ -42,7 +44,15 @@ const STATUS_LABELS = {
   'completed': 'Completed',
 };
 
-export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = false, initialTab = 'overview' }) {
+export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated: notifyParent, isAdmin = false, initialTab = 'overview' }) {
+  // The parent page reloads behind a skeleton, which would unmount this modal mid-work
+  // (e.g. while adding several subtasks). Refresh our own view now; tell the parent once, on close.
+  const changedRef = useRef(false);
+  const onUpdated = notifyParent ? () => { changedRef.current = true; } : null;
+  const onClose = () => {
+    closeModal();
+    if (changedRef.current && notifyParent) notifyParent();
+  };
   const [taskData, setTaskData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -64,6 +74,40 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
   const [loggingWorker, setLoggingWorker] = useState(false);
   const [workerSuccess, setWorkerSuccess] = useState(null);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [workerSubtaskId, setWorkerSubtaskId] = useState('');
+
+  // Subtask planning (Admin) and progress (Admin / assigned contractor)
+  const [subtaskForm, setSubtaskForm] = useState({ open: false, initial: null });
+  const [deletingSubtaskId, setDeletingSubtaskId] = useState(null);
+
+  const handleDeleteSubtask = async (st) => {
+    if (!window.confirm(`Delete subtask "${st.name}"? Its planned budget is removed from the main task.`)) return;
+    setDeletingSubtaskId(st.id);
+    setError(null);
+    try {
+      await tasksApi.removeSubtask(taskId, st.id);
+      await fetchDetail();
+      if (onUpdated) onUpdated();
+    } catch (err) {
+      setError(err.response?.data?.error?.message || err.message);
+    } finally {
+      setDeletingSubtaskId(null);
+    }
+  };
+
+  const handleSubtaskProgress = async (st, value) => {
+    setError(null);
+    try {
+      await tasksApi.updateSubtask(taskId, st.id, {
+        progress: value,
+        ...(value >= 100 ? { status: 'completed' } : st.status === 'completed' ? { status: 'on-track' } : {}),
+      });
+      await fetchDetail();
+      if (onUpdated) onUpdated();
+    } catch (err) {
+      setError(err.response?.data?.error?.message || err.message);
+    }
+  };
 
   const fetchDetail = async () => {
     if (!taskId) return;
@@ -102,7 +146,16 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
     setLoggingWorker(true);
     setWorkerSuccess(null);
     try {
-      await tasksApi.logWorker(taskId, workerForm);
+      await tasksApi.logWorker(taskId, {
+        worker_name: workerForm.workerName.trim(),
+        worker_code: workerForm.workerCode.trim() || null,
+        labour_type: workerForm.labourType,
+        work_date: workerForm.workDate,
+        hours_worked: Number(workerForm.hoursWorked || 8),
+        daily_wage: Number(workerForm.dailyWage || 0),
+        work_performed: workerForm.workPerformed.trim() || null,
+        subtask_id: workerSubtaskId ? Number(workerSubtaskId) : null,
+      });
       setWorkerSuccess('Worker hours logged successfully!');
       setWorkerForm({
         workerName: '',
@@ -156,6 +209,11 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
     },
   };
   const budgetApprovals = taskData?.budgetApprovals || task?.budgetApprovals || [];
+  const subtasks = taskData?.subtasks || task?.subtasks || [];
+  const hasSubtasks = subtasks.length > 0;
+  const SubtaskChip = ({ name }) => (name
+    ? <span className="ml-1 inline-block rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">{name}</span>
+    : null);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4 sm:p-6">
@@ -213,7 +271,9 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                 <div className="rounded-xl border border-line bg-canvas/40 p-3.5">
                   <p className="text-[11px] font-medium text-ink-subtle">Total Budget</p>
                   <p className="mt-1 text-xl font-bold text-ink">{formatCurrency(task.total_budget || 0)}</p>
-                  <p className="text-[11px] text-ink-muted mt-0.5">Admin allocated</p>
+                  <p className="text-[11px] text-ink-muted mt-0.5">
+                    {hasSubtasks ? `Admin allocated · incl. ${subtasks.length} subtask${subtasks.length === 1 ? '' : 's'}` : 'Admin allocated'}
+                  </p>
                 </div>
                 <div className="rounded-xl border border-line bg-canvas/40 p-3.5">
                   <p className="text-[11px] font-medium text-ink-subtle">Labour Incurred</p>
@@ -235,7 +295,9 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                   <p className="text-[11px] font-medium text-ink-subtle">Current Progress</p>
                   <div className="mt-1 flex items-baseline justify-between">
                     <p className="text-xl font-bold text-ink">{task.progress || 0}%</p>
-                    <span className="text-[11px] text-ink-muted">{dailyWork.length} updates</span>
+                    <span className="text-[11px] text-ink-muted">
+                      {hasSubtasks ? `from ${subtasks.length} subtasks` : `${dailyWork.length} updates`}
+                    </span>
                   </div>
                   <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line">
                     <div
@@ -250,6 +312,7 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
               <div className="flex border-b border-line gap-2 overflow-x-auto text-xs font-medium">
                 {[
                   { id: 'overview', label: 'Overview' },
+                  { id: 'subtasks', label: 'Subtasks', count: subtasks.length },
                   { id: 'materials', label: 'Materials', count: materials.length },
                   { id: 'tools', label: 'Tools & Machines', count: tools.length },
                   { id: 'labour', label: 'Labour & Workers', count: workerLogs.length },
@@ -551,6 +614,23 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                     </div>
                   </div>
 
+                  {hasSubtasks && (
+                    <div className="rounded-xl border border-line bg-white p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-bold text-ink uppercase tracking-wider">Subtask Breakdown</h4>
+                          <p className="text-[11px] text-ink-subtle">
+                            Subtask totals are already included in the task figures above — not added twice.
+                          </p>
+                        </div>
+                        <Button variant="secondary" size="xs" onClick={() => setActiveTab('subtasks')}>
+                          View subtask details
+                        </Button>
+                      </div>
+                      <SubtaskSummaryTable subtasks={subtasks} onOpen={() => setActiveTab('subtasks')} />
+                    </div>
+                  )}
+
                   {/* 2. AUDIT TRAIL: BUDGET APPROVALS & CHANGES */}
                   {budgetApprovals.length > 0 && (
                     <div className="rounded-xl border border-line bg-white p-4 space-y-3">
@@ -586,7 +666,7 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                   {formatDate(ba.createdAt)}
                                 </td>
                                 <td className="py-2.5 px-3 font-semibold text-ink">
-                                  <div>{ba.category || 'Task Total'}</div>
+                                  <div>{ba.category || 'Task Total'}<SubtaskChip name={ba.subtaskName} /></div>
                                   {ba.category === 'labour' && (ba.originalPlannedWorkers > 0 || ba.additionalWorkers > 0) && (
                                     <div className="text-[10px] text-ink-muted font-normal">
                                       Plan: {ba.originalPlannedWorkers} | Addl: +{ba.additionalWorkers} worker(s)
@@ -641,14 +721,33 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                 </div>
               )}
 
+              {/* Tab: Subtasks */}
+              {activeTab === 'subtasks' && (
+                <SubtasksPanel
+                  task={{ ...task, subtasks, directScope: taskData?.directScope || task?.directScope, consolidation: taskData?.consolidation || task?.consolidation }}
+                  isAdmin={isAdmin}
+                  onAdd={() => setSubtaskForm({ open: true, initial: null })}
+                  onEdit={(st) => setSubtaskForm({ open: true, initial: st })}
+                  onDelete={handleDeleteSubtask}
+                  onProgressSave={handleSubtaskProgress}
+                  deletingId={deletingSubtaskId}
+                />
+              )}
+
               {/* Tab: Materials */}
               {activeTab === 'materials' && (
                 <div className="space-y-6">
                   {/* Budgeted Materials */}
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-2">
-                      Budgeted Materials ({materials.length})
+                      {hasSubtasks ? 'Main Task Direct Materials' : 'Budgeted Materials'} ({materials.length})
                     </h4>
+                    {hasSubtasks && (
+                      <p className="mb-2 text-[11px] text-ink-muted">
+                        Materials planned inside subtasks are listed per subtask on the{' '}
+                        <button type="button" className="text-brand-700 underline" onClick={() => setActiveTab('subtasks')}>Subtasks</button> tab.
+                      </p>
+                    )}
                     {materials.length === 0 ? (
                       <p className="text-xs text-ink-muted italic">No materials budgeted for this task.</p>
                     ) : (
@@ -754,7 +853,7 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                             {materialUsageList.map((c) => (
                               <tr key={c.id} className="hover:bg-canvas/40">
                                 <td className="py-2.5 px-3 text-ink-muted">{formatDate(c.date)}</td>
-                                <td className="py-2.5 px-3 font-semibold text-ink">{c.materialName}</td>
+                                <td className="py-2.5 px-3 font-semibold text-ink">{c.materialName}<SubtaskChip name={c.subtaskName} /></td>
                                 <td className="py-2.5 px-3 text-right font-bold text-brand-700 tabular-nums">
                                   {c.quantityUsed} {c.unit}
                                 </td>
@@ -774,8 +873,11 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
               {activeTab === 'tools' && (
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-2">
-                    Tools & Machinery Required ({tools.length})
+                    {hasSubtasks ? 'Main Task Direct Tools & Machinery' : 'Tools & Machinery Required'} ({tools.length})
                   </h4>
+                  {hasSubtasks && (
+                    <p className="mb-2 text-[11px] text-ink-muted">Machines planned inside subtasks are listed on the Subtasks tab.</p>
+                  )}
                   {tools.length === 0 ? (
                     <p className="text-xs text-ink-muted italic">No tools or machines planned for this task.</p>
                   ) : (
@@ -792,22 +894,25 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-line">
-                          {tools.map((t) => (
-                            <tr key={t.id} className="hover:bg-canvas/40">
-                              <td className="py-2.5 px-3 font-semibold text-ink">{t.tool_name}</td>
-                              <td className="py-2.5 px-3">
-                                <Badge tone="neutral">{t.rental_type}</Badge>
-                              </td>
-                              <td className="py-2.5 px-3 text-right tabular-nums">{t.quantity}</td>
-                              <td className="py-2.5 px-3 text-right tabular-nums">{formatCurrency(t.cost)}</td>
-                              <td className="py-2.5 px-3 text-right tabular-nums">
-                                {String(t.rental_type).toLowerCase() === 'purchase' ? '—' : Number(t.working_days ?? t.workingDays ?? 1)}
-                              </td>
-                              <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
-                                {formatCurrency(t.total_cost)}
-                              </td>
-                            </tr>
-                          ))}
+                          {tools.map((t) => {
+                            const rentalType = t.rentalType ?? t.rental_type;
+                            return (
+                              <tr key={t.id} className="hover:bg-canvas/40">
+                                <td className="py-2.5 px-3 font-semibold text-ink">{t.toolName ?? t.tool_name}</td>
+                                <td className="py-2.5 px-3">
+                                  <Badge tone="neutral">{rentalType}</Badge>
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">{t.quantity}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">{formatCurrency(t.cost)}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">
+                                  {String(rentalType).toLowerCase() === 'purchase' ? '—' : Number(t.workingDays ?? t.working_days ?? 1)}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
+                                  {formatCurrency(t.totalCost ?? t.total_cost)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -940,6 +1045,7 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                   <td className="py-2.5 px-3 font-semibold text-ink">
                                     <div className="flex items-center gap-1.5">
                                       <span>{w.workerName}</span>
+                                      <SubtaskChip name={w.subtaskName} />
                                       {w.trade && (
                                         <span className="text-[10px] text-ink-muted">({w.trade})</span>
                                       )}
@@ -1015,6 +1121,19 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                     {showAddWorker && (
                       <form onSubmit={handleAddWorker} className="mb-4 rounded-xl border border-brand-200 bg-brand-50/40 p-4 space-y-3">
                         <h5 className="text-xs font-bold text-brand-900">Record Worker Hours for This Task</h5>
+                        {hasSubtasks && (
+                          <div>
+                            <label className="block text-[11px] font-medium text-ink mb-1">Subtask</label>
+                            <select
+                              value={workerSubtaskId}
+                              onChange={(e) => setWorkerSubtaskId(e.target.value)}
+                              className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500"
+                            >
+                              <option value="">Main task (not a specific subtask)</option>
+                              {subtasks.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+                            </select>
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                           <div>
                             <label className="block text-[11px] font-medium text-ink mb-1">Worker Name *</label>
@@ -1125,22 +1244,27 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                           </thead>
                           <tbody className="divide-y divide-line">
                             {workerLogs.map((w) => {
-                              const cost = (Number(w.daily_wage || 0) * Number(w.hours_worked || 8)) / 8;
+                              const wage = Number(w.dailyWage ?? w.daily_wage ?? 0);
+                              const hours = Number(w.hoursWorked ?? w.hours_worked ?? 8);
+                              const cost = (wage * hours) / 8;
                               return (
                                 <tr key={w.id} className="hover:bg-canvas/40">
-                                  <td className="py-2.5 px-3 text-ink-muted">{formatDate(w.work_date)}</td>
-                                  <td className="py-2.5 px-3 font-semibold text-ink">{w.worker_name}</td>
-                                  <td className="py-2.5 px-3 text-ink-muted">{w.worker_code || '—'}</td>
-                                  <td className="py-2.5 px-3">
-                                    <Badge tone="neutral">{w.labour_type}</Badge>
+                                  <td className="py-2.5 px-3 text-ink-muted">{formatDate(w.workDate ?? w.work_date)}</td>
+                                  <td className="py-2.5 px-3 font-semibold text-ink">
+                                    {w.workerName ?? w.worker_name}
+                                    <SubtaskChip name={w.subtaskName} />
                                   </td>
-                                  <td className="py-2.5 px-3 text-right tabular-nums">{w.hours_worked} hrs</td>
-                                  <td className="py-2.5 px-3 text-right tabular-nums">{formatCurrency(w.daily_wage)}</td>
+                                  <td className="py-2.5 px-3 text-ink-muted">{(w.workerCode ?? w.worker_code) || '—'}</td>
+                                  <td className="py-2.5 px-3">
+                                    <Badge tone="neutral">{w.labourType ?? w.labour_type}</Badge>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right tabular-nums">{hours} hrs</td>
+                                  <td className="py-2.5 px-3 text-right tabular-nums">{formatCurrency(wage)}</td>
                                   <td className="py-2.5 px-3 text-right font-semibold text-brand-700 tabular-nums">
                                     {formatCurrency(cost)}
                                   </td>
                                   <td className="py-2.5 px-3 text-ink-muted max-w-xs truncate">
-                                    {w.work_performed || '—'}
+                                    {(w.workPerformed ?? w.work_performed) || '—'}
                                   </td>
                                 </tr>
                               );
@@ -1167,25 +1291,26 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                         <div key={u.id} className="rounded-xl border border-line bg-canvas/30 p-4 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2">
-                              <span className="font-semibold text-xs text-ink">{formatDate(u.work_date)}</span>
-                              <Badge tone={u.work_status === 'completed' ? 'success' : 'neutral'}>
-                                {u.work_status}
+                              <span className="font-semibold text-xs text-ink">{formatDate(u.workDate ?? u.work_date)}</span>
+                              <Badge tone={(u.workStatus ?? u.work_status) === 'completed' ? 'positive' : 'neutral'}>
+                                {u.workStatus ?? u.work_status}
                               </Badge>
                               <span className="rounded-md bg-brand-100 px-2 py-0.5 text-[11px] font-bold text-brand-800">
-                                {u.progress_percentage}%
+                                {u.progressPercentage ?? u.progress_percentage ?? 0}%
                               </span>
+                              <SubtaskChip name={u.subtaskName} />
                             </div>
-                            <span className="text-xs text-ink-muted">Contractor: {u.contractor_name || 'Assigned team'}</span>
+                            <span className="text-xs text-ink-muted">Contractor: {(u.contractorName ?? u.contractor_name) || 'Assigned team'}</span>
                           </div>
 
-                          <p className="text-xs text-ink whitespace-pre-wrap">{u.work_done}</p>
+                          <p className="text-xs text-ink whitespace-pre-wrap">{u.workDone ?? u.work_done}</p>
 
-                          {u.material_id && (
+                          {(u.quantityUsed ?? u.quantity_used) > 0 && (
                             <div className="rounded-lg bg-white border border-line p-2 text-xs text-ink flex items-center gap-2">
                               <Package className="h-4 w-4 text-brand-600" />
                               <span>
-                                Material consumed: <strong>{u.quantity_used} {u.material_unit || u.unit}</strong> of{' '}
-                                <strong>{u.material_name}</strong>
+                                Material consumed: <strong>{u.quantityUsed ?? u.quantity_used} {u.unit || u.material_unit}</strong> of{' '}
+                                <strong>{u.materialName ?? u.material_name}</strong>
                               </span>
                             </div>
                           )}
@@ -1201,12 +1326,12 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                 <button
                                   key={p.id}
                                   type="button"
-                                  onClick={() => setSelectedPhoto(`/api/daily-work/photos/${p.id}`)}
+                                  onClick={() => setSelectedPhoto(p.url || `/api/daily-work/photos/${p.id}`)}
                                   className="group relative h-16 w-16 overflow-hidden rounded-lg border border-line bg-canvas"
                                 >
                                   <img
-                                    src={`/api/daily-work/photos/${p.id}`}
-                                    alt={p.file_name}
+                                    src={p.url || `/api/daily-work/photos/${p.id}`}
+                                    alt={p.fileName ?? p.file_name}
                                     className="h-full w-full object-cover transition-transform group-hover:scale-105"
                                   />
                                 </button>
@@ -1305,6 +1430,22 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
           setShowQuickAddModal(true);
         }}
       />
+
+      {/* Subtask create / edit (same planning editor as a main task) */}
+      {subtaskForm.open && task && (
+        <TaskFormModal
+          isOpen
+          mode="subtask"
+          parentTask={task}
+          projectId={task.projectId || task.project_id}
+          initialData={subtaskForm.initial}
+          onClose={() => setSubtaskForm({ open: false, initial: null })}
+          onSaved={async () => {
+            await fetchDetail();
+            if (onUpdated) onUpdated();
+          }}
+        />
+      )}
 
       {/* Quick Add Worker Modal */}
       <QuickAddWorkerModal

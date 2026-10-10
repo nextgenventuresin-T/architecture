@@ -37,6 +37,7 @@ const EMPTY = {
   project_id: '',
   site_id: '',
   task_id: '',
+  subtask_id: '',
   material_id: '',
   vendor_id: '',
   supplier: '',
@@ -136,7 +137,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     let active = true;
     setLoadingPlannedMaterials(true);
     tasksApi
-      .getPlannedMaterials(values.task_id)
+      .getPlannedMaterials(values.task_id, values.subtask_id || 'direct')
       .then((data) => active && setPlannedMaterials(data ?? []))
       .catch(() => active && setPlannedMaterials([]))
       .finally(() => {
@@ -145,7 +146,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     return () => {
       active = false;
     };
-  }, [values.task_id]);
+  }, [values.task_id, values.subtask_id]);
 
   // Machines Admin planned for the selected task - the only ones a contractor / PM may request.
   useEffect(() => {
@@ -155,13 +156,13 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     }
     let active = true;
     tasksApi
-      .getPlannedTools(values.task_id)
+      .getPlannedTools(values.task_id, values.subtask_id || 'direct')
       .then((data) => active && setPlannedTools(data ?? []))
       .catch(() => active && setPlannedTools([]));
     return () => {
       active = false;
     };
-  }, [values.task_id]);
+  }, [values.task_id, values.subtask_id]);
 
   useEffect(() => {
     if (!existing?.request) return;
@@ -182,6 +183,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       project_id: r.project ? String(r.project.id) : '',
       site_id: r.site ? String(r.site.id) : '',
       task_id: r.task?.id ? String(r.task.id) : (r.task_id ? String(r.task_id) : ''),
+      subtask_id: r.subtask?.id ? String(r.subtask.id) : '',
       material_id: r.material?.id ? String(r.material.id) : '',
       vendor_id: r.vendorId ? String(r.vendorId) : '',
       supplier: r.supplier ?? '',
@@ -264,9 +266,10 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       const next = {
         ...current,
         [key]: value,
-        ...(key === 'project_id' ? { site_id: '', task_id: '', material_id: '' } : null),
-        ...(key === 'site_id' ? { task_id: '', material_id: '' } : null),
-        ...(key === 'task_id' ? { material_id: '', ...(isContractor ? { tool_id: '' } : null) } : null),
+        ...(key === 'project_id' ? { site_id: '', task_id: '', subtask_id: '', material_id: '' } : null),
+        ...(key === 'site_id' ? { task_id: '', subtask_id: '', material_id: '' } : null),
+        ...(key === 'task_id' ? { subtask_id: '', material_id: '', ...(isContractor ? { tool_id: '' } : null) } : null),
+        ...(key === 'subtask_id' ? { material_id: '', ...(isContractor ? { tool_id: '' } : null) } : null),
       };
 
       // Auto-calculate tool and rental costs
@@ -375,6 +378,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
   const remainingAfter = currentPlannedMaterial ? Number((remainingPlanned - requestedQty).toFixed(2)) : 0;
   const isToolItem = values.item_type === 'tool';
   const currentPlannedTool = plannedTools.find((t) => String(t.toolId) === String(values.tool_id));
+  const selectedTaskSubtasks = tasks.find((t) => String(t.id) === String(values.task_id))?.subtasks ?? [];
   const isToolExcess = isContractor && isToolItem && Boolean(currentPlannedTool) && requestedQty > currentPlannedTool.remainingQuantity;
   const isExcess = isToolItem
     ? isToolExcess
@@ -475,6 +479,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
         project_id: Number(values.project_id),
         site_id: values.site_id ? Number(values.site_id) : null,
         task_id: values.task_id ? Number(values.task_id) : null,
+        subtask_id: values.task_id && values.subtask_id ? Number(values.subtask_id) : null,
         excess_reason: values.excess_reason ? values.excess_reason.trim() : null,
         required_date: values.required_date || null,
         priority: values.priority,
@@ -525,6 +530,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       material_id: !isTool && values.material_id ? Number(values.material_id) : null,
       tool_id: isTool && values.tool_id ? Number(values.tool_id) : null,
       task_id: values.task_id ? Number(values.task_id) : null,
+      subtask_id: values.task_id && values.subtask_id ? Number(values.subtask_id) : null,
       excess_reason: values.excess_reason ? values.excess_reason.trim() : null,
       vendor_id: values.vendor_id ? Number(values.vendor_id) : null,
       supplier: values.supplier.trim() || null,
@@ -716,6 +722,18 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                   disabled={!values.project_id}
                   className="sm:col-span-2"
                 />
+                {selectedTaskSubtasks.length > 0 && (
+                  <SelectField
+                    label="Subtask"
+                    value={values.subtask_id}
+                    onChange={set('subtask_id')}
+                    error={fieldErrors.subtask_id}
+                    placeholder="Main task (not a specific subtask)"
+                    hint="Pick the subtask this item is for - it is checked against that subtask's own plan and budget."
+                    options={selectedTaskSubtasks.map((st) => ({ value: String(st.id), label: `${st.name} (${st.progress}% · ${st.status})` }))}
+                    className="sm:col-span-2"
+                  />
+                )}
                 <SelectField
                   label="Source"
                   required
@@ -898,6 +916,18 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                     disabled={!values.project_id}
                     className="sm:col-span-2"
                   />
+                  {selectedTaskSubtasks.length > 0 && (
+                    <SelectField
+                      label="Subtask"
+                      value={values.subtask_id}
+                      onChange={set('subtask_id')}
+                      error={fieldErrors.subtask_id}
+                      placeholder="Main task (not a specific subtask)"
+                      hint="Pick the subtask this item is for - it is checked against that subtask's own plan and budget."
+                      options={selectedTaskSubtasks.map((st) => ({ value: String(st.id), label: `${st.name} (${st.progress}% · ${st.status})` }))}
+                      className="sm:col-span-2"
+                    />
+                  )}
                 </>
               )}
 

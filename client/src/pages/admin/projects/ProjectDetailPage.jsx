@@ -27,7 +27,8 @@ import { projectsApi } from '../../../api/projectsApi';
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const location = useLocation();
-  const [activeTab, setActiveTab] = useState('overview');
+  // ?tab=tasks opens a tab directly (e.g. from the project form's subtask hint).
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'overview');
   const [isAssigning, setIsAssigning] = useState(false);
   const [flash, setFlash] = useState(location.state?.flash ?? null);
 

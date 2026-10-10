@@ -19,7 +19,7 @@ import { tasksApi } from '../../api/tasksApi';
 import { materialsApi } from '../../api/materialsApi';
 import { toolApi } from '../../api/toolApi';
 import { hrApi } from '../../api/hrApi';
-import { formatCurrency } from '../../utils/format';
+import { formatCurrency, toDateInputValue } from '../../utils/format';
 
 function calcWorkingDays(start, end) {
   if (!start || !end) return 1;
@@ -52,17 +52,40 @@ function toolRowTotal(row) {
 }
 
 const LABOUR_TYPE_OPTIONS = ['Labour', 'Company Labour'];
+// Stable default: a fresh [] per render would re-run the form reset effect on every keystroke.
+const NO_SITES = [];
 
+/**
+ * Plans a Main Task, or (mode="subtask") a Subtask under `parentTask`. Both use the
+ * same Materials / Machines & Tools / Labour / Misc planning; a subtask's budget is
+ * automatically part of its main task's budget.
+ */
 export default function TaskFormModal({
   isOpen,
   onClose,
   onSaved,
   projectId,
   siteId: initialSiteId,
-  sites = [],
+  sites = NO_SITES,
   initialData = null,
+  mode = 'task',
+  parentTask = null,
 }) {
   const isEdit = Boolean(initialData?.id);
+  const isSubtask = mode === 'subtask';
+  const noun = isSubtask ? 'Subtask' : 'Task';
+  // Main task edit: what its subtasks already contribute (planned separately).
+  const subtaskBudgetTotal = !isSubtask
+    ? Number(
+        initialData?.subtaskBudgetTotal
+          ?? (initialData?.subtasks || []).reduce((s, st) => s + Number(st.plannedBudget || st.budget?.total || 0), 0)
+      )
+    : 0;
+  const subtaskCount = !isSubtask ? Number(initialData?.subtaskCount ?? (initialData?.subtasks || []).length) : 0;
+  // A main task is a heading whose budget lives in its subtasks; only an older task that
+  // already has direct plan lines keeps its budget tabs here.
+  const hasDirectLines = ['materials', 'tools', 'labour', 'misc'].some((k) => (initialData?.[k] || []).length > 0);
+  const isHeadingTask = !isSubtask && !hasDirectLines;
 
   // Form State
   const [name, setName] = useState('');
@@ -118,8 +141,8 @@ export default function TaskFormModal({
       setDescription(initialData.description || '');
       setStatus(initialData.status || 'on-track');
       setProgress(Number(initialData.progress || 0));
-      const tStart = initialData.startDate ? initialData.startDate.slice(0, 10) : '';
-      const tEnd = initialData.endDate ? initialData.endDate.slice(0, 10) : '';
+      const tStart = toDateInputValue(initialData.startDate);
+      const tEnd = toDateInputValue(initialData.endDate);
       setStartDate(tStart);
       setEndDate(tEnd);
       setDurationDays(Number(initialData.durationDays || 14));
@@ -142,8 +165,8 @@ export default function TaskFormModal({
           rental_type: t.rentalType || t.rental_type || 'Rent',
           quantity: Number(t.quantity || 1),
           cost: Number(t.cost || 0),
-          start_date: (t.startDate || t.start_date || '').slice(0, 10) || tStart,
-          end_date: (t.endDate || t.end_date || '').slice(0, 10) || tEnd,
+          start_date: toDateInputValue(t.startDate || t.start_date) || tStart,
+          end_date: toDateInputValue(t.endDate || t.end_date) || tEnd,
           working_days: Number(t.workingDays || t.working_days || 1),
           total_cost: Number(t.totalCost || t.total_cost || 0),
         }))
@@ -151,8 +174,8 @@ export default function TaskFormModal({
 
       setLabour(
         (initialData.labour || []).map((l) => {
-          const lStart = l.start_date || l.startDate ? (l.start_date || l.startDate).slice(0, 10) : tStart;
-          const lEnd = l.end_date || l.endDate ? (l.end_date || l.endDate).slice(0, 10) : tEnd;
+          const lStart = toDateInputValue(l.start_date || l.startDate) || tStart;
+          const lEnd = toDateInputValue(l.end_date || l.endDate) || tEnd;
           const days = Number(l.workingDays || l.working_days || calcWorkingDays(lStart, lEnd));
           const isCompany = (l.labourType || l.labour_type || l.worker_type || '').toLowerCase().includes('company');
           const wage = isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0);
@@ -187,17 +210,19 @@ export default function TaskFormModal({
       setStatus('on-track');
       setProgress(0);
       const today = new Date().toISOString().slice(0, 10);
-      setStartDate(today);
       const future = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-      setEndDate(future);
-      setDurationDays(14);
+      const pStart = isSubtask ? toDateInputValue(parentTask?.startDate || parentTask?.start_date) : '';
+      const pEnd = isSubtask ? toDateInputValue(parentTask?.endDate || parentTask?.end_date) : '';
+      setStartDate(pStart || today);
+      setEndDate(pEnd || future);
+      setDurationDays(pStart && pEnd ? Math.max(1, Math.round((new Date(pEnd) - new Date(pStart)) / 86400000)) : 14);
       setMaterials([]);
       setTools([]);
       setLabour([]);
       setMisc([]);
     }
     setError(null);
-  }, [initialData, initialSiteId, sites, isOpen]);
+  }, [initialData, initialSiteId, sites, isOpen, isSubtask, parentTask]);
 
   // Recalculate duration when dates change
   const handleStartDateChange = (val) => {
@@ -396,7 +421,11 @@ export default function TaskFormModal({
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim()) {
-      setError(new Error('Task name is required.'));
+      setError(new Error(`${noun} name is required.`));
+      return;
+    }
+    if (startDate && endDate && endDate < startDate) {
+      setError(new Error('Expected completion cannot be before the start date.'));
       return;
     }
 
@@ -451,10 +480,17 @@ export default function TaskFormModal({
     };
 
     try {
-      if (isEdit) {
+      if (isSubtask) {
+        const { project_id: _p, site_id: _s, ...subPayload } = payload;
+        if (isEdit) await tasksApi.updateSubtask(parentTask.id, initialData.id, subPayload);
+        else await tasksApi.createSubtask(parentTask.id, subPayload);
+      } else if (isEdit) {
         await tasksApi.update(initialData.id, payload);
       } else {
-        await tasksApi.create(payload);
+        const created = await tasksApi.create(payload);
+        onSaved(created);
+        onClose();
+        return;
       }
       onSaved();
       onClose();
@@ -469,13 +505,21 @@ export default function TaskFormModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={isEdit ? `Edit Task: ${initialData?.name}` : 'Add Manual Task & Budget Planning'}
-      description="Create a task with detailed budget breakdown across Materials, Tools, Labour, and Misc."
+      title={
+        isSubtask
+          ? (isEdit ? `Edit Subtask: ${initialData?.name}` : `Add Subtask to: ${parentTask?.name || 'Main Task'}`)
+          : (isEdit ? `Edit Task: ${initialData?.name}` : 'Add Manual Task & Budget Planning')
+      }
+      description={
+        isSubtask
+          ? 'Plan this subtask\'s own Materials, Machines & Tools, Labour and Misc. Its budget is added to the main task automatically.'
+          : 'Create a task with detailed budget breakdown across Materials, Tools, Labour, and Misc.'
+      }
       size="2xl"
     >
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
-          <Alert tone="error" title="Could not save task">
+          <Alert tone="error" title={`Could not save ${noun.toLowerCase()}`}>
             {error.response?.data?.error?.message || error.message}
           </Alert>
         )}
@@ -483,24 +527,31 @@ export default function TaskFormModal({
         {/* 1. Basic Task Metadata */}
         <div className="rounded-xl border border-line bg-canvas/40 p-4 space-y-4">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-subtle">
-            Task Information
+            {noun} Information
           </h4>
+          {isSubtask && parentTask && (
+            <p className="text-xs text-ink-muted">
+              Main task: <strong className="text-ink">{parentTask.name}</strong>
+              {(parentTask.siteName || parentTask.site_name) ? ` · Site: ${parentTask.siteName || parentTask.site_name}` : ''}
+            </p>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-medium text-ink mb-1">
-                Task Name <span className="text-red-500">*</span>
+                {noun} Name <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Foundation Work, Brick Work, Electrical"
+                placeholder={isSubtask ? 'e.g. Column Casting, Slab Shuttering, Wiring Ground Floor' : 'e.g. Foundation Work, Brick Work, Electrical'}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-hidden"
               />
             </div>
 
+            {!isSubtask && (
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Assigned Site</label>
               <select
@@ -516,6 +567,7 @@ export default function TaskFormModal({
                 ))}
               </select>
             </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
@@ -532,6 +584,20 @@ export default function TaskFormModal({
                 <option value="completed">Completed</option>
               </select>
             </div>
+
+            {isSubtask && isEdit && (
+              <div>
+                <label className="block text-xs font-medium text-ink mb-1">Progress (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={progress}
+                  onChange={(e) => setProgress(Math.min(100, Math.max(0, Number(e.target.value))))}
+                  className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Start Date</label>
@@ -566,7 +632,7 @@ export default function TaskFormModal({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-ink mb-1">Task Scope &amp; Description</label>
+            <label className="block text-xs font-medium text-ink mb-1">{noun} Scope &amp; Description</label>
             <textarea
               rows={2}
               value={description}
@@ -577,6 +643,18 @@ export default function TaskFormModal({
           </div>
         </div>
 
+        {isHeadingTask && (
+          <div className="rounded-xl border border-brand-200 bg-brand-50/50 p-4 text-sm text-brand-900">
+            <p className="font-semibold">Budget is planned in subtasks</p>
+            <p className="mt-1 text-xs text-brand-800">
+              This task is the heading. {isEdit
+                ? `Its ${subtaskCount} subtask${subtaskCount === 1 ? '' : 's'} carry the Materials, Machines & Tools, Labour and Misc budget (${formatCurrency(subtaskBudgetTotal)}).`
+                : 'After you create it, its Subtasks tab opens so you can add subtasks with their Materials, Machines & Tools, Labour and Misc budget.'}
+            </p>
+          </div>
+        )}
+
+        {!isHeadingTask && (<>
         {/* 2. Budget Breakdown Tabs */}
         <div>
           <div className="flex items-center justify-between border-b border-line mb-3">
@@ -1039,7 +1117,7 @@ export default function TaskFormModal({
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold text-brand-900 uppercase tracking-wide">
-                Task Total Calculated Budget
+                {isSubtask ? 'Subtask Total Calculated Budget' : subtaskCount > 0 ? 'Main Task Direct Budget' : 'Task Total Calculated Budget'}
               </p>
               <p className="text-[11px] text-brand-700 mt-0.5">
                 Materials ({formatCurrency(totalMaterialCost)}) + Tools ({formatCurrency(totalToolCost)}) + Labour (
@@ -1052,15 +1130,32 @@ export default function TaskFormModal({
               </span>
             </div>
           </div>
+          {isSubtask && (
+            <p className="mt-2 text-[11px] text-brand-700">
+              This amount is added to the main task&rsquo;s budget, and from there to the site and project totals.
+            </p>
+          )}
+          {!isSubtask && subtaskCount > 0 && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-brand-200 pt-2 text-xs">
+              <span className="text-brand-800">
+                + {subtaskCount} subtask{subtaskCount === 1 ? '' : 's'} planned separately: <strong>{formatCurrency(subtaskBudgetTotal)}</strong>
+              </span>
+              <span className="font-bold text-brand-900">
+                Main Task Total: {formatCurrency(grandTotalBudget + subtaskBudgetTotal)}
+              </span>
+            </div>
+          )}
         </div>
+
+        </>)}
 
         {/* Actions */}
         <div className="flex items-center justify-end gap-2 border-t border-line pt-4">
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" isLoading={isSubmitting} loadingText="Saving Task…">
-            {isEdit ? 'Save Task Changes' : 'Create Task'}
+          <Button type="submit" isLoading={isSubmitting} loadingText={`Saving ${noun}…`}>
+            {isEdit ? `Save ${noun} Changes` : `Create ${noun}`}
           </Button>
         </div>
       </form>

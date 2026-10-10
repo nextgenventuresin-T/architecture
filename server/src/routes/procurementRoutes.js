@@ -64,6 +64,7 @@ const requestRules = (isCreate) => {
     body('project_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid project.').toInt(),
     body('site_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid site.').toInt(),
     body('task_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid task.').toInt(),
+    body('subtask_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Select a valid subtask.').toInt(),
     body('item_type').optional({ nullable: true }).isIn(['material', 'tool']).withMessage('Invalid item type.'),
     body('material_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid material.').toInt(),
     body('tool_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid tool/machinery.').toInt(),

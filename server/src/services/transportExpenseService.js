@@ -21,7 +21,7 @@ async function bookForMovement(movementId, userId = null, conn = pool) {
             mm.vehicle_number, mm.received_at, mm.destination_contractor_id,
             COALESCE(mm.project_id, pr.project_id) AS project_id,
             COALESCE(mm.site_id, pr.site_id) AS site_id,
-            pr.task_id, pr.request_number,
+            pr.task_id, pr.subtask_id, pr.request_number,
             COALESCE(m.name, t.name, 'Item') AS item_name
      FROM material_movements mm
      LEFT JOIN procurement_requests pr ON pr.id = mm.procurement_request_id
@@ -47,11 +47,12 @@ async function bookForMovement(movementId, userId = null, conn = pool) {
   if (other > 0) parts.push(`other ${other}`);
   const [res] = await conn.query(
     `INSERT INTO expenses
-       (expense_number, project_id, site_id, task_id, contractor_id, category, description, amount, expense_date,
+       (expense_number, project_id, site_id, task_id, subtask_id, contractor_id, category, description, amount, expense_date,
         paid_by, party_name, payment_method, reference, status, notes, created_by, source_type, source_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Company', ?, 'other', ?, 'approved', ?, ?, 'material_transport', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Company', ?, 'other', ?, 'approved', ?, ?, 'material_transport', ?)`,
     [
-      expenseNumber, mm.project_id || null, mm.site_id || null, mm.task_id || null, mm.destination_contractor_id || null,
+      expenseNumber, mm.project_id || null, mm.site_id || null, mm.task_id || null, mm.task_id ? (mm.subtask_id || null) : null,
+      mm.destination_contractor_id || null,
       TRANSPORT_CATEGORY,
       `Transport - ${mm.item_name} - ${mm.movement_number}`.slice(0, 255),
       amount,

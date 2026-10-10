@@ -46,7 +46,7 @@ const idParam = (name = 'id') => param(name).isInt({ min: 1 }).withMessage('Inva
 
 const paginationRules = [
   query('page').optional().isInt({ min: 1 }).toInt(),
-  query('pageSize').optional().isInt({ min: 1, max: 100 }).toInt(),
+  query('pageSize').optional().isInt({ min: 1, max: 200 }).toInt(),
   query('search').optional().trim(),
   query('contractorId').optional().isInt({ min: 1 }).toInt(),
   query('projectId').optional().isInt({ min: 1 }).toInt(),

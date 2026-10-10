@@ -14,6 +14,7 @@ const warehouseModel = require('../models/warehouseModel');
 const notificationModel = require('../models/notificationModel');
 const toolModel = require('../models/toolModel');
 const taskModel = require('../models/taskModel');
+const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 const toolUnitService = require('./toolUnitService');
 const pmScope = require('./pmScopeService');
 const { normalizeVehicle, vehiclesMatch } = require('../utils/vehicle');
@@ -175,6 +176,7 @@ function toRequest(row, viewer) {
     project: row.project_id ? { id: row.project_id, name: row.project_name, code: row.project_code } : null,
     site: row.site_id ? { id: row.site_id, name: row.site_name } : null,
     task: row.task_id ? { id: row.task_id, name: row.task_name } : null,
+    subtask: row.subtask_id ? { id: row.subtask_id, name: row.subtask_name } : null,
     isExcess: Boolean(row.is_excess),
     excessQuantity: Number(row.excess_quantity || 0),
     excessReason: row.excess_reason || null,
@@ -687,6 +689,13 @@ async function create(payload, userId, hrScope) {
     });
   }
 
+  // Optional subtask under the main task; when absent the request is booked on the
+  // main task's own (direct) plan, which for a task without subtasks is the whole plan.
+  const subtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
+  const planScope = subtask ? subtask.id : null;
+  const scopeSql = planScope ? ' AND subtask_id = ?' : ' AND subtask_id IS NULL';
+  const scopeParams = planScope ? [planScope] : [];
+
   let isExcess = false;
   let excessQuantity = 0;
   let plannedQtyAtReq = null;
@@ -718,8 +727,8 @@ async function create(payload, userId, hrScope) {
 
     // Check task_materials for planned quantity
     const [tmRows] = await pool.query(
-      'SELECT * FROM task_materials WHERE task_id = ? AND material_id = ?',
-      [taskId, Number(payload.material_id)]
+      `SELECT * FROM task_materials WHERE task_id = ? AND material_id = ?${scopeSql}`,
+      [taskId, Number(payload.material_id), ...scopeParams]
     );
 
     const requestedQty = Number(payload.quantity);
@@ -728,15 +737,15 @@ async function create(payload, userId, hrScope) {
     const [[procSum]] = await pool.query(
       `SELECT COALESCE(SUM(quantity), 0) AS total_procured
        FROM procurement_requests
-       WHERE task_id = ? AND material_id = ? AND status NOT IN ('rejected', 'cancelled')`,
-      [taskId, Number(payload.material_id)]
+       WHERE task_id = ? AND material_id = ? AND status NOT IN ('rejected', 'cancelled')${scopeSql}`,
+      [taskId, Number(payload.material_id), ...scopeParams]
     );
     procuredQtyAtReq = Number(procSum.total_procured || 0);
 
     if (tmRows.length > 0) {
-      const tm = tmRows[0];
-      const originalPlanned = Number(tm.quantity || 0);
-      const approvedAdditional = Number(tm.approved_additional_quantity || 0);
+      // A material can appear on more than one plan row of the same scope.
+      const originalPlanned = tmRows.reduce((s, r) => s + Number(r.quantity || 0), 0);
+      const approvedAdditional = tmRows.reduce((s, r) => s + Number(r.approved_additional_quantity || 0), 0);
       plannedQtyAtReq = Number((originalPlanned + approvedAdditional).toFixed(2));
       const remainingPlanned = Math.max(0, Number((plannedQtyAtReq - procuredQtyAtReq).toFixed(2)));
 
@@ -765,10 +774,12 @@ async function create(payload, userId, hrScope) {
   // How it is obtained (owned / purchased / rented) and every rate is Admin's call,
   // so any requester-supplied mode or cost is ignored.
   if ((isContractor || isPM) && isTool && taskId && tool) {
-    const planned = (await taskModel.findPlannedTools(taskId)).find((t) => Number(t.toolId) === Number(tool.id));
+    const planned = (await taskModel.findPlannedTools(taskId, undefined, planScope)).find((t) => Number(t.toolId) === Number(tool.id));
     if (!planned) {
       throw ApiError.badRequest('Check the highlighted fields.', {
-        tool_id: 'This machine is not planned for the selected task. Ask Admin to add it to the task budget first.',
+        tool_id: subtask
+          ? `This machine is not planned for subtask "${subtask.name}". Ask Admin to add it to the subtask budget first.`
+          : 'This machine is not planned for the selected task. Ask Admin to add it to the task budget first.',
       });
     }
     if (Number(payload.quantity) > planned.remainingQuantity) {
@@ -935,6 +946,7 @@ async function create(payload, userId, hrScope) {
     reason: payload.reason ?? null,
     status,
     task_id: taskId,
+    subtask_id: subtask ? subtask.id : null,
     is_excess: isExcess ? 1 : 0,
     excess_quantity: excessQuantity,
     excess_reason: isExcess ? (payload.excess_reason || payload.reason || null) : null,
@@ -979,7 +991,7 @@ async function create(payload, userId, hrScope) {
 
   if (isExcess) {
     const reasonText = (payload.excess_reason || payload.reason || '').trim();
-    const taskName = task?.name || `Task #${taskId}`;
+    const taskName = `${task?.name || `Task #${taskId}`}${subtask ? ` › ${subtask.name}` : ''}`;
     const projName = task?.project_name || `Project #${task?.project_id || payload.project_id}`;
     const itemUnit = material?.unit || 'unit';
     const itemName = material?.name || tool?.name || 'Item';
@@ -997,6 +1009,7 @@ async function create(payload, userId, hrScope) {
         procurementRequestId: id,
         requestNumber,
         taskId,
+        subtaskId: subtask ? subtask.id : null,
         taskName,
         projectId: task?.project_id || payload.project_id,
         projectName: projName,
@@ -1116,9 +1129,11 @@ async function updateStatus(id, nextStatus, role, hrScope, userId) {
   if (nextStatus === 'approved' && request.is_excess && request.task_id) {
     const excessQty = Number(request.excess_quantity || 0);
     if (excessQty > 0) {
+      const reqScopeSql = request.subtask_id ? ' AND subtask_id = ?' : ' AND subtask_id IS NULL';
+      const reqScopeParams = request.subtask_id ? [request.subtask_id] : [];
       const [existingTm] = await pool.query(
-        'SELECT * FROM task_materials WHERE task_id = ? AND material_id = ?',
-        [request.task_id, request.material_id]
+        `SELECT * FROM task_materials WHERE task_id = ? AND material_id = ?${reqScopeSql} ORDER BY id LIMIT 1`,
+        [request.task_id, request.material_id, ...reqScopeParams]
       );
       if (existingTm.length > 0) {
         const curPlanned = Number(existingTm[0].quantity || 0);
@@ -1136,11 +1151,13 @@ async function updateStatus(id, nextStatus, role, hrScope, userId) {
       } else {
         const rate = Number(request.estimated_rate || request.purchase_rate || 0);
         await pool.query(
-          `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, approved_additional_quantity, cost_per_unit, total_cost)
-           VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
-          [request.task_id, request.project_id, request.site_id, request.material_id, excessQty, rate, excessQty * rate]
+          `INSERT INTO task_materials (task_id, subtask_id, project_id, site_id, material_id, quantity, approved_additional_quantity, cost_per_unit, total_cost)
+           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+          [request.task_id, request.subtask_id || null, request.project_id, request.site_id, request.material_id, excessQty, rate, excessQty * rate]
         );
       }
+      // The subtask's own material budget follows its plan rows.
+      if (request.subtask_id) await taskModel.recalcSubtaskBudget(pool, request.subtask_id);
 
       // Recalculate task material_budget and total_budget
       const [[matSum]] = await pool.query(
@@ -1716,6 +1733,7 @@ async function toolFulfil(id, payload = {}, actor) {
       projectId: request.project_id || null,
       siteId: request.site_id || null,
       taskId: request.task_id || null,
+      subtaskId: request.subtask_id || null,
       startDate,
       expectedReturnDate: payload.expected_return_date || request.rental_end_date || null,
       chargePolicy,
@@ -1745,6 +1763,7 @@ async function toolFulfil(id, payload = {}, actor) {
         }
         await toolUnitService.transferUnit(unitId, {
           contractor_id: context.contractorId, project_id: context.projectId, site_id: context.siteId, task_id: context.taskId,
+          subtask_id: context.subtaskId,
           return_date: payload.return_date, start_date: payload.start_date, expected_return_date: context.expectedReturnDate,
           charge_policy: chargePolicy, usage_charge_rate: context.chargeRate, usage_charge_total: context.chargeTotal,
           usage_charge_days: context.chargeDays, unused_policy: context.unusedPolicy,
@@ -1774,6 +1793,7 @@ async function toolFulfil(id, payload = {}, actor) {
         toolId: request.tool_id, serialNumber: payload.serial_number, vendorId, ratePerDay: rate,
         rentalStartDate: payload.rental_start_date || startDate, expectedReturnDate: payload.expected_return_date || request.rental_end_date,
         health: payload.health, projectId: context.projectId, siteId: context.siteId, taskId: context.taskId,
+        subtaskId: context.subtaskId,
         procurementRequestId: id,
       }, actor);
       unitId = out.unitId;

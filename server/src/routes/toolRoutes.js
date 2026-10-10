@@ -99,7 +99,7 @@ router.post(
   adminOnly,
   [
     idParam('unitId'),
-    optId('contractor_id'), optId('project_id'), optId('site_id'), optId('task_id'),
+    optId('contractor_id'), optId('project_id'), optId('site_id'), optId('task_id'), optId('subtask_id'),
     optDate('start_date'), optDate('expected_return_date'),
     body('charge_policy').optional().isIn(CHARGE_POLICIES),
   ],
@@ -114,7 +114,7 @@ router.post(
   adminOnly,
   [
     idParam('unitId'),
-    optId('contractor_id'), optId('project_id'), optId('site_id'), optId('task_id'),
+    optId('contractor_id'), optId('project_id'), optId('site_id'), optId('task_id'), optId('subtask_id'),
     optDate('return_date'), optDate('start_date'), optDate('expected_return_date'),
     body('charge_policy').optional().isIn(CHARGE_POLICIES),
   ],

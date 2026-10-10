@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import {
   Layers,
   Plus,
@@ -23,6 +23,7 @@ import EmptyState from '../ui/EmptyState';
 import Alert from '../ui/Alert';
 import TaskFormModal from '../tasks/TaskFormModal';
 import TaskDetailModal from '../tasks/TaskDetailModal';
+import ProgressBar from '../ui/ProgressBar';
 import { tasksApi } from '../../api/tasksApi';
 import { formatCurrency, formatNumber, formatDate } from '../../utils/format';
 
@@ -51,6 +52,9 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [viewingTaskId, setViewingTaskId] = useState(null);
+  const [viewingTab, setViewingTab] = useState('overview');
+  // A just-created task opens on its Subtasks tab; the page reloads when that closes.
+  const reloadOnDetailClose = useRef(false);
   const [deletingId, setDeletingId] = useState(null);
   const [actionError, setActionError] = useState(null);
 
@@ -363,7 +367,10 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() => setViewingTaskId(task.id)}
+                            onClick={() => {
+                              setViewingTab('overview');
+                              setViewingTaskId(task.id);
+                            }}
                           >
                             <Eye className="h-3.5 w-3.5" />
                             View Detail
@@ -371,9 +378,17 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              setEditingTask(task);
-                              setIsCreateOpen(true);
+                            onClick={async () => {
+                              // Edit from the full task detail: list rows (site view) carry no plan lines,
+                              // and saving a partial plan would replace the real one.
+                              setActionError(null);
+                              try {
+                                const full = await tasksApi.detail(task.id);
+                                setEditingTask(full?.task || full);
+                                setIsCreateOpen(true);
+                              } catch (err) {
+                                setActionError(err.response?.data?.error?.message || err.message);
+                              }
                             }}
                           >
                             <Pencil className="h-3.5 w-3.5" />
@@ -408,6 +423,42 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                     />
                   </div>
                 </div>
+
+                {/* Subtasks: each with its own plan; already included in the task totals below */}
+                {(task.subtasks || []).length > 0 && (
+                  <div className="mt-4 rounded-lg border border-line bg-canvas/30 p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-ink">
+                        {task.subtasks.length} Subtask{task.subtasks.length === 1 ? '' : 's'}
+                        <span className="ml-1.5 font-normal text-ink-muted">· included in the task totals (not added twice)</span>
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => {
+                          setViewingTab('subtasks');
+                          setViewingTaskId(task.id);
+                        }}
+                      >
+                        Manage subtasks
+                      </Button>
+                    </div>
+                    <div className="space-y-1.5">
+                      {task.subtasks.map((st) => (
+                        <div key={st.id} className="grid grid-cols-1 items-center gap-2 text-xs sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto]">
+                          <span className="truncate font-medium text-ink">{st.name}</span>
+                          <ProgressBar value={st.progress} status={st.status} showLabel />
+                          <span className="tabular-nums text-ink-muted sm:text-right">
+                            {formatCurrency(st.actualCost)} / {formatCurrency(st.plannedBudget)}
+                            <span className={`ml-1.5 font-semibold ${st.remainingBudget < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                              ({st.remainingBudget < 0 ? 'over ' : ''}{formatCurrency(Math.abs(st.remainingBudget))}{st.remainingBudget < 0 ? '' : ' left'})
+                            </span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Task Budget Breakdown: 5 Categories (Materials, Tools, Labour, Misc, Total) */}
                 {(() => {
@@ -582,18 +633,23 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
       {/* Task Create / Edit Modal */}
       {isCreateOpen && (
         <TaskFormModal
+          isOpen
           projectId={projectId || project?.id}
           siteId={preselectedSiteId || (selectedSiteFilter !== 'all' ? selectedSiteFilter : null)}
           sites={sites}
-          taskToEdit={editingTask}
+          initialData={editingTask}
           onClose={() => {
             setIsCreateOpen(false);
             setEditingTask(null);
           }}
-          onSaved={() => {
+          onSaved={(created) => {
             setIsCreateOpen(false);
             setEditingTask(null);
-            if (onReload) onReload();
+            if (created?.id && !editingTask) {
+              reloadOnDetailClose.current = true;
+              setViewingTab('subtasks');
+              setViewingTaskId(created.id);
+            } else if (onReload) onReload();
           }}
         />
       )}
@@ -602,7 +658,14 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
       {viewingTaskId && (
         <TaskDetailModal
           taskId={viewingTaskId}
-          onClose={() => setViewingTaskId(null)}
+          initialTab={viewingTab}
+          onClose={() => {
+            setViewingTaskId(null);
+            if (reloadOnDetailClose.current) {
+              reloadOnDetailClose.current = false;
+              if (onReload) onReload();
+            }
+          }}
           onUpdated={() => {
             if (onReload) onReload();
           }}

@@ -159,7 +159,7 @@ function mapUnit(row, viewer = {}) {
 
 const ALLOC_SELECT = `
   SELECT
-    a.id, a.unit_id, a.tool_id, a.contractor_id, a.project_id, a.site_id, a.task_id,
+    a.id, a.unit_id, a.tool_id, a.contractor_id, a.project_id, a.site_id, a.task_id, a.subtask_id, ast.name AS subtask_name,
     a.requested_by, a.approved_by, a.procurement_request_id, a.previous_allocation_id, a.source_kind,
     DATE_FORMAT(a.start_date, '%Y-%m-%d') AS start_date,
     DATE_FORMAT(a.expected_return_date, '%Y-%m-%d') AS expected_return_date,
@@ -178,6 +178,7 @@ const ALLOC_SELECT = `
   LEFT JOIN projects p ON p.id = a.project_id
   LEFT JOIN sites s ON s.id = a.site_id
   LEFT JOIN project_tasks pt ON pt.id = a.task_id
+  LEFT JOIN task_subtasks ast ON ast.id = a.subtask_id
   LEFT JOIN users ru ON ru.id = a.requested_by
   LEFT JOIN users au ON au.id = a.approved_by
   LEFT JOIN procurement_requests pr ON pr.id = a.procurement_request_id
@@ -208,6 +209,7 @@ function mapAllocation(row) {
     project: row.project_id ? { id: row.project_id, name: row.project_name } : null,
     site: row.site_id ? { id: row.site_id, name: row.site_name } : null,
     task: row.task_id ? { id: row.task_id, name: row.task_name } : null,
+    subtask: row.subtask_id ? { id: row.subtask_id, name: row.subtask_name } : null,
     requestedBy: row.requested_by ? { id: row.requested_by, name: row.requested_by_name } : null,
     approvedBy: row.approved_by ? { id: row.approved_by, name: row.approved_by_name } : null,
     procurementRequest: row.procurement_request_id ? { id: row.procurement_request_id, requestNumber: row.request_number } : null,
@@ -236,12 +238,12 @@ function mapAllocation(row) {
 async function logEvent(conn, e) {
   await conn.query(
     `INSERT INTO tool_unit_history
-       (unit_id, event_type, from_contractor_id, to_contractor_id, project_id, site_id, task_id, allocation_id,
+       (unit_id, event_type, from_contractor_id, to_contractor_id, project_id, site_id, task_id, subtask_id, allocation_id,
         old_value, new_value, amount, details, actor_user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       e.unitId, e.type, e.fromContractorId ?? null, e.toContractorId ?? null, e.projectId ?? null,
-      e.siteId ?? null, e.taskId ?? null, e.allocationId ?? null, e.oldValue ?? null, e.newValue ?? null,
+      e.siteId ?? null, e.taskId ?? null, e.subtaskId ?? null, e.allocationId ?? null, e.oldValue ?? null, e.newValue ?? null,
       e.amount ?? null, e.details ? String(e.details).slice(0, 500) : null, e.actorId ?? null,
     ]
   );
@@ -450,7 +452,7 @@ async function listAllocations(query = {}, hrScope) {
 
 // ----------------------------------------------------------------- writes
 
-async function assertContext(conn, { contractorId, projectId, siteId, taskId }) {
+async function assertContext(conn, { contractorId, projectId, siteId, taskId, subtaskId }) {
   if (contractorId) {
     const [[c]] = await conn.query('SELECT id FROM contractors WHERE id = ?', [contractorId]);
     if (!c) throw ApiError.badRequest('Check the highlighted fields.', { contractor_id: 'That contractor does not exist.' });
@@ -474,6 +476,12 @@ async function assertContext(conn, { contractorId, projectId, siteId, taskId }) 
     }
     if (siteId && t.site_id && Number(t.site_id) !== Number(siteId)) {
       throw ApiError.badRequest('Check the highlighted fields.', { task_id: 'That task does not belong to the selected site.' });
+    }
+  }
+  if (subtaskId) {
+    const [[st]] = await conn.query('SELECT id, task_id FROM task_subtasks WHERE id = ?', [subtaskId]);
+    if (!st || !taskId || Number(st.task_id) !== Number(taskId)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { subtask_id: 'That subtask does not belong to the selected task.' });
     }
   }
 }
@@ -542,12 +550,13 @@ async function allocateInTx(conn, spec, actor) {
 
   const [res] = await conn.query(
     `INSERT INTO tool_allocations
-       (unit_id, tool_id, contractor_id, project_id, site_id, task_id, requested_by, approved_by,
+       (unit_id, tool_id, contractor_id, project_id, site_id, task_id, subtask_id, requested_by, approved_by,
         procurement_request_id, previous_allocation_id, source_kind, start_date, expected_return_date, status,
         charge_policy, approved_charge_total, approved_charge_days, daily_charge_rate, unused_policy)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
     [
       unit.id, unit.tool_id, spec.contractorId || null, spec.projectId || null, spec.siteId || null, spec.taskId || null,
+      spec.taskId ? (spec.subtaskId || null) : null,
       spec.requestedBy || null, actor?.id || null, spec.procurementRequestId || null, spec.previousAllocationId || null,
       unit.ownership_type === 'rented' ? 'rented' : 'owned', startDate, expected,
       charge.policy, charge.total, charge.days, charge.rate, charge.unusedPolicy,
@@ -562,7 +571,7 @@ async function allocateInTx(conn, spec, actor) {
   );
   await logEvent(conn, {
     unitId: unit.id, type: 'allocated', fromContractorId: spec.fromContractorId || null, toContractorId: spec.contractorId || null,
-    projectId: spec.projectId, siteId: spec.siteId, taskId: spec.taskId, allocationId: res.insertId,
+    projectId: spec.projectId, siteId: spec.siteId, taskId: spec.taskId, subtaskId: spec.subtaskId, allocationId: res.insertId,
     newValue: startDate, details: charge.policy !== 'none' ? `Approved charge: ${charge.policy}` : 'No usage charge', actorId: actor?.id,
   });
   return res.insertId;
@@ -615,11 +624,11 @@ async function closeAllocationInTx(conn, allocationId, opts, actor) {
   if (bookedAmount > 0 && a.project_id) {
     const [ex] = await conn.query(
       `INSERT INTO expenses
-         (expense_number, project_id, site_id, task_id, contractor_id, category, description, amount, expense_date,
+         (expense_number, project_id, site_id, task_id, subtask_id, contractor_id, category, description, amount, expense_date,
           paid_by, party_name, payment_method, reference, status, notes, created_by, source_type, source_id, tool_unit_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'other', ?, 'approved', ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'other', ?, 'approved', ?, ?, ?, ?, ?)`,
       [
-        `EXP-TU-${a.id}`, a.project_id, a.site_id, a.task_id, a.contractor_id,
+        `EXP-TU-${a.id}`, a.project_id, a.site_id, a.task_id, a.subtask_id || null, a.contractor_id,
         isRental ? 'Equipment Rental' : 'Machine / Tool',
         `${isRental ? 'Rental allocation' : 'Usage charge'} - ${unit.serial_number} - ${calc.usageDays} day(s)`.slice(0, 255),
         bookedAmount, returnedDate,
@@ -659,7 +668,7 @@ async function closeAllocationInTx(conn, allocationId, opts, actor) {
   );
   await logEvent(conn, {
     unitId: unit.id, type: 'returned', fromContractorId: a.contractor_id, projectId: a.project_id, siteId: a.site_id,
-    taskId: a.task_id, allocationId: a.id, oldValue: a.start_d, newValue: returnedDate,
+    taskId: a.task_id, subtaskId: a.subtask_id || null, allocationId: a.id, oldValue: a.start_d, newValue: returnedDate,
     amount: bookedAmount || calc.usageCharge, actorId: actor?.id,
     details: `${calc.usageDays} day(s) used; ${isRental ? `rental allocated ${calc.rentalCostAllocated}` : `usage charge ${calc.usageCharge}`}${calc.unbilledBalance ? `; unbilled ${calc.unbilledBalance}` : ''}${opts.notes ? `; ${opts.notes}` : ''}`,
   });
@@ -820,6 +829,7 @@ async function allocate(payload, actor) {
     projectId: payload.project_id ? Number(payload.project_id) : null,
     siteId: payload.site_id ? Number(payload.site_id) : null,
     taskId: payload.task_id ? Number(payload.task_id) : null,
+    subtaskId: payload.subtask_id ? Number(payload.subtask_id) : null,
     startDate: payload.start_date,
     expectedReturnDate: payload.expected_return_date,
     chargePolicy: payload.charge_policy,
@@ -925,6 +935,7 @@ async function transferUnit(unitId, payload, actor, conn = null) {
       projectId: payload.project_id ? Number(payload.project_id) : null,
       siteId: payload.site_id ? Number(payload.site_id) : null,
       taskId: payload.task_id ? Number(payload.task_id) : null,
+      subtaskId: payload.subtask_id ? Number(payload.subtask_id) : null,
       startDate: newStart,
       expectedReturnDate: payload.expected_return_date,
       chargePolicy: payload.charge_policy,
@@ -940,7 +951,7 @@ async function transferUnit(unitId, payload, actor, conn = null) {
     await logEvent(c, {
       unitId, type: 'transferred', fromContractorId: current.contractor_id, toContractorId: payload.contractor_id || null,
       projectId: payload.project_id || null, siteId: payload.site_id || null, taskId: payload.task_id || null,
-      allocationId: nid, details: `Previous holder used ${closed.calc.usageDays} day(s), charge ${closed.calc.usageCharge}`, actorId: actor?.id,
+      subtaskId: payload.subtask_id || null, allocationId: nid, details: `Previous holder used ${closed.calc.usageDays} day(s), charge ${closed.calc.usageCharge}`, actorId: actor?.id,
     });
     return nid;
   }, conn);
@@ -971,14 +982,15 @@ async function registerRentalInTx(c, spec, actor) {
   const [res] = await c.query(
     `INSERT INTO tool_rentals
        (unit_id, tool_id, vendor_id, rate_per_day, rental_start_date, expected_return_date, planned_days, planned_cost,
-        project_id, site_id, task_id, procurement_request_id, status, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+        project_id, site_id, task_id, subtask_id, procurement_request_id, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
     [unitId, spec.toolId, spec.vendorId, rate, startDate, expected, plannedDays, plannedCost,
-      spec.projectId || null, spec.siteId || null, spec.taskId || null, spec.procurementRequestId || null, actor?.id || null]
+      spec.projectId || null, spec.siteId || null, spec.taskId || null, spec.taskId ? (spec.subtaskId || null) : null,
+      spec.procurementRequestId || null, actor?.id || null]
   );
   await logEvent(c, {
     unitId, type: 'rental_started', newValue: String(rate), amount: plannedCost || null,
-    projectId: spec.projectId, siteId: spec.siteId, taskId: spec.taskId,
+    projectId: spec.projectId, siteId: spec.siteId, taskId: spec.taskId, subtaskId: spec.subtaskId,
     details: `Rate ${rate}/day from ${startDate}${expected ? ` to ${expected} (${plannedDays} day(s), ${plannedCost})` : ''}`, actorId: actor?.id,
   });
   return { unitId, rentalId: res.insertId, plannedCost, plannedDays };

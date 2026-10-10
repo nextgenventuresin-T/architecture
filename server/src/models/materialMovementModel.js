@@ -36,6 +36,7 @@ const LIST_SELECT = `
     pr.estimated_rate AS procurement_estimated_rate,
     pr.total_amount AS procurement_total_amount,
     pr.task_id AS procurement_task_id,
+    pr.subtask_id AS procurement_subtask_id, pst.name AS procurement_subtask_name,
     pt.name AS procurement_task_name,
     pr.procurement_kind
   FROM material_movements mm
@@ -51,6 +52,7 @@ const LIST_SELECT = `
   LEFT JOIN users ru ON ru.id = mm.received_by
   LEFT JOIN procurement_requests pr ON pr.id = mm.procurement_request_id
   LEFT JOIN project_tasks pt ON pt.id = pr.task_id
+  LEFT JOIN task_subtasks pst ON pst.id = pr.subtask_id
 `;
 
 function buildFilters({ status, materialId, contractorId, userId, incomingForContractorId, direction, pmProjectIds }) {

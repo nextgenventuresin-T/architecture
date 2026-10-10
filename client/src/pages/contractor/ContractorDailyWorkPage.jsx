@@ -61,6 +61,8 @@ export default function ContractorDailyWorkPage() {
   const [projectId, setProjectId] = useState(initialProjectId || '');
   const [siteId, setSiteId] = useState(initialSiteId || '');
   const [taskId, setTaskId] = useState(initialTaskId || '');
+  // Optional subtask under the selected main task ('' = the main task itself).
+  const [subtaskId, setSubtaskId] = useState(searchParams.get('subtaskId') || '');
   const [workDate, setWorkDate] = useState(todayISO());
   const [workDone, setWorkDone] = useState('');
   const [progressPercentage, setProgressPercentage] = useState(50);
@@ -123,8 +125,8 @@ export default function ContractorDailyWorkPage() {
     setSelectedMaterialId('');
     setQuantityUsed('');
     if (!taskId) { setTaskInventory([]); return; }
-    dailyWorkApi.taskMaterials(taskId).then(setTaskInventory).catch(() => setTaskInventory([]));
-  }, [taskId]);
+    dailyWorkApi.taskMaterials(taskId, undefined, subtaskId || undefined).then(setTaskInventory).catch(() => setTaskInventory([]));
+  }, [taskId, subtaskId]);
 
   const loadInventory = useCallback(() => {
     financeApi
@@ -135,7 +137,7 @@ export default function ContractorDailyWorkPage() {
 
   useEffect(() => {
     loadInventory();
-    if (taskId) dailyWorkApi.taskMaterials(taskId).then(setTaskInventory).catch(() => {});
+    if (taskId) dailyWorkApi.taskMaterials(taskId, undefined, subtaskId || undefined).then(setTaskInventory).catch(() => {});
   }, [loadInventory]);
 
   // Load workforce lookup for adding any other available worker
@@ -243,9 +245,14 @@ export default function ContractorDailyWorkPage() {
       .then((taskDetail) => {
         if (!taskDetail) return;
         setCurrentTaskDetail(taskDetail);
-        const assigned = (taskDetail.assignedWorkers && taskDetail.assignedWorkers.length > 0)
-          ? taskDetail.assignedWorkers
-          : (taskDetail.labour || []);
+        if (subtaskId && !(taskDetail.subtasks || []).some((st) => String(st.id) === String(subtaskId))) {
+          setSubtaskId('');
+        }
+        const allAssigned = taskDetail.assignedWorkers || [];
+        const subAssigned = subtaskId ? allAssigned.filter((w) => String(w.subtaskId) === String(subtaskId)) : [];
+        const assigned = subAssigned.length > 0
+          ? subAssigned
+          : (allAssigned.length > 0 ? allAssigned : (taskDetail.labour || []));
         setTaskAssignedLabour(assigned);
 
         // Pre-populate workers list from actual assigned workers
@@ -271,10 +278,11 @@ export default function ContractorDailyWorkPage() {
       .catch((err) => {
         console.error('Error fetching task details for labour:', err);
       });
-  }, [taskId]);
+  }, [taskId, subtaskId]);
 
   const handleTaskChange = (selectedId) => {
     setTaskId(selectedId);
+    setSubtaskId('');
     const chosen = tasks.find((t) => String(t.id) === String(selectedId));
     if (chosen) {
       setProgressPercentage(chosen.progress || 50);
@@ -417,8 +425,17 @@ export default function ContractorDailyWorkPage() {
   const currentActual = Number(taskBudgetUtilization?.total?.actual || 0);
   const approvedBudget = Number(taskBudgetUtilization?.total?.effectiveBudget || Number(currentTaskDetail?.total_budget || 0));
   const projectedTotal = Number((currentActual + liveUpdateTotal).toFixed(2));
-  const isOverBudget = approvedBudget > 0 && projectedTotal > approvedBudget;
-  const excessAmount = Math.max(0, Number((projectedTotal - approvedBudget).toFixed(2)));
+  const taskSubtasks = currentTaskDetail?.subtasks || [];
+  const selectedSubtask = taskSubtasks.find((st) => String(st.id) === String(subtaskId)) || null;
+  const subApproved = selectedSubtask ? Number(selectedSubtask.plannedBudget || 0) : 0;
+  const subProjected = selectedSubtask ? Number((Number(selectedSubtask.actualCost || 0) + liveUpdateTotal).toFixed(2)) : 0;
+  const isSubOver = Boolean(selectedSubtask) && liveUpdateTotal > 0 && subProjected > subApproved;
+  const isTaskOver = approvedBudget > 0 && projectedTotal > approvedBudget;
+  const isOverBudget = isTaskOver || isSubOver;
+  const excessAmount = Math.max(
+    isTaskOver ? Number((projectedTotal - approvedBudget).toFixed(2)) : 0,
+    isSubOver ? Number((subProjected - subApproved).toFixed(2)) : 0
+  );
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -442,7 +459,7 @@ export default function ContractorDailyWorkPage() {
     }
 
     if (isOverBudget && !excessReason.trim()) {
-      setError(new Error(`This update will exceed the approved task budget by ₹${excessAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Please provide a mandatory excess budget justification/reason below.`));
+      setError(new Error(`This update will exceed the approved ${isSubOver && !isTaskOver ? 'subtask' : 'task'} budget by ₹${excessAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Please provide a mandatory excess budget justification/reason below.`));
       setSubmitting(false);
       return;
     }
@@ -466,6 +483,7 @@ export default function ContractorDailyWorkPage() {
       formData.append('project_id', projectId);
       if (siteId) formData.append('site_id', siteId);
       formData.append('task_id', taskId);
+      if (subtaskId) formData.append('subtask_id', subtaskId);
       formData.append('work_date', workDate);
       formData.append('work_done', workDone.trim());
       formData.append('progress_percentage', progressPercentage);
@@ -542,7 +560,8 @@ export default function ContractorDailyWorkPage() {
       setPreviewUrls([]);
       loadUpdates();
       loadInventory();
-      if (taskId) dailyWorkApi.taskMaterials(taskId).then(setTaskInventory).catch(() => {});
+      if (taskId) dailyWorkApi.taskMaterials(taskId, undefined, subtaskId || undefined).then(setTaskInventory).catch(() => {});
+      if (taskId) tasksApi.detail(taskId).then((d) => d && setCurrentTaskDetail(d)).catch(() => {});
 
       // Switch to table view to see the new record
       setActiveTab('table');
@@ -564,7 +583,7 @@ export default function ContractorDailyWorkPage() {
       if (filterDate && u.workDate !== filterDate) return false;
       if (tableSearch.trim()) {
         const q = tableSearch.toLowerCase();
-        const matchTask = (u.taskName || u.phaseTitle || '').toLowerCase().includes(q);
+        const matchTask = `${u.taskName || u.phaseTitle || ''} ${u.subtaskName || ''}`.toLowerCase().includes(q);
         const matchWork = (u.workDone || '').toLowerCase().includes(q);
         const matchSite = (u.siteName || '').toLowerCase().includes(q);
         const matchPrj = (u.projectName || u.projectCode || '').toLowerCase().includes(q);
@@ -598,7 +617,7 @@ export default function ContractorDailyWorkPage() {
       `"${u.projectCode || ''}"`,
       `"${(u.projectName || '').replace(/"/g, '""')}"`,
       `"${(u.siteName || '').replace(/"/g, '""')}"`,
-      `"${(u.taskName || u.phaseTitle || '').replace(/"/g, '""')}"`,
+      `"${`${u.taskName || u.phaseTitle || ''}${u.subtaskName ? ` > ${u.subtaskName}` : ''}`.replace(/"/g, '""')}"`,
       `"${u.workerCount || 0}"`,
       `"${(u.workDone || '').replace(/"/g, '""')}"`,
       `"${u.progressPercentage ?? ''}"`,
@@ -883,6 +902,9 @@ export default function ContractorDailyWorkPage() {
                               <div className="font-semibold text-ink flex items-center gap-1.5">
                                 <span>{u.taskName || u.phaseTitle || 'Task'}</span>
                               </div>
+                              {u.subtaskName && (
+                                <span className="block text-[11px] font-medium text-brand-700">› {u.subtaskName}</span>
+                              )}
                               <span className="text-[10px] text-ink-subtle">
                                 Status: {u.taskStatus || u.workStatus}
                               </span>
@@ -1031,6 +1053,31 @@ export default function ContractorDailyWorkPage() {
                     </p>
                   )}
                 </div>
+
+                {taskSubtasks.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-medium text-ink mb-1.5">Subtask</label>
+                    <select
+                      value={subtaskId}
+                      onChange={(e) => {
+                        setSubtaskId(e.target.value);
+                        const chosen = taskSubtasks.find((st) => String(st.id) === e.target.value);
+                        if (chosen) setProgressPercentage(chosen.progress || 0);
+                      }}
+                      className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                    >
+                      <option value="">Main task (not a specific subtask)</option>
+                      {taskSubtasks.map((st) => (
+                        <option key={st.id} value={st.id}>
+                          {st.name} — {st.progress}% ({st.status})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-ink-muted">
+                      Material, labour, machine and misc costs and progress below are booked to the chosen subtask.
+                    </p>
+                  </div>
+                )}
 
                 {/* Date, Progress & Status */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -1674,7 +1721,9 @@ export default function ContractorDailyWorkPage() {
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-2">
                       <div className="flex items-center gap-2">
                         <DollarSign className="h-4 w-4 text-brand-700" />
-                        <span className="text-xs font-semibold text-ink">Task Budget & Cost Impact</span>
+                        <span className="text-xs font-semibold text-ink">
+                          {selectedSubtask ? `Subtask Budget & Cost Impact — ${selectedSubtask.name}` : 'Task Budget & Cost Impact'}
+                        </span>
                       </div>
                       <span className="text-[11px] text-ink-subtle">
                         Live breakdown based on today's logged work
@@ -1684,11 +1733,14 @@ export default function ContractorDailyWorkPage() {
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 text-xs">
                       <div className="rounded-lg border border-line bg-white p-2.5">
                         <span className="text-[10px] uppercase font-medium text-ink-subtle">Approved Budget</span>
-                        <p className="mt-0.5 font-bold text-ink">{formatCurrency(approvedBudget)}</p>
+                        <p className="mt-0.5 font-bold text-ink">{formatCurrency(selectedSubtask ? subApproved : approvedBudget)}</p>
+                        {selectedSubtask && (
+                          <p className="text-[10px] text-ink-subtle">Main task: {formatCurrency(approvedBudget)}</p>
+                        )}
                       </div>
                       <div className="rounded-lg border border-line bg-white p-2.5">
                         <span className="text-[10px] uppercase font-medium text-ink-subtle">Previous Spent</span>
-                        <p className="mt-0.5 font-bold text-ink-muted">{formatCurrency(currentActual)}</p>
+                        <p className="mt-0.5 font-bold text-ink-muted">{formatCurrency(selectedSubtask ? Number(selectedSubtask.actualCost || 0) : currentActual)}</p>
                       </div>
                       <div className="rounded-lg border border-line bg-white p-2.5">
                         <span className="text-[10px] uppercase font-medium text-brand-700">Today's New Cost</span>

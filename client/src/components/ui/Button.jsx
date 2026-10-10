@@ -9,6 +9,8 @@ const VARIANTS = {
 };
 
 const SIZES = {
+  xs: 'h-7 px-2.5 text-xs',
+  sm: 'h-9 px-3 text-sm',
   md: 'h-11 px-4 text-sm',
   lg: 'h-12 px-5 text-[0.95rem]',
 };
@@ -42,7 +44,8 @@ export default function Button({
       {...props}
     >
       {isLoading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-      <span>{isLoading && loadingText ? loadingText : children}</span>
+      {/* inline-flex keeps an icon beside its label instead of on its own line */}
+      <span className="inline-flex items-center gap-1.5">{isLoading && loadingText ? loadingText : children}</span>
     </button>
   );
 }

@@ -30,7 +30,7 @@ import { projectsApi } from '../../../api/projectsApi';
 import { hrApi } from '../../../api/hrApi';
 import { toApiError } from '../../../api/axiosClient';
 import { PROJECT_STATUSES, PROJECT_TYPES, toOptions } from '../../../utils/projectOptions';
-import { formatCurrency, formatNumber } from '../../../utils/format';
+import { formatCurrency, formatNumber, toDateInputValue } from '../../../utils/format';
 
 function calcWorkingDays(start, end) {
   if (!start || !end) return 1;
@@ -62,7 +62,8 @@ const EMPTY = {
   status: 'on-track',
 };
 
-const toDateInput = (value) => (value ? String(value).slice(0, 10) : '');
+// Timezone-safe: slicing the ISO timestamp showed (and re-saved) the previous day.
+const toDateInput = (value) => toDateInputValue(value);
 
 function calculateDurationMonths(startDate, completionDate) {
   if (!startDate || !completionDate) return 0;
@@ -94,6 +95,98 @@ function createEmptyTask(defaultSiteId = '', durationDays = 14) {
     tools: [],
     labour: [],
     misc: [],
+    subtasks: [],
+  };
+}
+
+/** A subtask has the same planning (materials, machines, labour, misc) as a task. */
+function createEmptySubtask(parent) {
+  return {
+    tempId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: '',
+    description: '',
+    status: 'on-track',
+    startDate: parent?.startDate || '',
+    endDate: parent?.endDate || '',
+    durationDays: Number(parent?.durationDays || 14),
+    materials: [],
+    tools: [],
+    labour: [],
+    misc: [],
+  };
+}
+
+/**
+ * A main task is a heading: its budget is planned in its subtasks. Only an older
+ * task that already carries its own (direct) plan lines still shows them.
+ */
+function hasDirectPlan(t) {
+  return ['materials', 'tools', 'labour', 'misc'].some((k) => (t[k] || []).length > 0);
+}
+
+/** Calendar days a heading task spans across its subtasks (0 when no dates yet). */
+function subtaskSpanDays(t) {
+  const starts = (t.subtasks || []).map((st) => st.startDate).filter(Boolean).sort();
+  const ends = (t.subtasks || []).map((st) => st.endDate).filter(Boolean).sort();
+  if (!starts.length || !ends.length) return 0;
+  const d = Math.round((new Date(ends[ends.length - 1]) - new Date(starts[0])) / 86400000) + 1;
+  return d > 0 ? d : 0;
+}
+
+/** Inclusive days between two date inputs, or null. */
+function daysBetween(start, end) {
+  if (!start || !end) return null;
+  const d = Math.round((new Date(end) - new Date(start)) / 86400000) + 1;
+  return d > 0 ? d : null;
+}
+
+/** Planned totals of one plan (a task's direct lines, or one subtask). */
+function calcPlan(t) {
+  const matTotal = (t.materials || []).reduce((sum, m) => sum + Number(m.quantity || 0) * Number(m.costPerUnit || 0), 0);
+  const toolTotal = (t.tools || []).reduce((sum, tl) => sum + machineLineTotal(tl), 0);
+  const labourTotal = (t.labour || []).reduce((sum, l) => {
+    const days = Number(l.workingDays ?? t.durationDays ?? 0);
+    return sum + Number(l.workerCount ?? 1) * Number(l.dailyWage ?? 0) * days;
+  }, 0);
+  const miscTotal = (t.misc || []).reduce((sum, mc) => sum + Number(mc.amount || 0), 0);
+  return { matTotal, toolTotal, labourTotal, miscTotal, total: matTotal + toolTotal + labourTotal + miscTotal };
+}
+
+/** Saved plan lines (API shape) -> form rows, for a subtask loaded from the server. */
+function toFormPlan(src, fallbackStart, fallbackEnd) {
+  return {
+    materials: (src.materials || []).map((m) => ({
+      materialId: m.materialId || m.material_id || '',
+      quantity: Number(m.quantity || 0),
+      costPerUnit: Number(m.costPerUnit ?? m.cost_per_unit ?? 0),
+    })),
+    tools: (src.tools || []).map((tl) => ({
+      toolId: tl.toolId || tl.tool_id || '',
+      toolName: tl.toolName || tl.tool_name || '',
+      rentalType: tl.rentalType || tl.rental_type || 'Rent',
+      quantity: Number(tl.quantity || 1),
+      cost: Number(tl.cost || 0),
+      workingDays: Number(tl.workingDays || tl.working_days || 1),
+    })),
+    labour: (src.labour || []).map((l) => {
+      const isCompany = (l.labourType || l.labour_type || l.workerType || '').toLowerCase().includes('company');
+      const lStart = toDateInputValue(l.startDate || l.start_date) || fallbackStart;
+      const lEnd = toDateInputValue(l.endDate || l.end_date) || fallbackEnd;
+      return {
+        workerId: l.workerId || l.worker_id || null,
+        workerType: l.workerType || l.worker_type || (isCompany ? 'company_labour' : 'labour'),
+        labourName: l.labourName || l.labour_name || '',
+        labourType: isCompany ? 'Company Labour' : 'Labour',
+        skillTrade: l.skillTrade || l.skill_trade || '',
+        startDate: lStart,
+        endDate: lEnd,
+        workerCount: 1,
+        dailyWage: isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0),
+        workingDays: Number(l.workingDays ?? l.working_days ?? calcWorkingDays(lStart, lEnd)),
+        remarks: l.remarks || '',
+      };
+    }),
+    misc: (src.misc || []).map((mc) => ({ description: mc.description || '', amount: Number(mc.amount || 0) })),
   };
 }
 
@@ -188,6 +281,25 @@ export default function ProjectFormPage({ mode = 'create' }) {
           startDate: toDateInput(t.startDate),
           endDate: toDateInput(t.endDate),
           durationDays: Number(t.durationDays || 0) || 14,
+          // Subtasks are planned in Task Planning; their budgets stay part of this task.
+          subtaskCount: Number(t.subtaskCount || 0),
+          subtaskBudget: Number(t.subtaskBudgetTotal || 0),
+          subtasks: (t.subtasks || []).map((st) => {
+            const sStart = toDateInput(st.startDate);
+            const sEnd = toDateInput(st.endDate);
+            return {
+              id: st.id,
+              tempId: `sub-${st.id}`,
+              name: st.name || '',
+              description: st.description || '',
+              status: st.status || 'on-track',
+              progress: Number(st.progress || 0),
+              startDate: sStart,
+              endDate: sEnd,
+              durationDays: Number(st.durationDays || 0) || 14,
+              ...toFormPlan(st, sStart, sEnd),
+            };
+          }),
           materials: (t.materials || []).map((m) => ({
             materialId: m.materialId || m.material_id || '',
             quantity: Number(m.quantity || 0),
@@ -203,8 +315,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
           })),
           labour: (t.labour || []).map((l) => {
             const isCompany = (l.labourType || l.labour_type || l.worker_type || '').toLowerCase().includes('company');
-            const lStart = l.start_date || l.startDate ? (l.start_date || l.startDate).slice(0, 10) : (t.start_date ? t.start_date.slice(0, 10) : '');
-            const lEnd = l.end_date || l.endDate ? (l.end_date || l.endDate).slice(0, 10) : (t.end_date ? t.end_date.slice(0, 10) : '');
+            const lStart = toDateInputValue(l.start_date || l.startDate) || toDateInputValue(t.startDate || t.start_date);
+            const lEnd = toDateInputValue(l.end_date || l.endDate) || toDateInputValue(t.endDate || t.end_date);
             const days = Number(l.workingDays ?? l.working_days ?? calcWorkingDays(lStart, lEnd));
             const wage = isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0);
             return {
@@ -294,720 +406,12 @@ export default function ProjectFormPage({ mode = 'create' }) {
     );
   };
 
-  const addTask = () => {
-    const defaultSiteId = availableSites[0]?.id ? String(availableSites[0].id) : '';
-    const newTask = createEmptyTask(defaultSiteId);
-    setTasks((prev) => [...prev, newTask]);
-    setExpandedTasks((prev) => ({ ...prev, [newTask.tempId]: true }));
-  };
-
-  const removeTask = (tempId) => {
-    setTasks((prev) => prev.filter((t) => t.tempId !== tempId));
-  };
-
-  // Duration
-  const durationMonths = calculateDurationMonths(values.start_date, values.expected_completion);
-
-  // Live Task Calculations
-  const taskCalculations = tasks.map((t) => {
-    const matTotal = (t.materials || []).reduce(
-      (sum, m) => sum + (Number(m.quantity || 0) * Number(m.costPerUnit || 0)),
-      0
-    );
-    const toolTotal = (t.tools || []).reduce(
-      (sum, tl) => sum + machineLineTotal(tl),
-      0
-    );
-    const labourTotal = (t.labour || []).reduce((sum, l) => {
-      const workerCount = Number(l.workerCount ?? 1);
-      const dailyWage = Number(l.dailyWage ?? 0);
-      const days = Number(l.workingDays ?? t.durationDays ?? 0);
-      return sum + (workerCount * dailyWage * days);
-    }, 0);
-    const miscTotal = (t.misc || []).reduce((sum, mc) => sum + Number(mc.amount || 0), 0);
-    const taskTotal = matTotal + toolTotal + labourTotal + miscTotal;
-
-    return {
-      tempId: t.tempId,
-      id: t.id,
-      name: t.name,
-      siteId: t.siteId,
-      durationDays: Number(t.durationDays || 0),
-      matTotal,
-      toolTotal,
-      labourTotal,
-      miscTotal,
-      taskTotal,
-    };
-  });
-
-  const totalProjectBudget = taskCalculations.reduce((sum, c) => sum + c.taskTotal, 0);
-
-  // Documents
-  const handleFileChange = (e) => {
-    if (e.target.files?.length) {
-      setNewFiles((prev) => [...prev, ...Array.from(e.target.files)]);
-    }
-  };
-
-  const removeNewFile = (idx) => {
-    setNewFiles((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const handleDeleteExistingDoc = async (docId) => {
-    if (!window.confirm('Are you sure you want to remove this document?')) return;
-    try {
-      await projectsApi.deleteDocument(id, docId);
-      setExistingDocs((prev) => prev.filter((d) => d.id !== docId));
-    } catch (err) {
-      alert(err.message || 'Could not delete document.');
-    }
-  };
-
-  // Validation
-  function validate() {
-    const errors = {};
-    if (!values.name.trim()) errors.name = 'Enter a project name.';
-    if (!values.location.trim()) errors.location = 'Enter the project location.';
-    if (!values.start_date) errors.start_date = 'Enter a start date.';
-    if (!values.expected_completion) errors.expected_completion = 'Enter the expected completion date.';
-    if (
-      values.start_date &&
-      values.expected_completion &&
-      new Date(values.expected_completion) < new Date(values.start_date)
-    ) {
-      errors.expected_completion = 'Completion date cannot fall before the start date.';
-    }
-    if (tasks.some((t) => !t.name || !t.name.trim())) {
-      errors.tasks = 'Please provide a name for all tasks, or remove empty task rows.';
-    }
-    return errors;
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const errors = validate();
-    if (Object.keys(errors).length) {
-      setFieldErrors(errors);
-      return;
-    }
-
-    setIsSaving(true);
-    setFormError(null);
-
-    const formattedTasks = tasks
-      .filter((t) => t.name && t.name.trim())
-      .map((t) => {
-        const durationDays = Number(t.durationDays || 0);
-        return {
-          id: t.id ? Number(t.id) : undefined,
-          name: t.name.trim(),
-          siteId: t.siteId ? Number(t.siteId) : null,
-          site_id: t.siteId ? Number(t.siteId) : null,
-          description: t.description ? t.description.trim() : null,
-          status: t.status || 'on-track',
-          startDate: t.startDate || null,
-          start_date: t.startDate || null,
-          endDate: t.endDate || null,
-          end_date: t.endDate || null,
-          durationDays,
-          duration_days: durationDays,
-          materials: (t.materials || [])
-            .filter((m) => m.materialId)
-            .map((m) => ({
-              materialId: Number(m.materialId),
-              material_id: Number(m.materialId),
-              quantity: Number(m.quantity || 0),
-              costPerUnit: Number(m.costPerUnit || 0),
-              cost_per_unit: Number(m.costPerUnit || 0),
-              totalCost: Number(m.quantity || 0) * Number(m.costPerUnit || 0),
-            })),
-          tools: (t.tools || [])
-            .filter((tl) => (tl.toolName || '').trim() || tl.toolId)
-            .map((tl) => ({
-              toolId: tl.toolId ? Number(tl.toolId) : null,
-              tool_id: tl.toolId ? Number(tl.toolId) : null,
-              toolName: (tl.toolName || '').trim(),
-              tool_name: (tl.toolName || '').trim(),
-              rentalType: tl.rentalType || 'Rent',
-              rental_type: tl.rentalType || 'Rent',
-              quantity: Number(tl.quantity || 1),
-              cost: Number(tl.cost || 0),
-              workingDays: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
-              working_days: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
-              totalCost: machineLineTotal(tl),
-            })),
-          labour: (t.labour || []).map((l) => {
-            const isCompany = l.labourType === 'Company Labour' || l.labourType === 'Company Employee' || l.workerType === 'company_labour';
-            const dw = isCompany ? 0 : Number(l.dailyWage || 0);
-            const wd = Number(l.workingDays || calcWorkingDays(l.startDate, l.endDate));
-            return {
-              workerId: l.workerId || null,
-              worker_id: l.workerId || null,
-              workerType: l.workerType || (isCompany ? 'company_labour' : 'labour'),
-              worker_type: l.workerType || (isCompany ? 'company_labour' : 'labour'),
-              labourName: (l.labourName || '').trim() || null,
-              labour_name: (l.labourName || '').trim() || null,
-              labourType: l.labourType || 'Labour',
-              labour_type: l.labourType || 'Labour',
-              skillTrade: l.skillTrade || null,
-              startDate: l.startDate || null,
-              start_date: l.startDate || null,
-              endDate: l.endDate || null,
-              end_date: l.endDate || null,
-              workerCount: 1,
-              worker_count: 1,
-              dailyWage: dw,
-              daily_wage: dw,
-              workingDays: wd,
-              working_days: wd,
-              totalCost: isCompany ? 0 : dw * wd,
-              total_cost: isCompany ? 0 : dw * wd,
-              remarks: (l.remarks || '').trim() || null,
-            };
-          }),
-          misc: (t.misc || [])
-            .filter((mc) => (mc.description || '').trim())
-            .map((mc) => ({
-              description: (mc.description || '').trim(),
-              amount: Number(mc.amount || 0),
-            })),
-        };
-      });
-
-    const payload = { ...values, tasks: formattedTasks };
-    for (const key of ['client_id', 'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id']) {
-      payload[key] = payload[key] === '' ? null : Number(payload[key]);
-    }
-
-    if (values.client_contract_value !== '' && values.client_contract_value != null) {
-      payload.client_contract_value = Number(values.client_contract_value);
-      payload.clientContractValue = Number(values.client_contract_value);
-    } else {
-      payload.client_contract_value = totalProjectBudget > 0 ? totalProjectBudget : null;
-      payload.clientContractValue = totalProjectBudget > 0 ? totalProjectBudget : null;
-    }
-
-    try {
-      const saved = isEdit
-        ? await projectsApi.update(id, payload)
-        : await projectsApi.create(payload);
-
-      // Upload newly attached documents
-      if (newFiles.length > 0) {
-        const formData = new FormData();
-        newFiles.forEach((file) => formData.append('documents', file));
-        await projectsApi.uploadDocuments(saved.id, formData);
-      }
-
-      navigate(`/admin/projects/${saved.id}`, {
-        replace: true,
-        state: { flash: isEdit ? 'Project updated with task budgets.' : 'Project created with task budgets.' },
-      });
-    } catch (caught) {
-      const apiError = toApiError(caught);
-      if (apiError.details) setFieldErrors(apiError.details);
-      setFormError(apiError);
-      setIsSaving(false);
-    }
-  }
-
-  const isLoading = loadingLookups || (isEdit && loadingProject);
-  const cancelTo = isEdit ? `/admin/projects/${id}` : '/admin/projects';
-
-  if (loadError) {
-    return (
-      <>
-        <PageHeader title="Edit project" breadcrumbs={[{ label: 'Dashboard', to: '/admin' }, { label: 'Projects', to: '/admin/projects' }, { label: 'Edit' }]} showBack />
-        <Alert tone="error" title="Could not load this project">{loadError.message}</Alert>
-      </>
-    );
-  }
-
-  return (
+  /**
+   * Materials / Machines & Tools / Labour / Misc planning tables for one plan.
+   * Used for a task's direct lines and, with a scoped updater, for each subtask.
+   */
+  const renderPlanTables = (t, calc, updateTask) => (
     <>
-      <PageHeader
-        title={isEdit ? 'Edit project' : 'New project'}
-        description={isEdit ? 'Update project details, documents and task budget planning.' : 'Create project with auto-code, client assignment, documents and task budget planning.'}
-        breadcrumbs={[
-          { label: 'Dashboard', to: '/admin' },
-          { label: 'Projects', to: '/admin/projects' },
-          ...(isEdit ? [{ label: existing?.project?.name ?? 'Project', to: `/admin/projects/${id}` }] : []),
-          { label: isEdit ? 'Edit' : 'New' },
-        ]}
-        showBack
-      />
-
-      {formError && <Alert tone="error" title="Could not save" className="mb-4">{formError.message}</Alert>}
-
-      {isLoading ? (
-        <div className="space-y-4">
-          <Skeleton className="h-64" />
-          <Skeleton className="h-64" />
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit} noValidate className="space-y-6">
-          {/* SECTION 1: Project Information */}
-          <Card>
-            <CardHeader title="Project Information" description="Basic project credentials and location." />
-            <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-1.5">
-                  Project Code
-                </label>
-                <div className="flex h-11 items-center rounded-xl border border-line bg-canvas-subtle px-3.5 font-mono text-sm font-semibold text-ink-muted">
-                  {isEdit ? values.code || '(Auto-generated)' : 'Auto-generated by system (PRJ-XXXX)'}
-                </div>
-                <p className="mt-1 text-xs text-ink-subtle">Unique project identifier generated automatically upon creation.</p>
-              </div>
-
-              <InputField
-                label="Project Name"
-                required
-                value={values.name}
-                onChange={set('name')}
-                error={fieldErrors.name}
-                placeholder="Silverleaf Residency — Tower C"
-              />
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle">
-                    Client
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setIsClientModalOpen(true)}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Add Client
-                  </button>
-                </div>
-                <SelectField
-                  value={values.client_id}
-                  onChange={set('client_id')}
-                  placeholder="Select a client"
-                  options={toOptions(lookups?.clients ?? [])}
-                  error={fieldErrors.client_id}
-                />
-              </div>
-
-              <SelectField
-                label="Project Type"
-                value={values.project_type}
-                onChange={set('project_type')}
-                options={PROJECT_TYPES}
-                error={fieldErrors.project_type}
-              />
-
-              <InputField
-                label="Client Contract Value (₹)"
-                type="number"
-                min="0"
-                step="any"
-                value={values.client_contract_value}
-                onChange={set('client_contract_value')}
-                placeholder="Optional (defaults to task budget rollup)"
-                helperText="Total contract/revenue value billed to client."
-              />
-
-              <InputField
-                label="Location"
-                required
-                value={values.location}
-                onChange={set('location')}
-                error={fieldErrors.location}
-                placeholder="Rajpura Road, Patiala"
-                className="sm:col-span-2"
-              />
-
-              <TextAreaField
-                label="Description"
-                value={values.description}
-                onChange={set('description')}
-                rows={3}
-                className="sm:col-span-2"
-                placeholder="Scope of work, storeys, structural details..."
-              />
-            </CardBody>
-          </Card>
-
-          {/* SECTION 2: Schedule & Automatic Duration */}
-          <Card>
-            <CardHeader title="Schedule & Timeline" description="Project timeline with auto-calculated duration." />
-            <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-3">
-              <InputField
-                label="Start Date"
-                type="date"
-                required
-                value={values.start_date}
-                onChange={set('start_date')}
-                error={fieldErrors.start_date}
-              />
-
-              <InputField
-                label="Expected Completion Date"
-                type="date"
-                required
-                value={values.expected_completion}
-                onChange={set('expected_completion')}
-                error={fieldErrors.expected_completion}
-              />
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-1.5">
-                  Expected Completion Duration
-                </label>
-                <div className="flex h-11 items-center rounded-xl border border-line bg-canvas-subtle px-3.5 text-sm font-semibold text-brand-700">
-                  {durationMonths > 0 ? `${durationMonths} Months` : 'Select valid dates'}
-                </div>
-                <p className="mt-1 text-xs text-ink-subtle">Automatically calculated from Start Date to Expected Completion.</p>
-              </div>
-
-              <div className="sm:col-span-3">
-                <SelectField
-                  label="Project Status"
-                  value={values.status}
-                  onChange={set('status')}
-                  options={PROJECT_STATUSES}
-                  error={fieldErrors.status}
-                />
-              </div>
-            </CardBody>
-          </Card>
-
-          {/* SECTION 3: Documents Management */}
-          <Card>
-            <CardHeader
-              title="Project & Site Documents"
-              description="Upload architectural blueprints, structural drawings, contract agreements, and site specs (PDF, Images, CAD/DWG, Word, Excel up to 25MB)."
-            />
-            <CardBody className="space-y-4">
-              {/* Existing documents (if edit mode) */}
-              {existingDocs.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-subtle mb-2">Uploaded Documents</h4>
-                  <ul className="divide-y divide-line rounded-xl border border-line bg-white">
-                    {existingDocs.map((doc) => (
-                      <li key={doc.id} className="flex items-center justify-between p-3 text-sm">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <FileText className="h-5 w-5 text-brand-700 shrink-0" />
-                          <div className="min-w-0">
-                            <p className="font-medium text-ink truncate">{doc.name || doc.fileName}</p>
-                            <p className="text-xs text-ink-subtle">
-                              {doc.documentType} · Uploaded on {doc.uploadedOn}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <a
-                            href={doc.downloadUrl || `/api/projects/${id}/documents/${doc.id}/download`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"
-                          >
-                            <Download className="h-3.5 w-3.5" /> Download
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteExistingDoc(doc.id)}
-                            className="p-1 text-red-600 hover:text-red-700"
-                            aria-label="Delete document"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Upload Dropzone */}
-              <div>
-                <label className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-line p-6 hover:bg-canvas cursor-pointer">
-                  <Upload className="h-8 w-8 text-brand-700 mb-2" />
-                  <span className="text-sm font-semibold text-ink">Click or drag files to upload documents</span>
-                  <span className="text-xs text-ink-subtle mt-1">Multiple files supported. Previously uploaded documents are preserved.</span>
-                  <input
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileChange}
-                  />
-                </label>
-              </div>
-
-              {/* New files queued for upload */}
-              {newFiles.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-subtle mb-2">Files queued for upload ({newFiles.length})</h4>
-                  <ul className="divide-y divide-line rounded-xl border border-line bg-white">
-                    {newFiles.map((file, idx) => (
-                      <li key={idx} className="flex items-center justify-between p-3 text-sm">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <FileText className="h-4 w-4 text-brand-700 shrink-0" />
-                          <span className="font-medium text-ink truncate">{file.name}</span>
-                          <span className="text-xs text-ink-subtle">({Math.round(file.size / 1024)} KB)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeNewFile(idx)}
-                          className="text-ink-subtle hover:text-red-600"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </CardBody>
-          </Card>
-
-          {/* SECTION 4: Team Assignment */}
-          <Card>
-            <CardHeader title="Project Team" description="Assign managers, architects, engineers and contractors (optional — can be assigned later)." />
-            <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-              <SelectField
-                label="Project Manager"
-                value={values.project_manager_id}
-                onChange={set('project_manager_id')}
-                placeholder="Unassigned"
-                options={toOptions(lookups?.projectManagers ?? [], 'full_name')}
-              />
-              <SelectField
-                label="Architect"
-                value={values.architect_id}
-                onChange={set('architect_id')}
-                placeholder="Unassigned"
-                options={toOptions(lookups?.architects ?? [], 'full_name')}
-              />
-              <SelectField
-                label="Site Engineer"
-                value={values.site_engineer_id}
-                onChange={set('site_engineer_id')}
-                placeholder="Unassigned"
-                options={toOptions(lookups?.siteEngineers ?? [], 'full_name')}
-              />
-              <SelectField
-                label="Contractor"
-                value={values.contractor_id}
-                onChange={set('contractor_id')}
-                placeholder="Unassigned"
-                options={toOptions(lookups?.contractors ?? [])}
-              />
-            </CardBody>
-          </Card>
-
-          {/* SECTION 5: Project Tasks & Detailed Budget Planning */}
-          <Card>
-            <CardHeader
-              title="Project Tasks & Budget Planning"
-              description="Manually create tasks for this project/site. Plan detailed Materials, Machines/Tools, Labour (with individual worker names), and Miscellaneous expenses task-wise."
-              action={
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  onClick={addTask}
-                >
-                  <Plus className="h-4 w-4 mr-1.5" />
-                  Add Task
-                </Button>
-              }
-            />
-            <CardBody className="space-y-4">
-              {fieldErrors.tasks && (
-                <Alert tone="error" title="Tasks Validation">
-                  {fieldErrors.tasks}
-                </Alert>
-              )}
-
-              <datalist id="labour-roles-list">
-                <option value="Mason" />
-                <option value="Helper" />
-                <option value="Carpenter" />
-                <option value="Bar Bender" />
-                <option value="Electrician" />
-                <option value="Plumber" />
-                <option value="Painter" />
-                <option value="Welder" />
-                <option value="Site Supervisor" />
-                <option value="Tile Fitter" />
-                <option value="Glazier" />
-              </datalist>
-
-              {tasks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-8 text-center border-2 border-dashed border-line rounded-xl bg-canvas-subtle/50">
-                  <div className="h-12 w-12 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center mb-3">
-                    <ListTodo className="h-6 w-6" />
-                  </div>
-                  <h3 className="font-semibold text-ink text-sm">No Tasks Created Yet</h3>
-                  <p className="text-xs text-ink-subtle max-w-md mt-1 mb-4">
-                    Admin manually creates tasks for each project/site (e.g. Excavation, Foundation Work, Brick Work, Electrical Work, Flooring, Painting...). Each task includes its own materials, equipment, labour with worker names, and miscellaneous budget.
-                  </p>
-                  <Button type="button" variant="primary" size="sm" onClick={addTask}>
-                    <Plus className="h-4 w-4 mr-1.5" />
-                    Add First Task
-                  </Button>
-                </div>
-              ) : (
-                tasks.map((t, tIdx) => {
-                  const isExpanded = Boolean(expandedTasks[t.tempId]);
-                  const calc = taskCalculations.find((c) => c.tempId === t.tempId);
-                  const siteObj = availableSites.find((s) => String(s.id) === String(t.siteId));
-
-                  return (
-                    <div key={t.tempId || tIdx} className="rounded-xl border border-line bg-white overflow-hidden shadow-xs">
-                      {/* Task Accordion Header */}
-                      <div
-                        onClick={() => toggleTask(t.tempId)}
-                        className="flex items-center justify-between p-4 cursor-pointer hover:bg-canvas-subtle transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-700 font-bold text-xs shrink-0">
-                            {isExpanded ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-semibold text-ink text-sm">
-                                {t.name ? t.name : `Task #${tIdx + 1} (Untitled)`}
-                              </span>
-                              {siteObj && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                                  Site: {siteObj.name}
-                                </span>
-                              )}
-                              <Badge tone={t.status === 'completed' ? 'neutral' : t.status === 'delayed' ? 'error' : t.status === 'needs-attention' ? 'warning' : 'brand'}>
-                                {TASK_STATUS_OPTIONS.find((s) => s.value === t.status)?.label || t.status}
-                              </Badge>
-                            </div>
-                            <p className="text-xs text-ink-subtle mt-0.5">
-                              {t.durationDays > 0 ? `${t.durationDays} days · ` : ''}
-                              {calc?.taskTotal > 0 ? formatCurrency(calc.taskTotal) : 'No budget planned'}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <Badge tone={calc?.taskTotal > 0 ? 'brand' : 'neutral'}>
-                            {formatCurrency(calc?.taskTotal || 0)}
-                          </Badge>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.confirm(`Are you sure you want to remove task "${t.name || `Task #${tIdx + 1}`}"?`)) {
-                                removeTask(t.tempId);
-                              }
-                            }}
-                            title="Delete task"
-                            className="text-ink-subtle hover:text-red-600 transition-colors p-1"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                          {isExpanded ? <ChevronDown className="h-4 w-4 text-ink-subtle" /> : <ChevronRight className="h-4 w-4 text-ink-subtle" />}
-                        </div>
-                      </div>
-
-                      {/* Task Expanded Content */}
-                      {isExpanded && (
-                        <div className="border-t border-line bg-canvas-subtle p-5 space-y-6">
-                          {/* Task Details Fields */}
-                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 bg-white p-4 rounded-xl border border-line">
-                            <div className="lg:col-span-2">
-                              <InputField
-                                label="Task Name"
-                                required
-                                value={t.name}
-                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, name: e.target.value }))}
-                                placeholder="e.g. Foundation Work, Brick Work, Electrical Work..."
-                              />
-                            </div>
-
-                            {availableSites.length > 0 && (
-                              <div>
-                                <SelectField
-                                  label="Assigned Site"
-                                  value={t.siteId}
-                                  onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, siteId: e.target.value }))}
-                                  options={[
-                                    { value: '', label: 'General / All Sites' },
-                                    ...availableSites.map((s) => ({ value: String(s.id), label: s.name })),
-                                  ]}
-                                />
-                              </div>
-                            )}
-
-                            <div>
-                              <SelectField
-                                label="Task Status"
-                                value={t.status}
-                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, status: e.target.value }))}
-                                options={TASK_STATUS_OPTIONS}
-                              />
-                            </div>
-
-                            <div>
-                              <InputField
-                                label="Start Date"
-                                type="date"
-                                value={t.startDate}
-                                onChange={(e) => {
-                                  const newStart = e.target.value;
-                                  updateTask(t.tempId, (task) => {
-                                    let newDuration = task.durationDays;
-                                    if (newStart && task.endDate) {
-                                      const diff = Math.round((new Date(task.endDate) - new Date(newStart)) / (1000 * 60 * 60 * 24));
-                                      if (diff > 0) newDuration = diff;
-                                    }
-                                    return { ...task, startDate: newStart, durationDays: newDuration };
-                                  });
-                                }}
-                              />
-                            </div>
-
-                            <div>
-                              <InputField
-                                label="Expected Completion Date"
-                                type="date"
-                                value={t.endDate}
-                                onChange={(e) => {
-                                  const newEnd = e.target.value;
-                                  updateTask(t.tempId, (task) => {
-                                    let newDuration = task.durationDays;
-                                    if (task.startDate && newEnd) {
-                                      const diff = Math.round((new Date(newEnd) - new Date(task.startDate)) / (1000 * 60 * 60 * 24));
-                                      if (diff > 0) newDuration = diff;
-                                    }
-                                    return { ...task, endDate: newEnd, durationDays: newDuration };
-                                  });
-                                }}
-                              />
-                            </div>
-
-                            <div>
-                              <InputField
-                                label="Duration (Working Days)"
-                                type="number"
-                                min="1"
-                                value={t.durationDays}
-                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, durationDays: Math.max(1, Number(e.target.value || 1)) }))}
-                                placeholder="e.g. 14"
-                              />
-                            </div>
-
-                            <div className="sm:col-span-2 lg:col-span-3">
-                              <InputField
-                                label="Task Description / Scope"
-                                value={t.description}
-                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, description: e.target.value }))}
-                                placeholder="Brief description of task work, milestones or requirements..."
-                              />
-                            </div>
-                          </div>
-
                           {/* Table 1: Materials */}
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
@@ -1566,10 +970,893 @@ export default function ProjectFormPage({ mode = 'create' }) {
                             )}
                           </div>
 
+    </>
+  );
+
+  const subtaskUpdater = (taskTempId) => (subTempId, updater) =>
+    updateTask(taskTempId, (task) => ({
+      ...task,
+      subtasks: (task.subtasks || []).map((st) => (st.tempId === subTempId ? updater(st) : st)),
+    }));
+
+  const addTask = () => {
+    const defaultSiteId = availableSites[0]?.id ? String(availableSites[0].id) : '';
+    const newTask = createEmptyTask(defaultSiteId);
+    const firstSub = createEmptySubtask(newTask);
+    newTask.subtasks = [firstSub];
+    setTasks((prev) => [...prev, newTask]);
+    setExpandedTasks((prev) => ({ ...prev, [newTask.tempId]: true, [firstSub.tempId]: true }));
+  };
+
+  const removeTask = (tempId) => {
+    setTasks((prev) => prev.filter((t) => t.tempId !== tempId));
+  };
+
+  // Duration
+  const durationMonths = calculateDurationMonths(values.start_date, values.expected_completion);
+
+  // Live Task Calculations
+  const taskCalculations = tasks.map((t) => {
+    const direct = calcPlan(t);
+    const subs = Array.isArray(t.subtasks) ? t.subtasks.map(calcPlan) : [];
+    const add = (key) => direct[key] + subs.reduce((sum, c) => sum + c[key], 0);
+    const subtaskTotal = Array.isArray(t.subtasks)
+      ? subs.reduce((sum, c) => sum + c.total, 0)
+      : Number(t.subtaskBudget || 0);
+    return {
+      tempId: t.tempId,
+      id: t.id,
+      name: t.name,
+      siteId: t.siteId,
+      durationDays: hasDirectPlan(t) ? Number(t.durationDays || 0) : (subtaskSpanDays(t) || Number(t.durationDays || 0)),
+      matTotal: add('matTotal'),
+      toolTotal: add('toolTotal'),
+      labourTotal: add('labourTotal'),
+      miscTotal: add('miscTotal'),
+      directTotal: direct.total,
+      subtaskTotal,
+      subtaskCount: Array.isArray(t.subtasks) ? t.subtasks.length : Number(t.subtaskCount || 0),
+      taskTotal: direct.total + subtaskTotal,
+    };
+  });
+
+  const totalProjectBudget = taskCalculations.reduce((sum, c) => sum + c.taskTotal, 0);
+
+  // Documents
+  const handleFileChange = (e) => {
+    if (e.target.files?.length) {
+      setNewFiles((prev) => [...prev, ...Array.from(e.target.files)]);
+    }
+  };
+
+  const removeNewFile = (idx) => {
+    setNewFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleDeleteExistingDoc = async (docId) => {
+    if (!window.confirm('Are you sure you want to remove this document?')) return;
+    try {
+      await projectsApi.deleteDocument(id, docId);
+      setExistingDocs((prev) => prev.filter((d) => d.id !== docId));
+    } catch (err) {
+      alert(err.message || 'Could not delete document.');
+    }
+  };
+
+  // Validation
+  function validate() {
+    const errors = {};
+    if (!values.name.trim()) errors.name = 'Enter a project name.';
+    if (!values.location.trim()) errors.location = 'Enter the project location.';
+    if (!values.start_date) errors.start_date = 'Enter a start date.';
+    if (!values.expected_completion) errors.expected_completion = 'Enter the expected completion date.';
+    if (
+      values.start_date &&
+      values.expected_completion &&
+      new Date(values.expected_completion) < new Date(values.start_date)
+    ) {
+      errors.expected_completion = 'Completion date cannot fall before the start date.';
+    }
+    if (tasks.some((t) => !t.name || !t.name.trim())) {
+      errors.tasks = 'Please provide a name for all tasks, or remove empty task rows.';
+    } else if (tasks.some((t) => (t.subtasks || []).some((st) => !st.name || !st.name.trim()))) {
+      errors.tasks = 'Please provide a name for every subtask, or remove empty subtask rows.';
+    }
+    return errors;
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const errors = validate();
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      return;
+    }
+
+    setIsSaving(true);
+    setFormError(null);
+
+    const formatPlan = (t) => {
+      const durationDays = Number(t.durationDays || 0);
+      return {
+      materials: (t.materials || [])
+        .filter((m) => m.materialId)
+        .map((m) => ({
+          materialId: Number(m.materialId),
+          material_id: Number(m.materialId),
+          quantity: Number(m.quantity || 0),
+          costPerUnit: Number(m.costPerUnit || 0),
+          cost_per_unit: Number(m.costPerUnit || 0),
+          totalCost: Number(m.quantity || 0) * Number(m.costPerUnit || 0),
+        })),
+      tools: (t.tools || [])
+        .filter((tl) => (tl.toolName || '').trim() || tl.toolId)
+        .map((tl) => ({
+          toolId: tl.toolId ? Number(tl.toolId) : null,
+          tool_id: tl.toolId ? Number(tl.toolId) : null,
+          toolName: (tl.toolName || '').trim(),
+          tool_name: (tl.toolName || '').trim(),
+          rentalType: tl.rentalType || 'Rent',
+          rental_type: tl.rentalType || 'Rent',
+          quantity: Number(tl.quantity || 1),
+          cost: Number(tl.cost || 0),
+          workingDays: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
+          working_days: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
+          totalCost: machineLineTotal(tl),
+        })),
+      labour: (t.labour || []).map((l) => {
+        const isCompany = l.labourType === 'Company Labour' || l.labourType === 'Company Employee' || l.workerType === 'company_labour';
+        const dw = isCompany ? 0 : Number(l.dailyWage || 0);
+        const wd = Number(l.workingDays || calcWorkingDays(l.startDate, l.endDate));
+        return {
+          workerId: l.workerId || null,
+          worker_id: l.workerId || null,
+          workerType: l.workerType || (isCompany ? 'company_labour' : 'labour'),
+          worker_type: l.workerType || (isCompany ? 'company_labour' : 'labour'),
+          labourName: (l.labourName || '').trim() || null,
+          labour_name: (l.labourName || '').trim() || null,
+          labourType: l.labourType || 'Labour',
+          labour_type: l.labourType || 'Labour',
+          skillTrade: l.skillTrade || null,
+          startDate: l.startDate || null,
+          start_date: l.startDate || null,
+          endDate: l.endDate || null,
+          end_date: l.endDate || null,
+          workerCount: 1,
+          worker_count: 1,
+          dailyWage: dw,
+          daily_wage: dw,
+          workingDays: wd,
+          working_days: wd,
+          totalCost: isCompany ? 0 : dw * wd,
+          total_cost: isCompany ? 0 : dw * wd,
+          remarks: (l.remarks || '').trim() || null,
+        };
+      }),
+      misc: (t.misc || [])
+        .filter((mc) => (mc.description || '').trim())
+        .map((mc) => ({
+          description: (mc.description || '').trim(),
+          amount: Number(mc.amount || 0),
+        })),
+      };
+    };
+
+    const formattedTasks = tasks
+      .filter((t) => t.name && t.name.trim())
+      .map((t) => {
+        const durationDays = Number(t.durationDays || 0);
+        return {
+          id: t.id ? Number(t.id) : undefined,
+          name: t.name.trim(),
+          siteId: t.siteId ? Number(t.siteId) : null,
+          site_id: t.siteId ? Number(t.siteId) : null,
+          description: t.description ? t.description.trim() : null,
+          status: t.status || 'on-track',
+          startDate: t.startDate || null,
+          start_date: t.startDate || null,
+          endDate: t.endDate || null,
+          end_date: t.endDate || null,
+          durationDays,
+          duration_days: durationDays,
+          ...formatPlan(t),
+          subtasks: (t.subtasks || []).map((st) => ({
+            id: st.id ? Number(st.id) : undefined,
+            name: st.name.trim(),
+            description: st.description ? st.description.trim() : null,
+            status: st.status || 'on-track',
+            ...(st.progress !== undefined ? { progress: Number(st.progress) } : {}),
+            startDate: st.startDate || null,
+            endDate: st.endDate || null,
+            durationDays: Number(st.durationDays || 0),
+            ...formatPlan(st),
+          })),
+        };
+      });
+
+    const payload = { ...values, tasks: formattedTasks };
+    for (const key of ['client_id', 'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id']) {
+      payload[key] = payload[key] === '' ? null : Number(payload[key]);
+    }
+
+    if (values.client_contract_value !== '' && values.client_contract_value != null) {
+      payload.client_contract_value = Number(values.client_contract_value);
+      payload.clientContractValue = Number(values.client_contract_value);
+    } else {
+      payload.client_contract_value = totalProjectBudget > 0 ? totalProjectBudget : null;
+      payload.clientContractValue = totalProjectBudget > 0 ? totalProjectBudget : null;
+    }
+
+    try {
+      const saved = isEdit
+        ? await projectsApi.update(id, payload)
+        : await projectsApi.create(payload);
+
+      // Upload newly attached documents
+      if (newFiles.length > 0) {
+        const formData = new FormData();
+        newFiles.forEach((file) => formData.append('documents', file));
+        await projectsApi.uploadDocuments(saved.id, formData);
+      }
+
+      navigate(`/admin/projects/${saved.id}`, {
+        replace: true,
+        state: { flash: isEdit ? 'Project updated with task budgets.' : 'Project created with task budgets.' },
+      });
+    } catch (caught) {
+      const apiError = toApiError(caught);
+      if (apiError.details) setFieldErrors(apiError.details);
+      setFormError(apiError);
+      setIsSaving(false);
+    }
+  }
+
+  const isLoading = loadingLookups || (isEdit && loadingProject);
+  const cancelTo = isEdit ? `/admin/projects/${id}` : '/admin/projects';
+
+  if (loadError) {
+    return (
+      <>
+        <PageHeader title="Edit project" breadcrumbs={[{ label: 'Dashboard', to: '/admin' }, { label: 'Projects', to: '/admin/projects' }, { label: 'Edit' }]} showBack />
+        <Alert tone="error" title="Could not load this project">{loadError.message}</Alert>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHeader
+        title={isEdit ? 'Edit project' : 'New project'}
+        description={isEdit ? 'Update project details, documents and task budget planning.' : 'Create project with auto-code, client assignment, documents and task budget planning.'}
+        breadcrumbs={[
+          { label: 'Dashboard', to: '/admin' },
+          { label: 'Projects', to: '/admin/projects' },
+          ...(isEdit ? [{ label: existing?.project?.name ?? 'Project', to: `/admin/projects/${id}` }] : []),
+          { label: isEdit ? 'Edit' : 'New' },
+        ]}
+        showBack
+      />
+
+      {formError && <Alert tone="error" title="Could not save" className="mb-4">{formError.message}</Alert>}
+
+      {isLoading ? (
+        <div className="space-y-4">
+          <Skeleton className="h-64" />
+          <Skeleton className="h-64" />
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} noValidate className="space-y-6">
+          {/* SECTION 1: Project Information */}
+          <Card>
+            <CardHeader title="Project Information" description="Basic project credentials and location." />
+            <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-1.5">
+                  Project Code
+                </label>
+                <div className="flex h-11 items-center rounded-xl border border-line bg-canvas-subtle px-3.5 font-mono text-sm font-semibold text-ink-muted">
+                  {isEdit ? values.code || '(Auto-generated)' : 'Auto-generated by system (PRJ-XXXX)'}
+                </div>
+                <p className="mt-1 text-xs text-ink-subtle">Unique project identifier generated automatically upon creation.</p>
+              </div>
+
+              <InputField
+                label="Project Name"
+                required
+                value={values.name}
+                onChange={set('name')}
+                error={fieldErrors.name}
+                placeholder="Silverleaf Residency — Tower C"
+              />
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle">
+                    Client
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setIsClientModalOpen(true)}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Client
+                  </button>
+                </div>
+                <SelectField
+                  value={values.client_id}
+                  onChange={set('client_id')}
+                  placeholder="Select a client"
+                  options={toOptions(lookups?.clients ?? [])}
+                  error={fieldErrors.client_id}
+                />
+              </div>
+
+              <SelectField
+                label="Project Type"
+                value={values.project_type}
+                onChange={set('project_type')}
+                options={PROJECT_TYPES}
+                error={fieldErrors.project_type}
+              />
+
+              <InputField
+                label="Client Contract Value (₹)"
+                type="number"
+                min="0"
+                step="any"
+                value={values.client_contract_value}
+                onChange={set('client_contract_value')}
+                placeholder="Optional (defaults to task budget rollup)"
+                helperText="Total contract/revenue value billed to client."
+              />
+
+              <InputField
+                label="Location"
+                required
+                value={values.location}
+                onChange={set('location')}
+                error={fieldErrors.location}
+                placeholder="Rajpura Road, Patiala"
+                className="sm:col-span-2"
+              />
+
+              <TextAreaField
+                label="Description"
+                value={values.description}
+                onChange={set('description')}
+                rows={3}
+                className="sm:col-span-2"
+                placeholder="Scope of work, storeys, structural details..."
+              />
+            </CardBody>
+          </Card>
+
+          {/* SECTION 2: Schedule & Automatic Duration */}
+          <Card>
+            <CardHeader title="Schedule & Timeline" description="Project timeline with auto-calculated duration." />
+            <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+              <InputField
+                label="Start Date"
+                type="date"
+                required
+                value={values.start_date}
+                onChange={set('start_date')}
+                error={fieldErrors.start_date}
+              />
+
+              <InputField
+                label="Expected Completion Date"
+                type="date"
+                required
+                value={values.expected_completion}
+                onChange={set('expected_completion')}
+                error={fieldErrors.expected_completion}
+              />
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-1.5">
+                  Expected Completion Duration
+                </label>
+                <div className="flex h-11 items-center rounded-xl border border-line bg-canvas-subtle px-3.5 text-sm font-semibold text-brand-700">
+                  {durationMonths > 0 ? `${durationMonths} Months` : 'Select valid dates'}
+                </div>
+                <p className="mt-1 text-xs text-ink-subtle">Automatically calculated from Start Date to Expected Completion.</p>
+              </div>
+
+              <div className="sm:col-span-3">
+                <SelectField
+                  label="Project Status"
+                  value={values.status}
+                  onChange={set('status')}
+                  options={PROJECT_STATUSES}
+                  error={fieldErrors.status}
+                />
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* SECTION 3: Documents Management */}
+          <Card>
+            <CardHeader
+              title="Project & Site Documents"
+              description="Upload architectural blueprints, structural drawings, contract agreements, and site specs (PDF, Images, CAD/DWG, Word, Excel up to 25MB)."
+            />
+            <CardBody className="space-y-4">
+              {/* Existing documents (if edit mode) */}
+              {existingDocs.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-subtle mb-2">Uploaded Documents</h4>
+                  <ul className="divide-y divide-line rounded-xl border border-line bg-white">
+                    {existingDocs.map((doc) => (
+                      <li key={doc.id} className="flex items-center justify-between p-3 text-sm">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <FileText className="h-5 w-5 text-brand-700 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="font-medium text-ink truncate">{doc.name || doc.fileName}</p>
+                            <p className="text-xs text-ink-subtle">
+                              {doc.documentType} · Uploaded on {doc.uploadedOn}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <a
+                            href={doc.downloadUrl || `/api/projects/${id}/documents/${doc.id}/download`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"
+                          >
+                            <Download className="h-3.5 w-3.5" /> Download
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteExistingDoc(doc.id)}
+                            className="p-1 text-red-600 hover:text-red-700"
+                            aria-label="Delete document"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Upload Dropzone */}
+              <div>
+                <label className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-line p-6 hover:bg-canvas cursor-pointer">
+                  <Upload className="h-8 w-8 text-brand-700 mb-2" />
+                  <span className="text-sm font-semibold text-ink">Click or drag files to upload documents</span>
+                  <span className="text-xs text-ink-subtle mt-1">Multiple files supported. Previously uploaded documents are preserved.</span>
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                </label>
+              </div>
+
+              {/* New files queued for upload */}
+              {newFiles.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-subtle mb-2">Files queued for upload ({newFiles.length})</h4>
+                  <ul className="divide-y divide-line rounded-xl border border-line bg-white">
+                    {newFiles.map((file, idx) => (
+                      <li key={idx} className="flex items-center justify-between p-3 text-sm">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileText className="h-4 w-4 text-brand-700 shrink-0" />
+                          <span className="font-medium text-ink truncate">{file.name}</span>
+                          <span className="text-xs text-ink-subtle">({Math.round(file.size / 1024)} KB)</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeNewFile(idx)}
+                          className="text-ink-subtle hover:text-red-600"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+
+          {/* SECTION 4: Team Assignment */}
+          <Card>
+            <CardHeader title="Project Team" description="Assign managers, architects, engineers and contractors (optional — can be assigned later)." />
+            <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+              <SelectField
+                label="Project Manager"
+                value={values.project_manager_id}
+                onChange={set('project_manager_id')}
+                placeholder="Unassigned"
+                options={toOptions(lookups?.projectManagers ?? [], 'full_name')}
+              />
+              <SelectField
+                label="Architect"
+                value={values.architect_id}
+                onChange={set('architect_id')}
+                placeholder="Unassigned"
+                options={toOptions(lookups?.architects ?? [], 'full_name')}
+              />
+              <SelectField
+                label="Site Engineer"
+                value={values.site_engineer_id}
+                onChange={set('site_engineer_id')}
+                placeholder="Unassigned"
+                options={toOptions(lookups?.siteEngineers ?? [], 'full_name')}
+              />
+              <SelectField
+                label="Contractor"
+                value={values.contractor_id}
+                onChange={set('contractor_id')}
+                placeholder="Unassigned"
+                options={toOptions(lookups?.contractors ?? [])}
+              />
+            </CardBody>
+          </Card>
+
+          {/* SECTION 5: Project Tasks & Detailed Budget Planning */}
+          <Card>
+            <CardHeader
+              title="Project Tasks & Budget Planning"
+              description="Manually create tasks for this project/site. Plan detailed Materials, Machines/Tools, Labour (with individual worker names), and Miscellaneous expenses task-wise."
+              action={
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={addTask}
+                >
+                  <Plus className="h-4 w-4 mr-1.5" />
+                  Add Task
+                </Button>
+              }
+            />
+            <CardBody className="space-y-4">
+              {fieldErrors.tasks && (
+                <Alert tone="error" title="Tasks Validation">
+                  {fieldErrors.tasks}
+                </Alert>
+              )}
+
+              <datalist id="labour-roles-list">
+                <option value="Mason" />
+                <option value="Helper" />
+                <option value="Carpenter" />
+                <option value="Bar Bender" />
+                <option value="Electrician" />
+                <option value="Plumber" />
+                <option value="Painter" />
+                <option value="Welder" />
+                <option value="Site Supervisor" />
+                <option value="Tile Fitter" />
+                <option value="Glazier" />
+              </datalist>
+
+              {tasks.length === 0 ? (
+                <div className="flex flex-col items-center justify-center p-8 text-center border-2 border-dashed border-line rounded-xl bg-canvas-subtle/50">
+                  <div className="h-12 w-12 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center mb-3">
+                    <ListTodo className="h-6 w-6" />
+                  </div>
+                  <h3 className="font-semibold text-ink text-sm">No Tasks Created Yet</h3>
+                  <p className="text-xs text-ink-subtle max-w-md mt-1 mb-4">
+                    Admin manually creates tasks for each project/site (e.g. Excavation, Foundation Work, Brick Work, Electrical Work, Flooring, Painting...). Each task includes its own materials, equipment, labour with worker names, and miscellaneous budget.
+                  </p>
+                  <Button type="button" variant="primary" size="sm" onClick={addTask}>
+                    <Plus className="h-4 w-4 mr-1.5" />
+                    Add First Task
+                  </Button>
+                </div>
+              ) : (
+                tasks.map((t, tIdx) => {
+                  const isExpanded = Boolean(expandedTasks[t.tempId]);
+                  const calc = taskCalculations.find((c) => c.tempId === t.tempId);
+                  const isContainer = !hasDirectPlan(t);
+                  const subStarts = (t.subtasks || []).map((st) => st.startDate).filter(Boolean).sort();
+                  const subEnds = (t.subtasks || []).map((st) => st.endDate).filter(Boolean).sort();
+                  const siteObj = availableSites.find((s) => String(s.id) === String(t.siteId));
+
+                  return (
+                    <div key={t.tempId || tIdx} className="rounded-xl border border-line bg-white overflow-hidden shadow-xs">
+                      {/* Task Accordion Header */}
+                      <div
+                        onClick={() => toggleTask(t.tempId)}
+                        className="flex items-center justify-between p-4 cursor-pointer hover:bg-canvas-subtle transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-700 font-bold text-xs shrink-0">
+                            {isExpanded ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-ink text-sm">
+                                {t.name ? t.name : `Task #${tIdx + 1} (Untitled)`}
+                              </span>
+                              {siteObj && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                                  Site: {siteObj.name}
+                                </span>
+                              )}
+                              <Badge tone={t.status === 'completed' ? 'neutral' : t.status === 'delayed' ? 'error' : t.status === 'needs-attention' ? 'warning' : 'brand'}>
+                                {TASK_STATUS_OPTIONS.find((s) => s.value === t.status)?.label || t.status}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-ink-subtle mt-0.5">
+                              {calc?.durationDays > 0 ? `${calc.durationDays} days · ` : ''}
+                              {calc?.taskTotal > 0 ? formatCurrency(calc.taskTotal) : 'No budget planned'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Badge tone={calc?.taskTotal > 0 ? 'brand' : 'neutral'}>
+                            {formatCurrency(calc?.taskTotal || 0)}
+                          </Badge>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm(`Are you sure you want to remove task "${t.name || `Task #${tIdx + 1}`}"?`)) {
+                                removeTask(t.tempId);
+                              }
+                            }}
+                            title="Delete task"
+                            className="text-ink-subtle hover:text-red-600 transition-colors p-1"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                          {isExpanded ? <ChevronDown className="h-4 w-4 text-ink-subtle" /> : <ChevronRight className="h-4 w-4 text-ink-subtle" />}
+                        </div>
+                      </div>
+
+                      {/* Task Expanded Content */}
+                      {isExpanded && (
+                        <div className="border-t border-line bg-canvas-subtle p-5 space-y-6">
+                          {/* Task Details Fields */}
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 bg-white p-4 rounded-xl border border-line">
+                            <div className="lg:col-span-2">
+                              <InputField
+                                label="Task Name"
+                                required
+                                value={t.name}
+                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, name: e.target.value }))}
+                                placeholder="e.g. Foundation Work, Brick Work, Electrical Work..."
+                              />
+                            </div>
+
+                            {availableSites.length > 0 && (
+                              <div>
+                                <SelectField
+                                  label="Assigned Site"
+                                  value={t.siteId}
+                                  onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, siteId: e.target.value }))}
+                                  options={[
+                                    { value: '', label: 'General / All Sites' },
+                                    ...availableSites.map((s) => ({ value: String(s.id), label: s.name })),
+                                  ]}
+                                />
+                              </div>
+                            )}
+
+                            <div>
+                              <SelectField
+                                label="Task Status"
+                                value={t.status}
+                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, status: e.target.value }))}
+                                options={TASK_STATUS_OPTIONS}
+                              />
+                            </div>
+
+                            {isContainer ? (
+                              <div className="sm:col-span-2 lg:col-span-1 rounded-lg border border-dashed border-line bg-canvas px-3 py-2 text-xs text-ink-muted">
+                                <span className="block font-medium text-ink">Dates</span>
+                                {subStarts.length || subEnds.length
+                                  ? `${subStarts[0] || '—'} → ${subEnds[subEnds.length - 1] || '—'} (from subtasks)`
+                                  : 'Taken from the subtasks below'}
+                              </div>
+                            ) : (
+                              <>
+                            <div>
+                              <InputField
+                                label="Start Date"
+                                type="date"
+                                value={t.startDate}
+                                onChange={(e) => {
+                                  const newStart = e.target.value;
+                                  updateTask(t.tempId, (task) => {
+                                    let newDuration = task.durationDays;
+                                    if (newStart && task.endDate) {
+                                      const diff = Math.round((new Date(task.endDate) - new Date(newStart)) / (1000 * 60 * 60 * 24));
+                                      if (diff > 0) newDuration = diff;
+                                    }
+                                    return { ...task, startDate: newStart, durationDays: newDuration };
+                                  });
+                                }}
+                              />
+                            </div>
+
+                            <div>
+                              <InputField
+                                label="Expected Completion Date"
+                                type="date"
+                                value={t.endDate}
+                                onChange={(e) => {
+                                  const newEnd = e.target.value;
+                                  updateTask(t.tempId, (task) => {
+                                    let newDuration = task.durationDays;
+                                    if (task.startDate && newEnd) {
+                                      const diff = Math.round((new Date(newEnd) - new Date(task.startDate)) / (1000 * 60 * 60 * 24));
+                                      if (diff > 0) newDuration = diff;
+                                    }
+                                    return { ...task, endDate: newEnd, durationDays: newDuration };
+                                  });
+                                }}
+                              />
+                            </div>
+
+                            <div>
+                              <InputField
+                                label="Duration (Working Days)"
+                                type="number"
+                                min="1"
+                                value={t.durationDays}
+                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, durationDays: Math.max(1, Number(e.target.value || 1)) }))}
+                                placeholder="e.g. 14"
+                              />
+                            </div>
+
+                              </>
+                            )}
+
+                            <div className="sm:col-span-2 lg:col-span-3">
+                              <InputField
+                                label="Task Description / Scope"
+                                value={t.description}
+                                onChange={(e) => updateTask(t.tempId, (task) => ({ ...task, description: e.target.value }))}
+                                placeholder="Brief description of task work, milestones or requirements..."
+                              />
+                            </div>
+                          </div>
+
+                          {!isContainer && (
+                            <div className="space-y-4">
+                              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                This task has budget lines planned directly on it (created before subtasks). New planning belongs in its subtasks below;
+                                remove these lines once they are moved.
+                              </p>
+                              {renderPlanTables(t, calcPlan(t), updateTask)}
+                            </div>
+                          )}
+
+                          {/* Subtasks: planned right here, each with its own plan */}
+                          <div className="space-y-3 rounded-xl border border-brand-200 bg-brand-50/40 p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <h4 className="text-xs font-bold uppercase tracking-wider text-brand-900">
+                                  Subtasks &amp; Budget Planning ({(t.subtasks || []).length}) · {formatCurrency(calc?.subtaskTotal || 0)}
+                                </h4>
+                                <p className="text-[11px] text-brand-800">
+                                  Plan the work in subtasks — each has its own Materials, Machines &amp; Tools, Labour and Misc. The task total is the sum of its subtasks.
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => {
+                                  const st = createEmptySubtask(t);
+                                  updateTask(t.tempId, (task) => ({ ...task, subtasks: [...(task.subtasks || []), st] }));
+                                  setExpandedTasks((prev) => ({ ...prev, [st.tempId]: true }));
+                                }}
+                              >
+                                <Plus className="h-4 w-4" />
+                                Add Subtask
+                              </Button>
+                            </div>
+
+                            {(t.subtasks || []).length === 0 ? (
+                              <p className="rounded-lg border border-dashed border-brand-200 bg-white px-3 py-4 text-center text-xs text-ink-subtle">
+                                No subtasks yet. Click &ldquo;Add Subtask&rdquo; to plan this task (e.g. Excavation, PCC &amp; Footing, Column Casting).
+                              </p>
+                            ) : (
+                              (t.subtasks || []).map((st, sIdx) => {
+                                const sCalc = calcPlan(st);
+                                const sOpen = Boolean(expandedTasks[st.tempId]);
+                                const updateSub = subtaskUpdater(t.tempId);
+                                return (
+                                  <div key={st.tempId} className="overflow-hidden rounded-lg border border-line bg-white">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleTask(st.tempId)}
+                                        className="flex min-w-0 items-center gap-2 text-left"
+                                      >
+                                        {sOpen ? <ChevronDown className="h-4 w-4 text-ink-subtle" /> : <ChevronRight className="h-4 w-4 text-ink-subtle" />}
+                                        <span className="truncate text-sm font-semibold text-ink">
+                                          {st.name || <span className="italic text-ink-subtle">Subtask #{sIdx + 1} (Untitled)</span>}
+                                        </span>
+                                      </button>
+                                      <div className="flex items-center gap-2">
+                                        <span className="rounded-md bg-canvas px-2 py-0.5 text-xs font-semibold text-ink">{formatCurrency(sCalc.total)}</span>
+                                        <button
+                                          type="button"
+                                          title="Remove subtask"
+                                          onClick={() => updateTask(t.tempId, (task) => ({ ...task, subtasks: task.subtasks.filter((x) => x.tempId !== st.tempId) }))}
+                                          className="rounded p-1 text-rose-600 hover:bg-rose-50"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {sOpen && (
+                                      <div className="space-y-4 border-t border-line p-3">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                          <div className="sm:col-span-2">
+                                            <InputField
+                                              label="Subtask Name"
+                                              required
+                                              value={st.name}
+                                              onChange={(e) => updateSub(st.tempId, (x) => ({ ...x, name: e.target.value }))}
+                                              placeholder="e.g. Column Casting, Slab Shuttering, Wiring Ground Floor"
+                                            />
+                                          </div>
+                                          <SelectField
+                                            label="Status"
+                                            value={st.status}
+                                            onChange={(e) => updateSub(st.tempId, (x) => ({ ...x, status: e.target.value }))}
+                                            options={TASK_STATUS_OPTIONS}
+                                          />
+                                          <InputField
+                                            label="Duration (Days)"
+                                            type="number"
+                                            min="1"
+                                            value={st.durationDays}
+                                            onChange={(e) => updateSub(st.tempId, (x) => ({ ...x, durationDays: Math.max(1, Number(e.target.value || 1)) }))}
+                                          />
+                                          <InputField
+                                            label="Start Date"
+                                            type="date"
+                                            value={st.startDate}
+                                            onChange={(e) => updateSub(st.tempId, (x) => ({ ...x, startDate: e.target.value, durationDays: daysBetween(e.target.value, x.endDate) ?? x.durationDays }))}
+                                          />
+                                          <InputField
+                                            label="Expected Completion"
+                                            type="date"
+                                            value={st.endDate}
+                                            min={st.startDate || undefined}
+                                            onChange={(e) => updateSub(st.tempId, (x) => ({ ...x, endDate: e.target.value, durationDays: daysBetween(x.startDate, e.target.value) ?? x.durationDays }))}
+                                          />
+                                          <div className="sm:col-span-2">
+                                            <InputField
+                                              label="Subtask Description / Scope"
+                                              value={st.description}
+                                              onChange={(e) => updateSub(st.tempId, (x) => ({ ...x, description: e.target.value }))}
+                                              placeholder="Scope, specifications or milestones of this subtask..."
+                                            />
+                                          </div>
+                                        </div>
+                                        {renderPlanTables(st, sCalc, updateSub)}
+                                        <div className="flex items-center justify-between rounded-lg bg-canvas px-3 py-2 text-sm font-semibold">
+                                          <span className="text-ink">Subtask Total</span>
+                                          <span className="text-brand-700">{formatCurrency(sCalc.total)}</span>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+
                           {/* Task Total Summary Footer */}
                           <div className="flex items-center justify-between rounded-lg bg-white p-3 border border-line text-sm font-semibold">
                             <span className="text-ink">
-                              Task Total (Materials + Tools + Labour + Misc):
+                              {isContainer ? 'Task Total (sum of subtasks):' : 'Task Total (direct lines + subtasks):'}
                             </span>
                             <span className="text-brand-700 text-base">
                               {formatCurrency(calc?.taskTotal || 0)}
@@ -1641,6 +1928,11 @@ export default function ProjectFormPage({ mode = 'create' }) {
                             <td className="px-5 py-3 text-right text-ink-muted">{formatCurrency(c.miscTotal)}</td>
                             <td className="px-5 py-3 text-right font-semibold text-ink">
                               {formatCurrency(c.taskTotal)}
+                              {c.subtaskCount > 0 && (
+                                <span className="block text-[10px] font-normal text-ink-muted">
+                                  incl. {c.subtaskCount} subtask{c.subtaskCount === 1 ? '' : 's'}: {formatCurrency(c.subtaskTotal)}
+                                </span>
+                              )}
                             </td>
                           </tr>
                         );

@@ -16,6 +16,7 @@ const { PROJECT_PHASES_DEF } = require('../config/projectPhases');
 const { pool } = require('../config/db');
 const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const pmScope = require('./pmScopeService');
+const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 
 /** The warehouse row that belongs to a contractor (null when none is provisioned). */
 async function contractorWarehouseFor(contractorId) {
@@ -28,9 +29,12 @@ async function contractorWarehouseFor(contractorId) {
  * TASK-WISE MATERIAL. Material a contractor procured for a Task may be used only on that Task:
  * received quantity (from requests raised for this task) minus what the daily log has already
  * booked against it, and never more than the contractor's actual warehouse stock.
+ *
+ * With a subtask, only material procured FOR that subtask counts, capped by what is still
+ * unused on the whole main task (so main-task and subtask usage can never overdraw it).
  */
-async function getTaskMaterials(taskId, contractorId) {
-  if (!taskId || !contractorId) return [];
+async function scopedTaskMaterialLines(taskId, contractorId, subtaskId) {
+  const recScope = subtaskId ? ' AND pr.subtask_id = ?' : '';
   const [rows] = await pool.query(
     `SELECT pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit) AS unit,
             SUM(COALESCE(
@@ -40,16 +44,16 @@ async function getTaskMaterials(taskId, contractorId) {
      FROM procurement_requests pr
      JOIN materials m ON m.id = pr.material_id
      WHERE pr.task_id = ? AND pr.item_type = 'material' AND pr.status IN ('received', 'partially_received')
-       AND (pr.contractor_id = ? OR pr.destination_contractor_id = ?)
+       AND (pr.contractor_id = ? OR pr.destination_contractor_id = ?)${recScope}
      GROUP BY pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit)`,
-    [taskId, contractorId, contractorId]
+    [taskId, contractorId, contractorId, ...(subtaskId ? [subtaskId] : [])]
   );
   const wh = await contractorWarehouseFor(contractorId);
   const out = [];
   for (const r of rows) {
     const [[u]] = await pool.query(
-      'SELECT COALESCE(SUM(quantity_used), 0) AS used FROM daily_work_updates WHERE task_id = ? AND material_id = ?',
-      [taskId, r.material_id]
+      `SELECT COALESCE(SUM(quantity_used), 0) AS used FROM daily_work_updates WHERE task_id = ? AND material_id = ?${subtaskId ? ' AND subtask_id = ?' : ''}`,
+      [taskId, r.material_id, ...(subtaskId ? [subtaskId] : [])]
     );
     const stock = wh ? Number(await warehouseModel.totalForMaterial(wh.id, r.material_id) || 0) : 0;
     const left = Math.max(0, Number(r.procured) - Number(u.used));
@@ -63,6 +67,18 @@ async function getTaskMaterials(taskId, contractorId) {
   return out.filter((x) => x.procured > 0);
 }
 
+async function getTaskMaterials(taskId, contractorId, subtaskId = null) {
+  if (!taskId || !contractorId) return [];
+  const lines = await scopedTaskMaterialLines(taskId, contractorId, subtaskId || null);
+  if (!subtaskId) return lines;
+  const taskWide = await scopedTaskMaterialLines(taskId, contractorId, null);
+  return lines.map((l) => {
+    const tw = taskWide.find((x) => Number(x.material_id) === Number(l.material_id));
+    const left = Math.min(l.taskAvailable, tw ? tw.taskAvailable : 0);
+    return { ...l, subtaskId: Number(subtaskId), taskAvailable: left, availableStock: Math.min(left, l.availableStock) };
+  });
+}
+
 async function list(query = {}, hrScope) {
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 20));
@@ -73,6 +89,7 @@ async function list(query = {}, hrScope) {
     projectId: query.projectId,
     siteId: query.siteId,
     taskId: query.taskId,
+    subtaskId: query.subtaskId,
     contractorId,
     date: query.date,
     pmProjectIds: pmScope.isPm(hrScope) ? (hrScope.pmProjectIds || []) : undefined,
@@ -106,6 +123,8 @@ async function list(query = {}, hrScope) {
       taskId: r.task_id,
       taskName: r.task_name,
       taskStatus: r.task_status,
+      subtaskId: r.subtask_id || null,
+      subtaskName: r.subtask_name || null,
       phaseNumber: r.phase_number,
       phaseTitle: r.phase_title || r.task_name,
       subcategory: r.subcategory || r.task_name,
@@ -188,6 +207,9 @@ async function getById(id, hrScope) {
        WHERE taw.task_id = ? ORDER BY taw.id ASC`,
       [update.task_id]
     );
+    if (update.subtask_id && assignedRows.some((a) => Number(a.subtask_id) === Number(update.subtask_id))) {
+      assignedRows = assignedRows.filter((a) => Number(a.subtask_id) === Number(update.subtask_id));
+    }
 
     // Fallback to task_labour if no rows in task_assigned_workers
     if (!assignedRows.length) {
@@ -267,6 +289,8 @@ async function getById(id, hrScope) {
     taskId: update.task_id,
     taskName: update.task_name,
     taskStatus: update.task_status,
+    subtaskId: update.subtask_id || null,
+    subtaskName: update.subtask_name || null,
     phaseNumber: update.phase_number,
     phaseTitle: update.phase_title || update.task_name,
     subcategory: update.subcategory || update.task_name,
@@ -402,6 +426,10 @@ async function create(payload, files, hrScope, userId) {
     workersList = payload.workers;
   }
 
+  // Optional subtask under the selected main task.
+  const subtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
+  const subtaskId = subtask ? subtask.id : null;
+
   // Budget exceeded pre-check
   let budgetExceededInfo = null;
   if (taskId) {
@@ -415,7 +443,7 @@ async function create(payload, files, hrScope, userId) {
     }
     task = taskDetail;
     phaseTitle = task.name;
-    if (!subcategory) subcategory = task.name;
+    if (!subcategory) subcategory = subtask ? subtask.name : task.name;
 
     // Calculate this update's incoming costs
     let incomingMaterialCost = 0;
@@ -445,22 +473,46 @@ async function create(payload, files, hrScope, userId) {
       const currentActual = Number(taskDetail.budgetUtilization?.total?.actual || 0);
       const effectiveApprovedBudget = Number(taskDetail.budgetUtilization?.total?.effectiveBudget || Number(task.total_budget || 0));
       const projectedTotal = Number((currentActual + thisUpdateCost).toFixed(2));
+      const fmt = (n) => n.toLocaleString('en-IN', { minimumFractionDigits: 2 });
 
-      if (projectedTotal > effectiveApprovedBudget) {
+      // A subtask has its own approved budget; overrunning it needs the same justification.
+      let subOver = null;
+      if (subtask) {
+        const sub = (taskDetail.subtasks || []).find((x) => Number(x.id) === Number(subtask.id));
+        if (sub) {
+          const subProjected = Number((sub.actualCost + thisUpdateCost).toFixed(2));
+          if (subProjected > sub.plannedBudget) {
+            subOver = {
+              approvedBudget: sub.plannedBudget,
+              currentActual: sub.actualCost,
+              projectedTotal: subProjected,
+              requestedExcess: Number((subProjected - sub.plannedBudget).toFixed(2)),
+            };
+          }
+        }
+      }
+      const taskOver = projectedTotal > effectiveApprovedBudget;
+
+      if (taskOver || subOver) {
         const excessReason = (payload.excess_reason || '').trim();
         if (!excessReason) {
           throw ApiError.badRequest(
-            `This update will exceed the approved task budget of ₹${effectiveApprovedBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })} by ₹${(projectedTotal - effectiveApprovedBudget).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (projected total: ₹${projectedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}). A mandatory excess budget reason/justification is required before submission.`
+            taskOver
+              ? `This update will exceed the approved task budget of ₹${fmt(effectiveApprovedBudget)} by ₹${fmt(projectedTotal - effectiveApprovedBudget)} (projected total: ₹${fmt(projectedTotal)}). A mandatory excess budget reason/justification is required before submission.`
+              : `This update will exceed the approved budget of subtask "${subtask.name}" (₹${fmt(subOver.approvedBudget)}) by ₹${fmt(subOver.requestedExcess)} (projected: ₹${fmt(subOver.projectedTotal)}). A mandatory excess budget reason/justification is required before submission.`
           );
         }
-        budgetExceededInfo = {
-          approvedBudget: effectiveApprovedBudget,
-          currentActual,
-          thisUpdateCost,
-          projectedTotal,
-          requestedExcess: Number((projectedTotal - effectiveApprovedBudget).toFixed(2)),
-          excessReason,
-        };
+        budgetExceededInfo = taskOver
+          ? {
+            scope: 'task',
+            approvedBudget: effectiveApprovedBudget,
+            currentActual,
+            thisUpdateCost,
+            projectedTotal,
+            requestedExcess: Number((projectedTotal - effectiveApprovedBudget).toFixed(2)),
+            excessReason,
+          }
+          : { scope: 'subtask', ...subOver, thisUpdateCost, excessReason };
       }
     }
   } else if (phaseNumber) {
@@ -486,13 +538,14 @@ async function create(payload, files, hrScope, userId) {
     if (!taskId) {
       throw ApiError.badRequest('Select the Task - material can only be used task-wise, against the task it was procured for.');
     }
-    const taskStock = await getTaskMaterials(taskId, contractorId);
+    const taskStock = await getTaskMaterials(taskId, contractorId, subtaskId);
     const line = taskStock.find((x) => Number(x.material_id) === materialId);
+    const scopeLabel = subtask ? `subtask "${subtask.name}"` : 'this task';
     if (!line) {
-      throw ApiError.badRequest('That material was not procured for this task, so it cannot be used on it. Raise a procurement request for this task first.');
+      throw ApiError.badRequest(`That material was not procured for ${scopeLabel}, so it cannot be used on it. Raise a procurement request for ${scopeLabel} first.`);
     }
     if (quantityUsed > line.taskAvailable + 1e-9) {
-      throw ApiError.badRequest(`Only ${line.taskAvailable} ${line.unit} procured for this task is still unused (procured ${line.procured}, already used ${line.used}).`);
+      throw ApiError.badRequest(`Only ${line.taskAvailable} ${line.unit} procured for ${scopeLabel} is still unused (procured ${line.procured}, already used ${line.used}).`);
     }
     await warehouseModel.ensureContractorWarehouses();
     const { contractors } = await warehouseModel.findScopes();
@@ -507,7 +560,7 @@ async function create(payload, files, hrScope, userId) {
       throw ApiError.badRequest(`Only ${Number(available || 0)} ${material.unit} available in your inventory. Cannot exceed stock.`);
     }
 
-    const taskLabel = task ? `Task: ${task.name}` : `Phase ${phaseNumber || ''} (${subcategory})`;
+    const taskLabel = task ? `Task: ${task.name}${subtask ? ` › ${subtask.name}` : ''}` : `Phase ${phaseNumber || ''} (${subcategory})`;
 
     issueTx = await warehouseService.issueStock({
       material_id: materialId,
@@ -534,6 +587,7 @@ async function create(payload, files, hrScope, userId) {
       site_id: siteId,
       contractor_id: contractorId,
       task_id: task ? task.id : null,
+      subtask_id: subtaskId,
       category: 'Material Consumption',
       description: `Consumed ${quantityUsed} ${material.unit} of ${material.name} (${task ? task.name : subcategory})`,
       amount: totalAmount,
@@ -561,6 +615,7 @@ async function create(payload, files, hrScope, userId) {
       site_id: siteId,
       contractor_id: contractorId,
       task_id: task ? task.id : null,
+      subtask_id: subtaskId,
       category: 'Machine / Tool',
       description: toolRemarks || `Machine/Tool used: ${toolName || 'Equipment'} (${task ? task.name : 'Site'})`,
       amount: toolCost,
@@ -588,6 +643,7 @@ async function create(payload, files, hrScope, userId) {
       site_id: siteId,
       contractor_id: contractorId,
       task_id: task ? task.id : null,
+      subtask_id: subtaskId,
       category: 'Miscellaneous',
       description: miscDescription || `Daily misc expense (${task ? task.name : 'Site'})`,
       amount: miscAmount,
@@ -607,6 +663,7 @@ async function create(payload, files, hrScope, userId) {
     site_id: siteId,
     contractor_id: contractorId,
     task_id: task ? task.id : null,
+    subtask_id: subtaskId,
     phase_number: phaseNumber,
     phase_title: phaseTitle,
     subcategory,
@@ -644,6 +701,7 @@ async function create(payload, files, hrScope, userId) {
         project_id: projectId,
         site_id: siteId,
         task_id: task ? task.id : null,
+        subtask_id: subtaskId,
         phase_number: phaseNumber,
         subcategory,
         file_path: f.path || f.file_path || f.filename || 'uploads/work-photos/mock.jpg',
@@ -658,13 +716,22 @@ async function create(payload, files, hrScope, userId) {
   const progressNum = Math.min(100, Math.max(0, Number(payload.progress_percentage || 0)));
 
   if (task) {
-    // Update task progress & status
-    await pool.query(
-      'UPDATE project_tasks SET progress = GREATEST(progress, ?) WHERE id = ?',
-      [progressNum, task.id]
-    );
-    if (progressNum === 100 || payload.work_status === 'completed') {
-      await pool.query("UPDATE project_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+    if (subtask) {
+      // Subtask progress & status; the main task follows its subtasks.
+      await pool.query('UPDATE task_subtasks SET progress = GREATEST(progress, ?) WHERE id = ?', [progressNum, subtask.id]);
+      if (progressNum === 100 || payload.work_status === 'completed') {
+        await pool.query("UPDATE task_subtasks SET status = 'completed', progress = 100 WHERE id = ?", [subtask.id]);
+      }
+      await taskModel.rollupMainTaskProgress(pool, task.id);
+    } else {
+      // Update task progress & status
+      await pool.query(
+        'UPDATE project_tasks SET progress = GREATEST(progress, ?) WHERE id = ?',
+        [progressNum, task.id]
+      );
+      if (progressNum === 100 || payload.work_status === 'completed') {
+        await pool.query("UPDATE project_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+      }
     }
 
     // Process workers if submitted with daily update
@@ -677,6 +744,7 @@ async function create(payload, files, hrScope, userId) {
 
         await taskModel.addWorkerLog({
           task_id: task.id,
+          subtask_id: subtaskId,
           project_id: projectId,
           site_id: siteId || task.site_id || null,
           contractor_id: contractorId,
@@ -704,16 +772,20 @@ async function create(payload, files, hrScope, userId) {
       }
 
       // 1. Create approval request
+      const scopeName = subtask ? `${task.name} › ${subtask.name}` : task.name;
       const approvalReqId = await approvalModel.create({
         project_id: projectId,
         site_id: siteId,
         request_type: 'task_budget_exceeded',
-        title: `Task Budget Exceeded: ${task.name} (+₹${budgetExceededInfo.requestedExcess.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`,
+        title: `${budgetExceededInfo.scope === 'subtask' ? 'Subtask' : 'Task'} Budget Exceeded: ${scopeName} (+₹${budgetExceededInfo.requestedExcess.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`,
         requested_by: requesterName,
         amount: budgetExceededInfo.requestedExcess,
         details: JSON.stringify({
           taskId: task.id,
           taskName: task.name,
+          subtaskId,
+          subtaskName: subtask ? subtask.name : null,
+          scope: budgetExceededInfo.scope,
           originalBudget: Number(task.total_budget || 0),
           approvedAdditional: Number(task.approved_additional_budget || 0),
           currentApprovedBudget: budgetExceededInfo.approvedBudget,
@@ -729,13 +801,14 @@ async function create(payload, files, hrScope, userId) {
       // 2. Insert into task_budget_approvals audit trail
       await pool.query(
         `INSERT INTO task_budget_approvals
-         (task_id, project_id, site_id, category, budget_amount, actual_amount, requested_excess, reason, status, requested_by, approval_request_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+         (task_id, subtask_id, project_id, site_id, category, budget_amount, actual_amount, requested_excess, reason, status, requested_by, approval_request_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         [
           task.id,
+          subtaskId,
           projectId,
           siteId,
-          'Task Total',
+          budgetExceededInfo.scope === 'subtask' ? 'Subtask Total' : 'Task Total',
           budgetExceededInfo.approvedBudget,
           budgetExceededInfo.projectedTotal,
           budgetExceededInfo.requestedExcess,
@@ -753,17 +826,24 @@ async function create(payload, files, hrScope, userId) {
          WHERE id = ?`,
         [budgetExceededInfo.requestedExcess, budgetExceededInfo.excessReason, task.id]
       );
+      if (subtaskId) {
+        await pool.query(
+          'UPDATE task_subtasks SET pending_excess_budget = pending_excess_budget + ? WHERE id = ?',
+          [budgetExceededInfo.requestedExcess, subtaskId]
+        );
+      }
 
       // 4. Create admin notification
       await notificationModel.create({
         role: 'admin',
-        title: `Task Budget Exceeded: ${task.name}`,
-        message: `Task "${task.name}" in project "${project.name}" requires excess budget approval of ₹${budgetExceededInfo.requestedExcess.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Reason: ${budgetExceededInfo.excessReason}`,
+        title: `Task Budget Exceeded: ${scopeName}`,
+        message: `${subtask ? `Subtask "${subtask.name}" of task` : 'Task'} "${task.name}" in project "${project.name}" requires excess budget approval of ₹${budgetExceededInfo.requestedExcess.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Reason: ${budgetExceededInfo.excessReason}`,
         type: 'warning',
         category: 'approvals',
         actionUrl: '/admin/approvals',
         metadata: {
           taskId: task.id,
+          subtaskId,
           projectId,
           siteId,
           approvalRequestId: approvalReqId,

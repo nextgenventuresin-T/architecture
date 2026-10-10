@@ -15,8 +15,22 @@ export const tasksApi = {
   assignWorker: (taskId, payload) => axiosClient.post(`/tasks/${taskId}/assignments`, payload).then((r) => r.data.data),
   unassignWorker: (taskId, assignmentId) => axiosClient.delete(`/tasks/${taskId}/assignments/${assignmentId}`).then((r) => r.data.data),
   quickCreateWorker: (payload) => axiosClient.post('/tasks/workers/quick-create', payload).then((r) => r.data.data.worker),
-  getPlannedMaterials: (taskId) => axiosClient.get(`/tasks/${taskId}/planned-materials`).then((r) => r.data.data.materials),
-  getPlannedTools: (taskId) => axiosClient.get(`/tasks/${taskId}/planned-tools`).then((r) => r.data.data.tools),
+  // subtaskId narrows the plan to one subtask; omitted = whole task (unchanged behaviour).
+  getPlannedMaterials: (taskId, subtaskId) =>
+    axiosClient
+      .get(`/tasks/${taskId}/planned-materials`, { params: subtaskId ? { subtaskId } : undefined })
+      .then((r) => r.data.data.materials),
+  getPlannedTools: (taskId, subtaskId) =>
+    axiosClient
+      .get(`/tasks/${taskId}/planned-tools`, { params: subtaskId ? { subtaskId } : undefined })
+      .then((r) => r.data.data.tools),
+
+  // Subtasks: Main Task -> Subtask, each with its own plan & budget.
+  listSubtasks: (taskId) => axiosClient.get(`/tasks/${taskId}/subtasks`).then((r) => r.data.data.subtasks),
+  createSubtask: (taskId, payload) => axiosClient.post(`/tasks/${taskId}/subtasks`, payload).then((r) => r.data.data),
+  updateSubtask: (taskId, subtaskId, payload) =>
+    axiosClient.put(`/tasks/${taskId}/subtasks/${subtaskId}`, payload).then((r) => r.data.data),
+  removeSubtask: (taskId, subtaskId) => axiosClient.delete(`/tasks/${taskId}/subtasks/${subtaskId}`).then((r) => r.data.data),
 };
 
 export default tasksApi;

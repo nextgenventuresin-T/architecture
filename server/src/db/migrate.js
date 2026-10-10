@@ -34,10 +34,13 @@ async function migrate() {
 
   try {
     for (const file of SCHEMA_FILES) {
-      let sql = fs.readFileSync(path.join(__dirname, file), 'utf8');
-      if (sql.charCodeAt(0) === 0xfeff) {
-        sql = sql.slice(1);
-      }
+      const sql = fs.readFileSync(path.join(__dirname, file), 'utf8')
+        // An editor-saved UTF-8 byte-order mark makes MySQL reject the first statement.
+        .replace(/^﻿/, '')
+        // Always migrate the database this connection is configured for (DB_NAME),
+        // never the name hard-coded in the schema files.
+        .replace(/CREATE\s+DATABASE[^;]*;/gi, '')
+        .replace(/^\s*USE\s+`?\w+`?\s*;/gim, '');
       await connection.query(sql);
       console.log(`Applied ${file}`);
     }
@@ -45,6 +48,7 @@ async function migrate() {
     await require('./migrations/20261010_task_tool_days').up(connection);
     await require('./migrations/20261010_transport_expenses').up(connection);
     await require('./migrations/20261010_material_movements_tool').up(connection);
+    await require('./migrations/20261011_task_subtasks').up(connection);
     console.log(`Schema up to date on "${env.db.database}".`);
   } finally {
     await connection.end();

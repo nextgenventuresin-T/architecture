@@ -41,6 +41,7 @@ export default function OverviewTab({ request, movement }) {
                 ) : (request.site?.name || '—'),
               },
               ...(request.task ? [{ label: 'Task', value: <span className="font-semibold text-brand-700">{request.task.name}</span> }] : []),
+              ...(request.subtask ? [{ label: 'Subtask', value: <span className="font-semibold text-brand-700">{request.subtask.name}</span> }] : []),
               ...(request.warehouseTransactionId ? [{ label: 'Stock movement', value: `Linked · ${request.billReference ? `Bill ${request.billReference}` : 'internal transfer'}` }] : []),
               ...(request.billFile ? [{ label: 'Bill / invoice', value: <BillLink id={request.id} file={request.billFile} /> }] : []),
             ]}

@@ -165,14 +165,17 @@ async function getDetail(id, hrScope) {
     taskDailyWork = tdwRows[0];
   }
 
+  const subtaskMap = await taskModel.findSubtaskSummaries(taskIds);
+
   const formattedTasks = tasks.map((t) => {
+    const subtasks = subtaskMap.get(t.id) || [];
     const tMaterials = taskMaterials.filter((m) => m.task_id === t.id);
     const tTools = taskTools.filter((tl) => tl.task_id === t.id);
     const tLabour = taskLabour.filter((l) => l.task_id === t.id);
     const tMisc = taskMisc.filter((mc) => mc.task_id === t.id);
     const tWorkerLogs = taskWorkerLogs.filter((w) => w.task_id === t.id);
     const tDailyWork = taskDailyWork.filter((dw) => dw.task_id === t.id);
-    const tExpenses = (expenses || []).filter((e) => e.task_id === t.id);
+    const tExpenses = (expenses || []).filter((e) => e.task_id === t.id && !['rejected', 'cancelled'].includes(e.status));
 
     const budgetUtilization = taskModel.computeTaskBudgetUtilization(t, tMaterials, tDailyWork, tWorkerLogs, tExpenses);
 
@@ -205,8 +208,34 @@ async function getDetail(id, hrScope) {
       actualCost: budgetUtilization.total.actual,
       variance: Number((budgetUtilization.total.effectiveBudget - budgetUtilization.total.actual).toFixed(2)),
       dailyUpdatesCount: Number(t.daily_updates_count || 0),
+      // Subtask budgets & spend are already inside this main task's totals.
+      subtaskCount: subtasks.length,
+      subtaskBudgetTotal: Number(subtasks.reduce((s, st) => s + st.plannedBudget, 0).toFixed(2)),
+      // Each subtask with its own plan lines, so the project form can edit it in place.
+      subtasks: subtasks.map((st) => ({
+        ...st,
+        materials: taskMaterials.filter((m) => m.subtask_id === st.id).map((m) => ({
+          id: m.id, materialId: m.material_id, materialName: m.material_name, unit: m.material_unit,
+          quantity: Number(m.quantity || 0) + Number(m.approved_additional_quantity || 0),
+          costPerUnit: Number(m.cost_per_unit || 0), totalCost: Number(m.total_cost || 0),
+        })),
+        tools: taskTools.filter((tl) => tl.subtask_id === st.id).map((tl) => ({
+          id: tl.id, toolId: tl.tool_id, toolName: tl.tool_name, rentalType: tl.rental_type,
+          quantity: Number(tl.quantity || 1), cost: Number(tl.cost || 0), workingDays: Number(tl.working_days || 1),
+          totalCost: Number(tl.total_cost || 0),
+        })),
+        labour: taskLabour.filter((l) => l.subtask_id === st.id).map((l) => ({
+          id: l.id, labourName: l.labour_name || '', labourType: l.labour_type, workerCount: Number(l.worker_count || 1),
+          dailyWage: Number(l.daily_wage || 0), workingDays: Number(l.working_days || 0), totalCost: Number(l.total_cost || 0),
+          workerId: l.worker_id || null, workerType: l.worker_type || null, skillTrade: l.skill_trade || null,
+          startDate: l.start_date || null, endDate: l.end_date || null, remarks: l.remarks || null,
+        })),
+        misc: taskMisc.filter((mc) => mc.subtask_id === st.id).map((mc) => ({ id: mc.id, description: mc.description, amount: Number(mc.amount || 0) })),
+      })),
+    // The plan lists below are the main task's DIRECT rows only: they are what the
+    // project form edits and re-saves, so subtask rows must never appear here.
     materials: taskMaterials
-      .filter((m) => m.task_id === t.id)
+      .filter((m) => m.task_id === t.id && m.subtask_id == null)
       .map((m) => ({
         id: m.id,
         materialId: m.material_id,
@@ -218,7 +247,7 @@ async function getDetail(id, hrScope) {
         totalCost: Number(m.total_cost || 0),
       })),
     tools: taskTools
-      .filter((tl) => tl.task_id === t.id)
+      .filter((tl) => tl.task_id === t.id && tl.subtask_id == null)
       .map((tl) => ({
         id: tl.id,
         toolId: tl.tool_id,
@@ -232,7 +261,7 @@ async function getDetail(id, hrScope) {
         totalCost: Number(tl.total_cost || 0),
       })),
     labour: taskLabour
-      .filter((l) => l.task_id === t.id)
+      .filter((l) => l.task_id === t.id && l.subtask_id == null)
       .map((l) => ({
         id: l.id,
         labourName: l.labour_name || '',
@@ -241,9 +270,15 @@ async function getDetail(id, hrScope) {
         dailyWage: Number(l.daily_wage || 0),
         workingDays: Number(l.working_days || 0),
         totalCost: Number(l.total_cost || 0),
+        workerId: l.worker_id || null,
+        workerType: l.worker_type || null,
+        skillTrade: l.skill_trade || null,
+        startDate: l.start_date || null,
+        endDate: l.end_date || null,
+        remarks: l.remarks || null,
       })),
     misc: taskMisc
-      .filter((mc) => mc.task_id === t.id)
+      .filter((mc) => mc.task_id === t.id && mc.subtask_id == null)
       .map((mc) => ({
         id: mc.id,
         description: mc.description,
@@ -321,6 +356,7 @@ async function getDetail(id, hrScope) {
       plannedBudget: t.totalBudget,
       actualCost: t.actualCost,
       variance: t.variance,
+      subtasks: t.subtasks,
     })),
   };
 

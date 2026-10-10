@@ -86,6 +86,16 @@ async function decide(id, decision, userId, note) {
            WHERE id = ?`,
           [excess, excess, tba.task_id]
         );
+        // Spend booked on a subtask: its own effective budget grows by the same amount.
+        if (tba.subtask_id) {
+          await pool.query(
+            `UPDATE task_subtasks
+             SET approved_additional_budget = approved_additional_budget + ?,
+                 pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
+             WHERE id = ?`,
+            [excess, excess, tba.subtask_id]
+          );
+        }
       }
       if (tba.worker_id) {
         await pool.query(
@@ -110,6 +120,12 @@ async function decide(id, decision, userId, note) {
            WHERE id = ?`,
           [excess, tba.task_id]
         );
+        if (tba.subtask_id) {
+          await pool.query(
+            'UPDATE task_subtasks SET pending_excess_budget = GREATEST(0, pending_excess_budget - ?) WHERE id = ?',
+            [excess, tba.subtask_id]
+          );
+        }
       }
       if (tba.worker_id) {
         await pool.query(

@@ -22,7 +22,8 @@ const RECEIVED_ROLLUP = `
 
 const LIST_SELECT = `
   SELECT
-    r.id, r.request_number, r.project_id, r.site_id, r.task_id, pt.name AS task_name, r.material_id,
+    r.id, r.request_number, r.project_id, r.site_id, r.task_id, pt.name AS task_name,
+    r.subtask_id, pst.name AS subtask_name, r.material_id,
     r.is_excess, r.excess_quantity, r.excess_reason, r.planned_quantity_at_request, r.procured_quantity_at_request,
     r.supplier, r.supplier_contact, r.quantity, r.unit, r.estimated_rate,
     (r.quantity * r.estimated_rate) AS estimated_total,
@@ -62,6 +63,7 @@ const LIST_SELECT = `
   LEFT JOIN projects p ON p.id = r.project_id
   LEFT JOIN sites s ON s.id = r.site_id
   LEFT JOIN project_tasks pt ON pt.id = r.task_id
+  LEFT JOIN task_subtasks pst ON pst.id = r.subtask_id
   LEFT JOIN materials m ON m.id = r.material_id
   LEFT JOIN tools t ON t.id = r.tool_id
   LEFT JOIN users u ON u.id = r.requested_by
@@ -225,7 +227,7 @@ async function nextPoNumber() {
 }
 
 const WRITABLE = [
-  'request_number', 'project_id', 'site_id', 'task_id', 'material_id', 'supplier',
+  'request_number', 'project_id', 'site_id', 'task_id', 'subtask_id', 'material_id', 'supplier',
   'supplier_contact', 'quantity', 'unit', 'estimated_rate', 'required_date',
   'priority', 'requested_by', 'notes', 'reason', 'status',
   'is_excess', 'excess_quantity', 'excess_reason', 'planned_quantity_at_request', 'procured_quantity_at_request',

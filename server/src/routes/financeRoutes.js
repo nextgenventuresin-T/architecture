@@ -55,6 +55,8 @@ const expenseRules = (isCreate) => {
   return [
     required(body('project_id').isInt({ min: 1 }).withMessage('Select a project.')).toInt(),
     body('site_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid site.').toInt(),
+    body('task_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Select a valid task.').toInt(),
+    body('subtask_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Select a valid subtask.').toInt(),
     required(body('category').isIn(EXPENSE_CATEGORIES).withMessage('Choose a valid category.')),
     body('description').optional({ nullable: true }).trim().isLength({ max: 255 }),
     body('remarks').optional({ nullable: true }).trim(),

@@ -41,3 +41,19 @@ export function daysUntil(value) {
   const diff = new Date(value).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0);
   return Math.round(diff / 86400000);
 }
+
+/**
+ * Value for an <input type="date">. DATE columns reach the browser as UTC ISO
+ * timestamps of local midnight (e.g. 2026-10-01 in IST -> "2026-09-30T18:30:00.000Z"),
+ * so slicing the string shows - and re-saves - the previous day. Plain
+ * "YYYY-MM-DD" values pass through unchanged.
+ */
+export function toDateInputValue(value) {
+  if (!value) return '';
+  const s = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s.slice(0, 10);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

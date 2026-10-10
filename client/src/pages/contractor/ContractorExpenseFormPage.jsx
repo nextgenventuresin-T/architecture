@@ -52,6 +52,7 @@ export default function ContractorExpenseFormPage() {
     project_id: '',
     site_id: '',
     task_id: '',
+    subtask_id: '',
     phase_number: '1',
     subcategory: '',
     material_id: '',
@@ -64,6 +65,8 @@ export default function ContractorExpenseFormPage() {
     expense_date: todayISO(),
     project_id: '',
     site_id: '',
+    task_id: '',
+    subtask_id: '',
     category: 'Site Expense',
     amount: '',
     remarks: '',
@@ -113,8 +116,8 @@ export default function ContractorExpenseFormPage() {
     if (!activeProjectId) {
       setSites([]);
       setTasks([]);
-      setMaterialValues((v) => ({ ...v, site_id: '', task_id: '' }));
-      setExpenseValues((v) => ({ ...v, site_id: '' }));
+      setMaterialValues((v) => ({ ...v, site_id: '', task_id: '', subtask_id: '' }));
+      setExpenseValues((v) => ({ ...v, site_id: '', task_id: '', subtask_id: '' }));
       return;
     }
     setLoadingSites(true);
@@ -130,6 +133,8 @@ export default function ContractorExpenseFormPage() {
       })
       .finally(() => setLoadingSites(false));
   }, [activeProjectId]);
+
+  const subtasksOf = (taskId) => (taskId ? tasks.find((t) => String(t.id) === String(taskId))?.subtasks ?? [] : []);
 
   // Derived selected material details
   const selectedMaterial = useMemo(() => {
@@ -211,6 +216,7 @@ export default function ContractorExpenseFormPage() {
         project_id: materialValues.project_id,
         site_id: materialValues.site_id ? materialValues.site_id : null,
         task_id: materialValues.task_id ? Number(materialValues.task_id) : undefined,
+        subtask_id: materialValues.task_id && materialValues.subtask_id ? Number(materialValues.subtask_id) : undefined,
         phase_number: Number(materialValues.phase_number || 1),
         subcategory: materialValues.subcategory || 'General Work',
         material_id: Number(materialValues.material_id),
@@ -258,6 +264,8 @@ export default function ContractorExpenseFormPage() {
       const formData = new FormData();
       formData.append('project_id', expenseValues.project_id);
       if (expenseValues.site_id) formData.append('site_id', expenseValues.site_id);
+      if (expenseValues.task_id) formData.append('task_id', expenseValues.task_id);
+      if (expenseValues.task_id && expenseValues.subtask_id) formData.append('subtask_id', expenseValues.subtask_id);
       formData.append('category', expenseValues.category);
       formData.append('amount', expenseValues.amount);
       formData.append('expense_date', expenseValues.expense_date);
@@ -517,6 +525,7 @@ export default function ContractorExpenseFormPage() {
                     setMaterialValues((v) => ({
                       ...v,
                       task_id: tId,
+                      subtask_id: '',
                       subcategory: selectedTask ? selectedTask.name : v.subcategory,
                     }));
                   }}
@@ -527,6 +536,21 @@ export default function ContractorExpenseFormPage() {
                     label: t.name,
                   }))}
                 />
+
+                {subtasksOf(materialValues.task_id).length > 0 && (
+                  <SelectField
+                    label="Subtask"
+                    value={materialValues.subtask_id}
+                    onChange={(e) => {
+                      const stId = e.target.value;
+                      const st = subtasksOf(materialValues.task_id).find((x) => String(x.id) === stId);
+                      setMaterialValues((v) => ({ ...v, subtask_id: stId, subcategory: st ? st.name : v.subcategory }));
+                    }}
+                    error={fieldErrors.subtask_id}
+                    placeholder="Main task (not a specific subtask)"
+                    options={subtasksOf(materialValues.task_id).map((st) => ({ value: String(st.id), label: st.name }))}
+                  />
+                )}
 
                 <InputField
                   label="Work Details / Scope"
@@ -668,6 +692,32 @@ export default function ContractorExpenseFormPage() {
                     value: String(s.id),
                     label: s.name,
                   }))}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <SelectField
+                  label="Task (Optional)"
+                  value={expenseValues.task_id}
+                  onChange={(e) => {
+                    const tId = e.target.value;
+                    setExpenseValues((v) => ({ ...v, task_id: tId, subtask_id: '' }));
+                  }}
+                  error={fieldErrors.task_id}
+                  disabled={!expenseValues.project_id}
+                  placeholder={tasks.length === 0 ? 'No tasks on this project' : 'Not linked to a task'}
+                  options={tasks
+                    .filter((t) => !expenseValues.site_id || !t.siteId || String(t.siteId) === String(expenseValues.site_id))
+                    .map((t) => ({ value: String(t.id), label: t.name }))}
+                />
+                <SelectField
+                  label="Subtask (Optional)"
+                  value={expenseValues.subtask_id}
+                  onChange={handleExpenseChange('subtask_id')}
+                  error={fieldErrors.subtask_id}
+                  disabled={subtasksOf(expenseValues.task_id).length === 0}
+                  placeholder={subtasksOf(expenseValues.task_id).length ? 'Main task (not a specific subtask)' : 'No subtasks on this task'}
+                  options={subtasksOf(expenseValues.task_id).map((st) => ({ value: String(st.id), label: st.name }))}
                 />
               </div>
 

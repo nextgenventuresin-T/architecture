@@ -9,8 +9,10 @@ export const dailyWorkApi = {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       .then((r) => r.data.data.update),
-  taskMaterials: (taskId, contractorId) =>
-    axiosClient.get('/daily-work/task-materials', { params: { taskId, contractorId } }).then((r) => r.data.data.materials),
+  taskMaterials: (taskId, contractorId, subtaskId) =>
+    axiosClient
+      .get('/daily-work/task-materials', { params: { taskId, contractorId, ...(subtaskId ? { subtaskId } : {}) } })
+      .then((r) => r.data.data.materials),
   photoUrl: (id) => `/api/daily-work/photos/${id}`,
 };
 

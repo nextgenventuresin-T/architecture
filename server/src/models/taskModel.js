@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const ApiError = require('../utils/ApiError');
 
 /**
  * Task Data Access Model.
@@ -46,27 +47,50 @@ function normalizeToolRow(t, fallbackDays) {
 }
 
 /**
+ * Subtask scope for a query on a table carrying task_id + subtask_id.
+ *   undefined -> the whole main task (every row, legacy behaviour)
+ *   null      -> rows booked directly on the main task (not in any subtask)
+ *   number    -> rows of that one subtask
+ */
+function subtaskScope(alias, subtaskId) {
+  const col = alias ? `${alias}.subtask_id` : 'subtask_id';
+  if (subtaskId === undefined) return { sql: '', params: [] };
+  if (subtaskId === null) return { sql: ` AND ${col} IS NULL`, params: [] };
+  return { sql: ` AND ${col} = ?`, params: [Number(subtaskId)] };
+}
+
+/** Normalises a request value into the scope used by subtaskScope(). */
+function toSubtaskId(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '' || Number(value) <= 0) return null;
+  return Number(value);
+}
+
+/**
  * Machines & tools planned in the task budget (allocation rows written by the old
  * allocate flow carry contractor_id / requested_by and are not planning rows).
  * Rows typed as free text are matched to the tool master by name.
+ * `subtaskId` narrows to one subtask (or, when null, to the main task's direct plan).
  */
-async function findPlannedTools(taskId, conn = pool) {
+async function findPlannedTools(taskId, conn = pool, subtaskId = undefined) {
+  const plan = subtaskScope('tt', subtaskId);
+  const reqScope = subtaskScope('', subtaskId);
   const [rows] = await conn.query(
     `SELECT tt.id, COALESCE(tt.tool_id, tm.id) AS tool_id, COALESCE(t.name, tm.name, tt.tool_name) AS tool_name,
             COALESCE(t.type, tm.type) AS tool_type, tt.rental_type, tt.quantity, tt.working_days, tt.cost, tt.total_cost
      FROM task_tools tt
      LEFT JOIN tools t ON t.id = tt.tool_id
      LEFT JOIN tools tm ON tt.tool_id IS NULL AND LOWER(TRIM(tm.name)) = LOWER(TRIM(tt.tool_name))
-     WHERE tt.task_id = ? AND tt.contractor_id IS NULL AND tt.requested_by IS NULL
+     WHERE tt.task_id = ? AND tt.contractor_id IS NULL AND tt.requested_by IS NULL${plan.sql}
      ORDER BY tt.id`,
-    [taskId]
+    [taskId, ...plan.params]
   );
   const [req] = await conn.query(
     `SELECT tool_id, COALESCE(SUM(quantity), 0) AS qty
      FROM procurement_requests
-     WHERE task_id = ? AND item_type = 'tool' AND status NOT IN ('rejected', 'cancelled')
+     WHERE task_id = ? AND item_type = 'tool' AND status NOT IN ('rejected', 'cancelled')${reqScope.sql}
      GROUP BY tool_id`,
-    [taskId]
+    [taskId, ...reqScope.params]
   );
   const requested = new Map(req.map((r) => [Number(r.tool_id), Number(r.qty)]));
   const byTool = new Map();
@@ -93,12 +117,43 @@ async function findPlannedTools(taskId, conn = pool) {
   });
 }
 
-async function insertToolRow(connection, taskId, projectId, siteId, r) {
+async function insertToolRow(connection, taskId, projectId, siteId, r, subtaskId = null) {
   await connection.query(
-    `INSERT INTO task_tools (task_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, working_days, total_cost, start_date, end_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [taskId, projectId, siteId, r.toolId, r.toolName, r.rentalType, r.qty, r.cost, r.days, r.total, r.startDate, r.endDate]
+    `INSERT INTO task_tools (task_id, subtask_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, working_days, total_cost, start_date, end_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [taskId, subtaskId, projectId, siteId, r.toolId, r.toolName, r.rentalType, r.qty, r.cost, r.days, r.total, r.startDate, r.endDate]
   );
+}
+
+/** Sum of every subtask's planned budget under a main task, per category. */
+async function subtaskBudgetTotals(conn, taskId) {
+  const [[row]] = await conn.query(
+    `SELECT COUNT(*) AS cnt,
+            COALESCE(SUM(material_budget), 0) AS material, COALESCE(SUM(tool_budget), 0) AS tool,
+            COALESCE(SUM(labour_budget), 0) AS labour, COALESCE(SUM(misc_budget), 0) AS misc,
+            COALESCE(SUM(total_budget), 0) AS total
+     FROM task_subtasks WHERE task_id = ?`,
+    [taskId]
+  );
+  return {
+    count: Number(row.cnt || 0),
+    material: Number(row.material || 0),
+    tool: Number(row.tool || 0),
+    labour: Number(row.labour || 0),
+    misc: Number(row.misc || 0),
+    total: Number(row.total || 0),
+  };
+}
+
+/** Project estimated budget = sum of MAIN task budgets (subtasks are already inside them). */
+async function refreshProjectEstimate(conn, projectId, { allowZero = false } = {}) {
+  const [[budgetSum]] = await conn.query(
+    'SELECT COALESCE(SUM(total_budget), 0) AS total_sum FROM project_tasks WHERE project_id = ?',
+    [projectId]
+  );
+  if (allowZero || Number(budgetSum.total_sum) > 0) {
+    await conn.query('UPDATE projects SET estimated_budget = ? WHERE id = ?', [Number(budgetSum.total_sum || 0), projectId]);
+  }
 }
 
 function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], workerLogs = [], expenses = []) {
@@ -173,11 +228,21 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
       actualMisc += Number(dw.misc_amount || dw.miscAmount || 0);
     }
   });
+  const miscCategories = ['Miscellaneous', 'Misc', 'Operational Misc', 'Material Transport'];
+  // Categories already measured elsewhere: material via consumption, labour via worker logs.
+  const notMiscCategories = new Set(['Material Consumption', 'material', 'labour', 'Labour Expense', 'Advance Wages', 'Labour Conveyance']);
   expenses.forEach((e) => {
-    if (['Miscellaneous', 'Misc', 'Operational Misc', 'Material Transport'].includes(e.category)) {
+    if (miscCategories.includes(e.category)) {
       if (!e.reference?.startsWith('DWU-MISC-')) {
         actualMisc += Number(e.amount || 0);
       }
+    } else if (
+      // A manually entered expense linked to this task / subtask (source_type is set
+      // on every system-generated one) counts as miscellaneous spend.
+      !e.source_type && e.task_id && !toolExpenseCategories.has(e.category) && !notMiscCategories.has(e.category)
+      && !['rejected', 'cancelled'].includes(e.status) && !String(e.reference || '').startsWith('DWU-')
+    ) {
+      actualMisc += Number(e.amount || 0);
     }
   });
   actualMisc = Number(actualMisc.toFixed(2));
@@ -247,10 +312,11 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
 
 async function getTaskBudgetApprovals(taskId) {
   const [rows] = await pool.query(
-    `SELECT tba.*, u.full_name AS requested_by_name, du.full_name AS decided_by_name
+    `SELECT tba.*, u.full_name AS requested_by_name, du.full_name AS decided_by_name, st.name AS subtask_name
      FROM task_budget_approvals tba
      LEFT JOIN users u ON u.id = tba.requested_by
      LEFT JOIN users du ON du.id = tba.decided_by
+     LEFT JOIN task_subtasks st ON st.id = tba.subtask_id
      WHERE tba.task_id = ?
      ORDER BY tba.created_at DESC`,
     [Number(taskId)]
@@ -258,6 +324,8 @@ async function getTaskBudgetApprovals(taskId) {
   return rows.map((r) => ({
     id: r.id,
     taskId: r.task_id,
+    subtaskId: r.subtask_id || null,
+    subtaskName: r.subtask_name || null,
     projectId: r.project_id,
     siteId: r.site_id,
     category: r.category,
@@ -485,7 +553,7 @@ async function updateTask(taskId, payload) {
 
     if (hasMaterials) {
       materialBudget = 0;
-      await connection.query('DELETE FROM task_materials WHERE task_id = ?', [taskId]);
+      await connection.query('DELETE FROM task_materials WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
       for (const m of payload.materials) {
         if (m.material_id || m.materialId) {
           const qty = Number(m.quantity || 0);
@@ -503,7 +571,7 @@ async function updateTask(taskId, payload) {
 
     if (hasTools) {
       toolBudget = 0;
-      await connection.query('DELETE FROM task_tools WHERE task_id = ?', [taskId]);
+      await connection.query('DELETE FROM task_tools WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
       const toolDays = Number(payload.duration_days || task.duration_days || 0);
       for (const t of payload.tools) {
         const r = normalizeToolRow(t, toolDays);
@@ -516,7 +584,7 @@ async function updateTask(taskId, payload) {
 
     if (hasLabour) {
       labourBudget = 0;
-      await connection.query('DELETE FROM task_labour WHERE task_id = ?', [taskId]);
+      await connection.query('DELETE FROM task_labour WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
       const seenWorkers = new Set();
       for (const l of payload.labour) {
         const lType = (l.labour_type || l.labourType || 'Labour').trim();
@@ -554,7 +622,7 @@ async function updateTask(taskId, payload) {
 
     if (hasMisc) {
       miscBudget = 0;
-      await connection.query('DELETE FROM task_misc WHERE task_id = ?', [taskId]);
+      await connection.query('DELETE FROM task_misc WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
       for (const mc of payload.misc) {
         const desc = (mc.description || '').trim();
         if (desc) {
@@ -567,6 +635,16 @@ async function updateTask(taskId, payload) {
           );
         }
       }
+    }
+
+    // A replaced category only rewrote the main task's direct rows; its subtasks'
+    // planned budgets stay part of the main task total.
+    if (hasMaterials || hasTools || hasLabour || hasMisc) {
+      const sub = await subtaskBudgetTotals(connection, taskId);
+      if (hasMaterials) materialBudget += sub.material;
+      if (hasTools) toolBudget += sub.tool;
+      if (hasLabour) labourBudget += sub.labour;
+      if (hasMisc) miscBudget += sub.misc;
     }
 
     const totalBudget = materialBudget + toolBudget + labourBudget + miscBudget;
@@ -597,17 +675,13 @@ async function updateTask(taskId, payload) {
       ]
     );
 
-    // Recalculate project total estimated budget across all tasks
-    const [[budgetSum]] = await connection.query(
-      `SELECT COALESCE(SUM(total_budget), 0) AS total_sum FROM project_tasks WHERE project_id = ?`,
-      [projectId]
-    );
-    if (Number(budgetSum.total_sum) > 0) {
-      await connection.query('UPDATE projects SET estimated_budget = ? WHERE id = ?', [
-        Number(budgetSum.total_sum),
-        projectId,
-      ]);
+    // Subtasks always sit on their main task's site.
+    if (String(siteId ?? '') !== String(task.site_id ?? '')) {
+      await connection.query('UPDATE task_subtasks SET site_id = ? WHERE task_id = ?', [siteId, taskId]);
     }
+
+    // Recalculate project total estimated budget across all tasks
+    await refreshProjectEstimate(connection, projectId);
 
     await connection.commit();
     return taskId;
@@ -669,22 +743,22 @@ async function findTaskById(taskId) {
      LEFT JOIN (
        SELECT material_id, SUM(quantity) AS procured_quantity
        FROM procurement_requests
-       WHERE task_id = ? AND status NOT IN ('rejected', 'cancelled')
+       WHERE task_id = ? AND subtask_id IS NULL AND status NOT IN ('rejected', 'cancelled')
        GROUP BY material_id
      ) proc ON proc.material_id = tm.material_id
      LEFT JOIN (
        SELECT material_id, SUM(quantity_used) AS used_quantity
        FROM daily_work_updates
-       WHERE task_id = ?
+       WHERE task_id = ? AND subtask_id IS NULL
        GROUP BY material_id
      ) used ON used.material_id = tm.material_id
      LEFT JOIN (
        SELECT material_id, SUM(quantity) AS pending_approval_quantity
        FROM procurement_requests
-       WHERE task_id = ? AND status = 'pending_approval'
+       WHERE task_id = ? AND subtask_id IS NULL AND status = 'pending_approval'
        GROUP BY material_id
      ) pend ON pend.material_id = tm.material_id
-     WHERE tm.task_id = ? ORDER BY tm.id ASC`,
+     WHERE tm.task_id = ? AND tm.subtask_id IS NULL ORDER BY tm.id ASC`,
     [taskId, taskId, taskId, taskId]
   );
 
@@ -692,7 +766,7 @@ async function findTaskById(taskId) {
     `SELECT tt.*, t.code AS tool_code, t.type AS tool_master_type
      FROM task_tools tt
      LEFT JOIN tools t ON t.id = tt.tool_id
-     WHERE tt.task_id = ? ORDER BY tt.id ASC`,
+     WHERE tt.task_id = ? AND tt.subtask_id IS NULL ORDER BY tt.id ASC`,
     [taskId]
   );
 
@@ -707,21 +781,22 @@ async function findTaskById(taskId) {
      LEFT JOIN contractor_workers cw ON cw.id = tl.worker_id AND tl.worker_type = 'labour'
      LEFT JOIN contractors c ON c.id = cw.contractor_id
      LEFT JOIN employees e ON e.id = tl.worker_id AND tl.worker_type = 'company_employee'
-     WHERE tl.task_id = ? ORDER BY tl.id ASC`,
+     WHERE tl.task_id = ? AND tl.subtask_id IS NULL ORDER BY tl.id ASC`,
     [taskId]
   );
 
   const [misc] = await pool.query(
-    `SELECT * FROM task_misc WHERE task_id = ? ORDER BY id ASC`,
+    `SELECT * FROM task_misc WHERE task_id = ? AND subtask_id IS NULL ORDER BY id ASC`,
     [taskId]
   );
 
   // Load daily work updates for this task
   const [dailyWork] = await pool.query(
-    `SELECT dwu.*, c.name AS contractor_name, m.name AS material_name, m.unit AS material_unit
+    `SELECT dwu.*, c.name AS contractor_name, m.name AS material_name, m.unit AS material_unit, st.name AS subtask_name
      FROM daily_work_updates dwu
      LEFT JOIN contractors c ON c.id = dwu.contractor_id
      LEFT JOIN materials m ON m.id = dwu.material_id
+     LEFT JOIN task_subtasks st ON st.id = dwu.subtask_id
      WHERE dwu.task_id = ?
      ORDER BY dwu.work_date DESC, dwu.id DESC`,
     [taskId]
@@ -740,10 +815,11 @@ async function findTaskById(taskId) {
 
   // Load worker logs for this task
   const [workerLogs] = await pool.query(
-    `SELECT twl.*, c.name AS contractor_name, u.full_name AS logged_by_name
+    `SELECT twl.*, c.name AS contractor_name, u.full_name AS logged_by_name, st.name AS subtask_name
      FROM task_worker_logs twl
      LEFT JOIN contractors c ON c.id = twl.contractor_id
      LEFT JOIN users u ON u.id = twl.created_by
+     LEFT JOIN task_subtasks st ON st.id = twl.subtask_id
      WHERE twl.task_id = ?
      ORDER BY twl.work_date DESC, twl.id DESC`,
     [taskId]
@@ -751,9 +827,10 @@ async function findTaskById(taskId) {
 
   // Calculate actual expenses logged against this task
   const [taskExpenses] = await pool.query(
-    `SELECT e.*, c.name AS contractor_name
+    `SELECT e.*, c.name AS contractor_name, st.name AS subtask_name
      FROM expenses e
      LEFT JOIN contractors c ON c.id = e.contractor_id
+     LEFT JOIN task_subtasks st ON st.id = e.subtask_id
      WHERE e.task_id = ? OR e.id IN (
        SELECT expense_id FROM daily_work_updates WHERE task_id = ? AND expense_id IS NOT NULL
      )
@@ -766,10 +843,11 @@ async function findTaskById(taskId) {
     `SELECT taw.*,
             COALESCE(taw.phone, cw.phone) AS phone,
             COALESCE(taw.aadhaar_number, cw.aadhaar_number) AS aadhaar_number,
-            c.name AS contractor_name
+            c.name AS contractor_name, st.name AS subtask_name
      FROM task_assigned_workers taw
      LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id
      LEFT JOIN contractors c ON c.id = cw.contractor_id
+     LEFT JOIN task_subtasks st ON st.id = taw.subtask_id
      WHERE taw.task_id = ?
      ORDER BY taw.id ASC`,
     [taskId]
@@ -798,9 +876,36 @@ async function findTaskById(taskId) {
       unit: u.unit || u.material_unit,
       contractorName: u.contractor_name,
       remarks: u.remarks,
+      subtaskId: u.subtask_id || null,
+      subtaskName: u.subtask_name || null,
     }));
 
-  const budgetUtilization = computeTaskBudgetUtilization(task, materials, dailyWork, workerLogs, taskExpenses);
+  // Unit rates come from every plan row of the task (direct + subtasks), so the
+  // main task, each subtask and the direct bucket price consumption identically.
+  const [allMaterials] = await pool.query('SELECT material_id, cost_per_unit FROM task_materials WHERE task_id = ?', [taskId]);
+  const [allLabourRows] = await pool.query('SELECT worker_count, working_days FROM task_labour WHERE task_id = ?', [taskId]);
+  const [procurements] = await pool.query(
+    `SELECT r.id, r.request_number, r.subtask_id, st.name AS subtask_name, r.item_type, r.material_id, r.tool_id,
+            m.name AS material_name, m.unit AS material_unit, tl.name AS tool_name, r.quantity, r.unit, r.status,
+            r.is_excess, r.total_amount, r.estimated_rate, r.vehicle_number, r.received_vehicle_number,
+            u.full_name AS requested_by_name, r.created_at
+     FROM procurement_requests r
+     LEFT JOIN task_subtasks st ON st.id = r.subtask_id
+     LEFT JOIN materials m ON m.id = r.material_id
+     LEFT JOIN tools tl ON tl.id = r.tool_id
+     LEFT JOIN users u ON u.id = r.requested_by
+     WHERE r.task_id = ?
+     ORDER BY r.created_at DESC, r.id DESC`,
+    [taskId]
+  );
+
+  // Rejected / cancelled expenses are listed but never count as actual cost
+  // (the same rule the task list, site and project views apply).
+  const liveExpenses = taskExpenses.filter((e) => !['rejected', 'cancelled'].includes(e.status));
+  const budgetUtilization = computeTaskBudgetUtilization(task, allMaterials, dailyWork, workerLogs, liveExpenses);
+  const breakdown = await buildSubtaskBreakdown(task, {
+    allMaterials, dailyWork, workerLogs, expenses: liveExpenses, assignedWorkers, procurements,
+  });
   const budgetApprovals = await getTaskBudgetApprovals(taskId);
   const totalActualExpenses = budgetUtilization.total.actual;
 
@@ -876,37 +981,7 @@ async function findTaskById(taskId) {
     budgetApprovals,
     actualLabourCost: budgetUtilization.labour.actual,
     totalActualExpenses,
-    materials: materials.map((m) => {
-      const originalPlanned = Number(m.quantity || 0);
-      const approvedAdditional = Number(m.approved_additional_quantity || 0);
-      const revisedApproved = Number((originalPlanned + approvedAdditional).toFixed(2));
-      const procured = Number(Number(m.already_procured || 0).toFixed(2));
-      const used = Number(Number(m.already_used || 0).toFixed(2));
-      const remaining = Math.max(0, Number((revisedApproved - used).toFixed(2)));
-      const remainingProcured = Math.max(0, Number((procured - used).toFixed(2)));
-      const excess = Math.max(0, Number((procured - revisedApproved).toFixed(2)));
-
-      return {
-        id: m.id,
-        materialId: m.material_id,
-        materialName: m.material_name,
-        materialCode: m.material_code,
-        unit: m.material_unit,
-        category: m.material_category,
-        originalPlanned,
-        approvedAdditional,
-        revisedApproved,
-        quantity: revisedApproved,
-        costPerUnit: Number(m.cost_per_unit || 0),
-        totalCost: Number(m.total_cost || 0),
-        procured,
-        used,
-        remaining,
-        remainingProcured,
-        excess,
-        pendingApprovals: Number(m.pending_approval_quantity || 0),
-      };
-    }),
+    materials: materials.map(mapPlannedMaterial),
     tools: tools.map((t) => ({
       id: t.id,
       toolId: t.tool_id,
@@ -937,23 +1012,32 @@ async function findTaskById(taskId) {
       contractorName: w.contractor_name,
       remarks: w.remarks,
       status: w.status,
+      subtaskId: w.subtask_id || null,
+      subtaskName: w.subtask_name || null,
     })),
     labour: labour.map((l) => ({
       id: l.id,
-      labourName: l.labour_name || '',
+      labourName: l.labour_name || l.person_name || '',
       labourType: l.labour_type,
       workerCount: Number(l.worker_count || 1),
       dailyWage: Number(l.daily_wage || 0),
       workingDays: Number(l.working_days || 0),
       totalCost: Number(l.total_cost || 0),
+      // Needed so editing the plan keeps the chosen worker and dates.
+      workerId: l.worker_id || null,
+      workerType: l.worker_type || null,
+      skillTrade: l.skill_trade || l.person_trade || null,
+      startDate: l.start_date || null,
+      endDate: l.end_date || null,
+      remarks: l.remarks || null,
     })),
     labourSummary: {
       plannedLabourCost: Number(task.labour_budget || 0),
       actualLabourCost,
       remainingLabourBudget: Math.max(0, Number((Number(task.labour_budget || 0) - actualLabourCost).toFixed(2))),
-      daysPlanned: labour.length ? Math.max(...labour.map((l) => Number(l.working_days || 0)), Number(task.duration_days || 0)) : Number(task.duration_days || 0),
+      daysPlanned: allLabourRows.length ? Math.max(...allLabourRows.map((l) => Number(l.working_days || 0)), Number(task.duration_days || 0)) : Number(task.duration_days || 0),
       daysWorked: new Set(workerLogs.map((w) => String(w.work_date).slice(0, 10))).size,
-      workersPlanned: labour.reduce((s, l) => s + Number(l.worker_count || 1), 0),
+      workersPlanned: allLabourRows.reduce((s, l) => s + Number(l.worker_count || 1), 0),
       workersWorked: new Set(workerLogs.map((w) => w.worker_name?.trim().toLowerCase()).filter(Boolean)).size,
     },
     misc: misc.map((mc) => ({
@@ -972,6 +1056,8 @@ async function findTaskById(taskId) {
       materialName: u.material_name,
       quantityUsed: u.quantity_used ? Number(u.quantity_used) : null,
       unit: u.unit || u.material_unit,
+      subtaskId: u.subtask_id || null,
+      subtaskName: u.subtask_name || null,
       photos: photos
         .filter((p) => p.work_update_id === u.id)
         .map((p) => ({
@@ -991,6 +1077,8 @@ async function findTaskById(taskId) {
       materialName: u.material_name,
       quantityUsed: u.quantity_used ? Number(u.quantity_used) : null,
       unit: u.unit || u.material_unit,
+      subtaskId: u.subtask_id || null,
+      subtaskName: u.subtask_name || null,
       photos: photos
         .filter((p) => p.work_update_id === u.id)
         .map((p) => ({
@@ -1009,6 +1097,9 @@ async function findTaskById(taskId) {
       dailyWage: Number(w.daily_wage || 0),
       workPerformed: w.work_performed,
       contractorName: w.contractor_name,
+      workerType: w.worker_type,
+      subtaskId: w.subtask_id || null,
+      subtaskName: w.subtask_name || null,
     })),
     materialUsageList,
     expenses: taskExpenses.map((e) => ({
@@ -1020,7 +1111,13 @@ async function findTaskById(taskId) {
       expenseDate: e.expense_date,
       status: e.status,
       contractorName: e.contractor_name,
+      subtaskId: e.subtask_id || null,
+      subtaskName: e.subtask_name || null,
     })),
+    procurements: procurements.map(mapProcurementRow),
+    subtasks: breakdown.subtasks,
+    directScope: breakdown.direct,
+    consolidation: breakdown.consolidation,
   };
 }
 
@@ -1107,7 +1204,10 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
     });
   }
 
+  const subtaskMap = await findSubtaskSummaries(taskIds);
+
   return rows.map((r) => {
+    const subtasks = subtaskMap.get(r.id) || [];
     const budgetUtilization = computeTaskBudgetUtilization(
       r,
       taskMaterialsMap.get(r.id) || [],
@@ -1146,12 +1246,15 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
       materialUsedCount: Number(r.material_used_count || 0),
       dailyUpdatesCount: Number(r.daily_updates_count || 0),
       createdAt: r.created_at,
+      subtaskCount: subtasks.length,
+      subtasks,
     };
   });
 }
 
 async function addWorkerLog({
   task_id,
+  subtask_id,
   project_id,
   site_id,
   contractor_id,
@@ -1169,13 +1272,14 @@ async function addWorkerLog({
 }) {
   const [result] = await pool.query(
     `INSERT INTO task_worker_logs
-      (task_id, project_id, site_id, contractor_id, daily_work_id,
+      (task_id, subtask_id, project_id, site_id, contractor_id, daily_work_id,
        worker_id, worker_type,
        worker_name, worker_code, labour_type, work_date,
        hours_worked, daily_wage, work_performed, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task_id,
+      subtask_id ? Number(subtask_id) : null,
       project_id,
       site_id || null,
       contractor_id || null,
@@ -1340,27 +1444,40 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
         miscBudget += Number(mc.amount || 0);
       });
 
+      const direct = { material: materialBudget, tool: toolBudget, labour: labourBudget, misc: miscBudget };
+      let taskId = t.id ? Number(t.id) : null;
+      const isExisting = Boolean(taskId && existingIds.includes(taskId));
+      // The project form edits only the main task's direct plan; planned subtask
+      // budgets stay inside the main task total.
+      if (isExisting) {
+        const sub = await subtaskBudgetTotals(connection, taskId);
+        materialBudget += sub.material;
+        toolBudget += sub.tool;
+        labourBudget += sub.labour;
+        miscBudget += sub.misc;
+      }
+
       const totalBudget = materialBudget + toolBudget + labourBudget + miscBudget;
 
-      let taskId = t.id ? Number(t.id) : null;
-      if (taskId && existingIds.includes(taskId)) {
+      if (isExisting) {
         await connection.query(
           `UPDATE project_tasks
-           SET site_id = ?, name = ?, description = ?, status = ?, progress = ?,
+           SET site_id = ?, name = ?, description = ?, status = ?, progress = COALESCE(?, progress),
                start_date = ?, end_date = ?, planned_start = ?, planned_end = ?, duration_days = ?,
                material_budget = ?, tool_budget = ?, labour_budget = ?, misc_budget = ?, total_budget = ?
            WHERE id = ?`,
           [
-            siteId, taskName, description, status, progress,
+            siteId, taskName, description, status, t.progress !== undefined ? progress : null,
             startDate, endDate, startDate, endDate, durationDays,
             materialBudget, toolBudget, labourBudget, miscBudget, totalBudget,
             taskId
           ]
         );
-        await connection.query('DELETE FROM task_materials WHERE task_id = ?', [taskId]);
-        await connection.query('DELETE FROM task_tools WHERE task_id = ?', [taskId]);
-        await connection.query('DELETE FROM task_labour WHERE task_id = ?', [taskId]);
-        await connection.query('DELETE FROM task_misc WHERE task_id = ?', [taskId]);
+        await connection.query('UPDATE task_subtasks SET site_id = ? WHERE task_id = ?', [siteId, taskId]);
+        await connection.query('DELETE FROM task_materials WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
+        await connection.query('DELETE FROM task_tools WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
+        await connection.query('DELETE FROM task_labour WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
+        await connection.query('DELETE FROM task_misc WHERE task_id = ? AND subtask_id IS NULL', [taskId]);
       } else {
         const [res] = await connection.query(
           `INSERT INTO project_tasks (
@@ -1436,18 +1553,26 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
           );
         }
       }
+
+      // Subtasks planned on the same form: sync them, then the main task total is
+      // its direct plan plus every subtask's plan.
+      if (Array.isArray(t.subtasks)) {
+        await syncTaskSubtasks(connection, { id: taskId, projectId, siteId }, t.subtasks, userId);
+        const sub = await subtaskBudgetTotals(connection, taskId);
+        const mat = direct.material + sub.material;
+        const tool = direct.tool + sub.tool;
+        const lab = direct.labour + sub.labour;
+        const msc = direct.misc + sub.misc;
+        await connection.query(
+          `UPDATE project_tasks SET material_budget = ?, tool_budget = ?, labour_budget = ?, misc_budget = ?, total_budget = ?
+           WHERE id = ?`,
+          [mat, tool, lab, msc, mat + tool + lab + msc, taskId]
+        );
+        await rollupMainTaskProgress(connection, taskId);
+      }
     }
 
-    const [[budgetSum]] = await connection.query(
-      'SELECT COALESCE(SUM(total_budget), 0) AS total_sum FROM project_tasks WHERE project_id = ?',
-      [projectId]
-    );
-    if (Number(budgetSum.total_sum) > 0) {
-      await connection.query('UPDATE projects SET estimated_budget = ? WHERE id = ?', [
-        Number(budgetSum.total_sum),
-        projectId,
-      ]);
-    }
+    await refreshProjectEstimate(connection, projectId);
 
     await connection.commit();
   } catch (err) {
@@ -1467,10 +1592,11 @@ async function getTaskAssignments(taskId) {
     `SELECT taw.*,
             COALESCE(taw.phone, cw.phone) AS phone,
             COALESCE(taw.aadhaar_number, cw.aadhaar_number) AS aadhaar_number,
-            COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name
+            COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name, st.name AS subtask_name
      FROM task_assigned_workers taw
      LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id
      LEFT JOIN contractors c ON c.id = cw.contractor_id
+     LEFT JOIN task_subtasks st ON st.id = taw.subtask_id
      WHERE taw.task_id = ?
      ORDER BY taw.id ASC`,
     [taskId]
@@ -1478,6 +1604,8 @@ async function getTaskAssignments(taskId) {
   return rows.map((w) => ({
     id: w.id,
     taskId: w.task_id,
+    subtaskId: w.subtask_id || null,
+    subtaskName: w.subtask_name || null,
     projectId: w.project_id,
     siteId: w.site_id,
     contractorId: w.contractor_id,
@@ -1501,6 +1629,7 @@ async function getTaskAssignments(taskId) {
 
 async function assignWorkerToTask(payload) {
   const taskId = Number(payload.taskId || payload.task_id);
+  const subtaskId = payload.subtaskId || payload.subtask_id ? Number(payload.subtaskId || payload.subtask_id) : null;
   const projectId = Number(payload.projectId || payload.project_id);
   const siteId = payload.siteId || payload.site_id ? Number(payload.siteId || payload.site_id) : null;
   const contractorId = payload.contractorId || payload.contractor_id ? Number(payload.contractorId || payload.contractor_id) : null;
@@ -1531,16 +1660,17 @@ async function assignWorkerToTask(payload) {
     throw err;
   }
 
-  // Check planned workers vs assigned workers
+  // Check planned workers vs assigned workers (within the subtask when one is chosen)
+  const scope = subtaskId ? subtaskScope('', subtaskId) : { sql: '', params: [] };
   const [[planRow]] = await pool.query(
-    'SELECT COALESCE(SUM(worker_count), 0) AS planned_count FROM task_labour WHERE task_id = ?',
-    [taskId]
+    `SELECT COALESCE(SUM(worker_count), 0) AS planned_count FROM task_labour WHERE task_id = ?${scope.sql}`,
+    [taskId, ...scope.params]
   );
   const plannedCount = Number(planRow?.planned_count || 0);
 
   const [[assignedRow]] = await pool.query(
-    'SELECT COUNT(*) AS assigned_count FROM task_assigned_workers WHERE task_id = ?',
-    [taskId]
+    `SELECT COUNT(*) AS assigned_count FROM task_assigned_workers WHERE task_id = ?${scope.sql}`,
+    [taskId, ...scope.params]
   );
   const assignedCount = Number(assignedRow?.assigned_count || 0);
 
@@ -1558,7 +1688,8 @@ async function assignWorkerToTask(payload) {
 
   if (isAdditional) {
     const [[projTask]] = await pool.query('SELECT name FROM project_tasks WHERE id = ?', [taskId]);
-    const taskName = projTask?.name || `Task #${taskId}`;
+    const subRow = subtaskId ? await findSubtaskRow(subtaskId) : null;
+    const taskName = `${projTask?.name || `Task #${taskId}`}${subRow ? ` › ${subRow.name}` : ''}`;
     const approvalTitle = `Additional Labour: ${workerName} for ${taskName}`;
     const approvalAmount = isCompany ? 0 : plannedCost;
 
@@ -1574,6 +1705,7 @@ async function assignWorkerToTask(payload) {
         approvalAmount,
         JSON.stringify({
           taskId,
+          subtaskId,
           taskName,
           workerId,
           workerName,
@@ -1591,13 +1723,14 @@ async function assignWorkerToTask(payload) {
 
     await pool.query(
       `INSERT INTO task_budget_approvals
-        (task_id, project_id, site_id, category, budget_amount, actual_amount, requested_excess,
+        (task_id, subtask_id, project_id, site_id, category, budget_amount, actual_amount, requested_excess,
          reason, status, requested_by, approval_request_id, original_planned_workers,
          additional_workers, revised_labour_budget, worker_id, worker_type, worker_name)
-       VALUES (?, ?, ?, 'labour', (SELECT COALESCE(labour_budget, 0) FROM project_tasks WHERE id = ?), ?, ?,
+       VALUES (?, ?, ?, ?, 'labour', (SELECT COALESCE(labour_budget, 0) FROM project_tasks WHERE id = ?), ?, ?,
                ?, 'pending', ?, ?, ?, ?, (SELECT COALESCE(labour_budget, 0) + ? FROM project_tasks WHERE id = ?), ?, ?, ?)`,
       [
         taskId,
+        subtaskId,
         projectId,
         siteId,
         taskId,
@@ -1622,17 +1755,23 @@ async function assignWorkerToTask(payload) {
         'UPDATE project_tasks SET pending_excess_budget = pending_excess_budget + ? WHERE id = ?',
         [approvalAmount, taskId]
       );
+      if (subtaskId) {
+        await pool.query(
+          'UPDATE task_subtasks SET pending_excess_budget = pending_excess_budget + ? WHERE id = ?',
+          [approvalAmount, subtaskId]
+        );
+      }
     }
   }
 
   const [res] = await pool.query(
     `INSERT INTO task_assigned_workers
-      (task_id, project_id, site_id, contractor_id, worker_type, worker_id,
+      (task_id, subtask_id, project_id, site_id, contractor_id, worker_type, worker_id,
        worker_name, worker_code, phone, aadhaar_number, trade, start_date,
        end_date, expected_days, daily_wage, planned_cost, remarks, status, assigned_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      taskId, projectId, siteId, contractorId, workerType, workerId,
+      taskId, subtaskId, projectId, siteId, contractorId, workerType, workerId,
       workerName, workerCode, phone, aadhaarNumber, trade, startDate,
       endDate, expectedDays, dailyWage, plannedCost, remarks, status, assignedBy
     ]
@@ -1693,7 +1832,9 @@ async function createQuickWorker(payload, contractorId) {
   };
 }
 
-async function findPlannedMaterials(taskId) {
+async function findPlannedMaterials(taskId, subtaskId = undefined) {
+  const plan = subtaskScope('tm', subtaskId);
+  const rec = subtaskScope('', subtaskId);
   const [rows] = await pool.query(
     `SELECT tm.*,
             m.name AS material_name,
@@ -1707,18 +1848,18 @@ async function findPlannedMaterials(taskId) {
      LEFT JOIN (
        SELECT material_id, SUM(quantity) AS procured_quantity
        FROM procurement_requests
-       WHERE task_id = ? AND status NOT IN ('rejected', 'cancelled')
+       WHERE task_id = ? AND status NOT IN ('rejected', 'cancelled')${rec.sql}
        GROUP BY material_id
      ) proc ON proc.material_id = tm.material_id
      LEFT JOIN (
        SELECT material_id, SUM(quantity_used) AS used_quantity
        FROM daily_work_updates
-       WHERE task_id = ?
+       WHERE task_id = ?${rec.sql}
        GROUP BY material_id
      ) used ON used.material_id = tm.material_id
-     WHERE tm.task_id = ?
+     WHERE tm.task_id = ?${plan.sql}
      ORDER BY tm.id ASC`,
-    [taskId, taskId, taskId]
+    [taskId, ...rec.params, taskId, ...rec.params, taskId, ...plan.params]
   );
 
   return rows.map((m) => {
@@ -1747,6 +1888,691 @@ async function findPlannedMaterials(taskId) {
   });
 }
 
+// ===========================================================================
+// SUBTASKS — Project -> Site -> Main Task -> Subtask.
+// A subtask's planning rows live in the same task_* tables with subtask_id set,
+// and its transactions carry task_id = main task + subtask_id. Main task budget
+// columns always include every subtask's planned budget, so Site / Project
+// totals (which sum main tasks) stay correct with no double counting.
+// ===========================================================================
+
+const PLAN_CATEGORIES = ['materials', 'tools', 'labour', 'misc'];
+
+/**
+ * Replaces one scope's planning rows for the categories present in `payload`
+ * and returns the per-category planned totals of that scope (computed from the
+ * stored rows, never trusted from the client).
+ */
+async function writeSubtaskPlanning(conn, { taskId, subtaskId, projectId, siteId, durationDays }, payload) {
+  if (Array.isArray(payload.materials)) {
+    await conn.query('DELETE FROM task_materials WHERE subtask_id = ?', [subtaskId]);
+    for (const m of payload.materials) {
+      const materialId = m.material_id || m.materialId;
+      if (!materialId) continue;
+      const qty = Math.max(0, Number(m.quantity || 0));
+      const rate = Math.max(0, Number(m.cost_per_unit ?? m.costPerUnit ?? 0));
+      await conn.query(
+        `INSERT INTO task_materials (task_id, subtask_id, project_id, site_id, material_id, quantity, cost_per_unit, total_cost)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [taskId, subtaskId, projectId, siteId, Number(materialId), qty, rate, Number((qty * rate).toFixed(2))]
+      );
+    }
+  }
+
+  if (Array.isArray(payload.tools)) {
+    await conn.query('DELETE FROM task_tools WHERE subtask_id = ?', [subtaskId]);
+    for (const t of payload.tools) {
+      const r = normalizeToolRow(t, durationDays);
+      if (r.toolName) await insertToolRow(conn, taskId, projectId, siteId, r, subtaskId);
+    }
+  }
+
+  if (Array.isArray(payload.labour)) {
+    await conn.query('DELETE FROM task_labour WHERE subtask_id = ?', [subtaskId]);
+    const seen = new Set();
+    for (const l of payload.labour) {
+      const lType = String(l.labour_type || l.labourType || 'Labour').trim();
+      const lName = String(l.labour_name || l.labourName || l.worker_name || l.workerName || '').trim();
+      const workerId = l.worker_id || l.workerId ? Number(l.worker_id || l.workerId) : null;
+      const workerType = l.worker_type || l.workerType || (lType.toLowerCase().includes('company') ? 'company_labour' : 'labour');
+      const key = workerId ? `${workerType}-${workerId}` : (lName ? lName.toLowerCase() : null);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      const isCompany = String(workerType).startsWith('company') || lType.toLowerCase().includes('company');
+      const workers = Math.max(0, Number(l.worker_count || l.workerCount || 1));
+      const wage = isCompany ? 0 : Math.max(0, Number(l.daily_wage || l.dailyWage || 0));
+      const days = Math.max(0, Number(l.working_days || l.workingDays || durationDays || 0));
+      await conn.query(
+        `INSERT INTO task_labour (
+           task_id, subtask_id, project_id, site_id, labour_name, labour_type, worker_count,
+           daily_wage, working_days, total_cost, worker_id, worker_type, start_date, end_date, remarks, skill_trade
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          taskId, subtaskId, projectId, siteId, lName || null, lType, workers,
+          wage, days, Number((workers * wage * days).toFixed(2)), workerId, workerType,
+          l.start_date || l.startDate || null, l.end_date || l.endDate || null,
+          String(l.remarks || '').trim() || null,
+          String(l.skill_trade || l.skillTrade || l.trade || '').trim() || null,
+        ]
+      );
+    }
+  }
+
+  if (Array.isArray(payload.misc)) {
+    await conn.query('DELETE FROM task_misc WHERE subtask_id = ?', [subtaskId]);
+    for (const mc of payload.misc) {
+      const desc = String(mc.description || '').trim();
+      if (!desc) continue;
+      await conn.query(
+        `INSERT INTO task_misc (task_id, subtask_id, project_id, site_id, description, amount) VALUES (?, ?, ?, ?, ?, ?)`,
+        [taskId, subtaskId, projectId, siteId, desc, Math.max(0, Number(mc.amount || 0))]
+      );
+    }
+  }
+
+  const sum = async (table) => {
+    const col = table === 'task_misc' ? 'amount' : 'total_cost';
+    const [[r]] = await conn.query(`SELECT COALESCE(SUM(${col}), 0) AS s FROM ${table} WHERE subtask_id = ?`, [subtaskId]);
+    return Number(Number(r.s || 0).toFixed(2));
+  };
+  const material = await sum('task_materials');
+  const tool = await sum('task_tools');
+  const labour = await sum('task_labour');
+  const misc = await sum('task_misc');
+  return { material, tool, labour, misc, total: Number((material + tool + labour + misc).toFixed(2)) };
+}
+
+/** Adds a per-category budget delta to the main task (keeps its direct plan untouched). */
+async function applyMainTaskBudgetDelta(conn, taskId, d) {
+  const delta = {
+    material: Number(d.material || 0), tool: Number(d.tool || 0), labour: Number(d.labour || 0), misc: Number(d.misc || 0),
+  };
+  if (!delta.material && !delta.tool && !delta.labour && !delta.misc) return;
+  await conn.query(
+    `UPDATE project_tasks
+     SET material_budget = GREATEST(0, material_budget + ?), tool_budget = GREATEST(0, tool_budget + ?),
+         labour_budget = GREATEST(0, labour_budget + ?), misc_budget = GREATEST(0, misc_budget + ?)
+     WHERE id = ?`,
+    [delta.material, delta.tool, delta.labour, delta.misc, taskId]
+  );
+  await conn.query(
+    'UPDATE project_tasks SET total_budget = material_budget + tool_budget + labour_budget + misc_budget WHERE id = ?',
+    [taskId]
+  );
+}
+
+/**
+ * Re-derives a subtask's stored budget columns from its own planning rows and
+ * pushes the difference into the main task. Used after anything that changes a
+ * subtask's plan outside the subtask form (e.g. approved excess procurement).
+ */
+async function recalcSubtaskBudget(conn, subtaskId) {
+  const [[st]] = await conn.query('SELECT * FROM task_subtasks WHERE id = ?', [subtaskId]);
+  if (!st) return null;
+  const sum = async (table) => {
+    const col = table === 'task_misc' ? 'amount' : 'total_cost';
+    const [[r]] = await conn.query(`SELECT COALESCE(SUM(${col}), 0) AS s FROM ${table} WHERE subtask_id = ?`, [subtaskId]);
+    return Number(Number(r.s || 0).toFixed(2));
+  };
+  const next = {
+    material: await sum('task_materials'), tool: await sum('task_tools'),
+    labour: await sum('task_labour'), misc: await sum('task_misc'),
+  };
+  await conn.query(
+    `UPDATE task_subtasks SET material_budget = ?, tool_budget = ?, labour_budget = ?, misc_budget = ?,
+       total_budget = ? WHERE id = ?`,
+    [next.material, next.tool, next.labour, next.misc, next.material + next.tool + next.labour + next.misc, subtaskId]
+  );
+  return {
+    material: next.material - Number(st.material_budget || 0),
+    tool: next.tool - Number(st.tool_budget || 0),
+    labour: next.labour - Number(st.labour_budget || 0),
+    misc: next.misc - Number(st.misc_budget || 0),
+  };
+}
+
+/**
+ * Main task progress follows its subtasks once it has any: budget-weighted
+ * average (equal weights when nothing is budgeted). All subtasks completed
+ * marks the main task completed.
+ */
+async function rollupMainTaskProgress(conn, taskId) {
+  const [subs] = await conn.query('SELECT progress, status, total_budget FROM task_subtasks WHERE task_id = ?', [taskId]);
+  if (!subs.length) return null;
+
+  // The main task spans its subtasks: earliest start to latest end.
+  const [[span]] = await conn.query(
+    'SELECT MIN(start_date) AS s, MAX(end_date) AS e FROM task_subtasks WHERE task_id = ?',
+    [taskId]
+  );
+  if (span.s || span.e) {
+    await conn.query(
+      `UPDATE project_tasks
+       SET start_date = COALESCE(?, start_date), planned_start = COALESCE(?, planned_start),
+           end_date = COALESCE(?, end_date), planned_end = COALESCE(?, planned_end),
+           duration_days = CASE WHEN ? IS NOT NULL AND ? IS NOT NULL THEN DATEDIFF(?, ?) + 1 ELSE duration_days END
+       WHERE id = ?`,
+      [span.s, span.s, span.e, span.e, span.s, span.e, span.e, span.s, taskId]
+    );
+  }
+  const totalWeight = subs.reduce((s, r) => s + Number(r.total_budget || 0), 0);
+  const progress = totalWeight > 0
+    ? subs.reduce((s, r) => s + Number(r.progress || 0) * Number(r.total_budget || 0), 0) / totalWeight
+    : subs.reduce((s, r) => s + Number(r.progress || 0), 0) / subs.length;
+  const rounded = Math.min(100, Math.max(0, Math.round(progress)));
+  const allDone = subs.every((r) => r.status === 'completed' || Number(r.progress || 0) >= 100);
+  if (allDone) {
+    await conn.query("UPDATE project_tasks SET progress = 100, status = 'completed' WHERE id = ?", [taskId]);
+    return 100;
+  }
+  await conn.query('UPDATE project_tasks SET progress = ? WHERE id = ?', [rounded, taskId]);
+  return rounded;
+}
+
+function normalizeSubtaskFields(payload, existing = {}) {
+  const pick = (a, b, fallback) => (payload[a] !== undefined ? payload[a] : payload[b] !== undefined ? payload[b] : fallback);
+  const startDate = pick('start_date', 'startDate', existing.start_date ?? null) || null;
+  const endDate = pick('end_date', 'endDate', existing.end_date ?? null) || null;
+  let durationDays = pick('duration_days', 'durationDays', existing.duration_days ?? null);
+  durationDays = durationDays != null && durationDays !== '' ? Number(durationDays) : inclusiveDays(startDate, endDate);
+  const progress = pick('progress', 'progress', existing.progress ?? 0);
+  return {
+    name: String(pick('name', 'name', existing.name || '')).trim(),
+    description: (() => {
+      const d = pick('description', 'description', existing.description ?? null);
+      return d ? String(d).trim() : null;
+    })(),
+    status: pick('status', 'status', existing.status || 'on-track') || 'on-track',
+    progress: Math.min(100, Math.max(0, Number(progress || 0))),
+    startDate,
+    endDate,
+    durationDays: Math.max(0, Number(durationDays || 0)),
+    sortOrder: Number(pick('sort_order', 'sortOrder', existing.sort_order ?? 0) || 0),
+  };
+}
+
+/**
+ * Makes a main task's subtasks match `subtasks` from the project form (inside the
+ * caller's transaction): updates those with an id, creates new ones, and removes
+ * the rest. A subtask that already has recorded activity is never removed.
+ */
+async function syncTaskSubtasks(conn, { id: taskId, projectId, siteId }, subtasks, userId) {
+  const wanted = subtasks.filter((st) => String(st.name || '').trim());
+  const [existing] = await conn.query('SELECT * FROM task_subtasks WHERE task_id = ?', [taskId]);
+  const byId = new Map(existing.map((r) => [Number(r.id), r]));
+  const keep = new Set(wanted.filter((st) => st.id && byId.has(Number(st.id))).map((st) => Number(st.id)));
+
+  for (const row of existing) {
+    if (keep.has(Number(row.id))) continue;
+    const usage = await countSubtaskTransactions(row.id, conn);
+    if (Object.values(usage).some((n) => n > 0)) {
+      throw ApiError.badRequest(
+        `Subtask "${row.name}" already has recorded procurement / work / expenses and cannot be removed. Mark it completed instead.`
+      );
+    }
+    if (Number(row.approved_additional_budget || 0) > 0) {
+      await conn.query(
+        'UPDATE project_tasks SET approved_additional_budget = GREATEST(0, approved_additional_budget - ?) WHERE id = ?',
+        [Number(row.approved_additional_budget), taskId]
+      );
+    }
+    await conn.query('DELETE FROM task_subtasks WHERE id = ?', [row.id]); // plan rows cascade
+  }
+
+  let order = 0;
+  for (const st of wanted) {
+    order += 1;
+    const current = st.id ? byId.get(Number(st.id)) : null;
+    const f = normalizeSubtaskFields({ ...st, sort_order: order }, current || {});
+    let subtaskId;
+    if (current) {
+      subtaskId = current.id;
+      await conn.query(
+        `UPDATE task_subtasks SET name = ?, description = ?, status = ?, progress = ?, start_date = ?, end_date = ?,
+           duration_days = ?, sort_order = ?, site_id = ? WHERE id = ?`,
+        [f.name, f.description, f.status, f.progress, f.startDate, f.endDate, f.durationDays, f.sortOrder, siteId, subtaskId]
+      );
+    } else {
+      const [res] = await conn.query(
+        `INSERT INTO task_subtasks
+           (task_id, project_id, site_id, name, description, status, progress, start_date, end_date, duration_days, sort_order, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [taskId, projectId, siteId, f.name, f.description, f.status, f.progress, f.startDate, f.endDate,
+          f.durationDays, f.sortOrder, userId || null]
+      );
+      subtaskId = res.insertId;
+    }
+    const b = await writeSubtaskPlanning(conn, { taskId, subtaskId, projectId, siteId, durationDays: f.durationDays }, {
+      materials: st.materials || [], tools: st.tools || [], labour: st.labour || [], misc: st.misc || [],
+    });
+    await conn.query(
+      'UPDATE task_subtasks SET material_budget = ?, tool_budget = ?, labour_budget = ?, misc_budget = ?, total_budget = ? WHERE id = ?',
+      [b.material, b.tool, b.labour, b.misc, b.total, subtaskId]
+    );
+  }
+}
+
+async function findSubtaskRow(subtaskId, conn = pool) {
+  const [[row]] = await conn.query('SELECT * FROM task_subtasks WHERE id = ?', [Number(subtaskId)]);
+  return row || null;
+}
+
+async function createSubtask(taskId, payload, userId) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[task]] = await conn.query('SELECT * FROM project_tasks WHERE id = ? FOR UPDATE', [taskId]);
+    if (!task) throw Object.assign(new Error('Task not found'), { status: 404 });
+
+    const f = normalizeSubtaskFields(payload);
+    const [[{ nextOrder }]] = await conn.query(
+      'SELECT COALESCE(MAX(sort_order), 0) + 1 AS nextOrder FROM task_subtasks WHERE task_id = ?',
+      [taskId]
+    );
+    const [res] = await conn.query(
+      `INSERT INTO task_subtasks
+         (task_id, project_id, site_id, name, description, status, progress, start_date, end_date, duration_days, sort_order, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [taskId, task.project_id, task.site_id, f.name, f.description, f.status, f.progress,
+        f.startDate, f.endDate, f.durationDays, f.sortOrder || nextOrder, userId || null]
+    );
+    const subtaskId = res.insertId;
+
+    const budgets = await writeSubtaskPlanning(conn, {
+      taskId, subtaskId, projectId: task.project_id, siteId: task.site_id, durationDays: f.durationDays,
+    }, payload);
+    await conn.query(
+      `UPDATE task_subtasks SET material_budget = ?, tool_budget = ?, labour_budget = ?, misc_budget = ?, total_budget = ?
+       WHERE id = ?`,
+      [budgets.material, budgets.tool, budgets.labour, budgets.misc, budgets.total, subtaskId]
+    );
+    await applyMainTaskBudgetDelta(conn, taskId, budgets);
+    await refreshProjectEstimate(conn, task.project_id);
+    await rollupMainTaskProgress(conn, taskId);
+
+    await conn.commit();
+    return subtaskId;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * `progressOnly` restricts the update to progress / status (contractor rights).
+ */
+async function updateSubtask(subtaskId, payload, { progressOnly = false } = {}) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[st]] = await conn.query('SELECT * FROM task_subtasks WHERE id = ? FOR UPDATE', [subtaskId]);
+    if (!st) throw Object.assign(new Error('Subtask not found'), { status: 404 });
+
+    const src = progressOnly
+      ? { progress: payload.progress, status: payload.status }
+      : payload;
+    const f = normalizeSubtaskFields(src, st);
+    await conn.query(
+      `UPDATE task_subtasks SET name = ?, description = ?, status = ?, progress = ?, start_date = ?, end_date = ?,
+         duration_days = ?, sort_order = ? WHERE id = ?`,
+      [f.name || st.name, f.description, f.status, f.progress, f.startDate, f.endDate, f.durationDays, f.sortOrder, subtaskId]
+    );
+
+    if (!progressOnly && PLAN_CATEGORIES.some((k) => Array.isArray(payload[k]))) {
+      await writeSubtaskPlanning(conn, {
+        taskId: st.task_id, subtaskId, projectId: st.project_id, siteId: st.site_id, durationDays: f.durationDays,
+      }, payload);
+      const delta = await recalcSubtaskBudget(conn, subtaskId);
+      await applyMainTaskBudgetDelta(conn, st.task_id, delta);
+      await refreshProjectEstimate(conn, st.project_id);
+    }
+    await rollupMainTaskProgress(conn, st.task_id);
+
+    await conn.commit();
+    return st.task_id;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/** Every transaction booked against a subtask, by kind. A subtask with history is never deleted. */
+async function countSubtaskTransactions(subtaskId, conn = pool) {
+  const q = async (sql) => Number((await conn.query(sql, [subtaskId]))[0][0].n || 0);
+  return {
+    procurements: await q("SELECT COUNT(*) AS n FROM procurement_requests WHERE subtask_id = ? AND status NOT IN ('rejected', 'cancelled')"),
+    dailyUpdates: await q('SELECT COUNT(*) AS n FROM daily_work_updates WHERE subtask_id = ?'),
+    workerLogs: await q('SELECT COUNT(*) AS n FROM task_worker_logs WHERE subtask_id = ?'),
+    expenses: await q("SELECT COUNT(*) AS n FROM expenses WHERE subtask_id = ? AND status NOT IN ('rejected', 'cancelled')"),
+    assignedWorkers: await q('SELECT COUNT(*) AS n FROM task_assigned_workers WHERE subtask_id = ?'),
+    toolAllocations: await q('SELECT COUNT(*) AS n FROM tool_allocations WHERE subtask_id = ?'),
+  };
+}
+
+async function deleteSubtask(subtaskId) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[st]] = await conn.query('SELECT * FROM task_subtasks WHERE id = ? FOR UPDATE', [subtaskId]);
+    if (!st) throw Object.assign(new Error('Subtask not found'), { status: 404 });
+
+    const usage = await countSubtaskTransactions(subtaskId, conn);
+    const inUse = Object.entries(usage).filter(([, n]) => n > 0);
+    if (inUse.length) {
+      const err = new Error(
+        `"${st.name}" already has recorded activity (${inUse.map(([k, n]) => `${n} ${k.replace(/([A-Z])/g, ' $1').toLowerCase()}`).join(', ')}). `
+        + 'It cannot be deleted; mark it completed instead.'
+      );
+      err.status = 409;
+      throw err;
+    }
+
+    await applyMainTaskBudgetDelta(conn, st.task_id, {
+      material: -Number(st.material_budget || 0), tool: -Number(st.tool_budget || 0),
+      labour: -Number(st.labour_budget || 0), misc: -Number(st.misc_budget || 0),
+    });
+    // Approved additional budget granted to this subtask was also added to the main task.
+    if (Number(st.approved_additional_budget || 0) > 0) {
+      await conn.query(
+        'UPDATE project_tasks SET approved_additional_budget = GREATEST(0, approved_additional_budget - ?) WHERE id = ?',
+        [Number(st.approved_additional_budget), st.task_id]
+      );
+    }
+    await conn.query('DELETE FROM task_subtasks WHERE id = ?', [subtaskId]); // planning rows cascade
+    await refreshProjectEstimate(conn, st.project_id, { allowZero: true });
+    await rollupMainTaskProgress(conn, st.task_id);
+
+    await conn.commit();
+    return st.task_id;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+function mapPlannedMaterial(m) {
+  const originalPlanned = Number(m.quantity || 0);
+  const approvedAdditional = Number(m.approved_additional_quantity || 0);
+  const revisedApproved = Number((originalPlanned + approvedAdditional).toFixed(2));
+  const procured = Number(Number(m.already_procured || 0).toFixed(2));
+  const used = Number(Number(m.already_used || 0).toFixed(2));
+  return {
+    id: m.id,
+    subtaskId: m.subtask_id || null,
+    materialId: m.material_id,
+    materialName: m.material_name,
+    materialCode: m.material_code,
+    unit: m.material_unit,
+    category: m.material_category,
+    originalPlanned,
+    approvedAdditional,
+    revisedApproved,
+    quantity: revisedApproved,
+    costPerUnit: Number(m.cost_per_unit || 0),
+    totalCost: Number(m.total_cost || 0),
+    procured,
+    used,
+    remaining: Math.max(0, Number((revisedApproved - used).toFixed(2))),
+    remainingProcured: Math.max(0, Number((procured - used).toFixed(2))),
+    excess: Math.max(0, Number((procured - revisedApproved).toFixed(2))),
+    pendingApprovals: Number(m.pending_approval_quantity || 0),
+  };
+}
+
+function utilFromBuckets(budgetRow, rateMaterials, dailyWork, workerLogs, expenses) {
+  return computeTaskBudgetUtilization(budgetRow, rateMaterials, dailyWork, workerLogs, expenses);
+}
+
+const sameSub = (row, subtaskId) => (subtaskId == null ? row.subtask_id == null : Number(row.subtask_id) === Number(subtaskId));
+
+/**
+ * Full per-subtask view for Task Planning -> View Details: own plan with
+ * procured / used quantities, linked procurement, workers, daily logs, and a
+ * budget-vs-actual block. Also returns the "direct" bucket (records on the main
+ * task that are in no subtask) and a reconciliation proving
+ *   main task actual = sum(subtask actuals) + direct actual.
+ */
+async function buildSubtaskBreakdown(task, { allMaterials, dailyWork, workerLogs, expenses, assignedWorkers, procurements }) {
+  const taskId = task.id;
+  const [subs] = await pool.query('SELECT * FROM task_subtasks WHERE task_id = ? ORDER BY sort_order ASC, id ASC', [taskId]);
+
+  const [planMaterials, planTools, planLabour, planMisc] = await Promise.all([
+    pool.query(
+      `SELECT tm.*, m.name AS material_name, m.code AS material_code, m.unit AS material_unit, m.category AS material_category
+       FROM task_materials tm JOIN materials m ON m.id = tm.material_id
+       WHERE tm.task_id = ? AND tm.subtask_id IS NOT NULL ORDER BY tm.id`, [taskId]
+    ).then(([r]) => r),
+    pool.query(
+      `SELECT tt.*, t.code AS tool_code FROM task_tools tt LEFT JOIN tools t ON t.id = tt.tool_id
+       WHERE tt.task_id = ? AND tt.subtask_id IS NOT NULL ORDER BY tt.id`, [taskId]
+    ).then(([r]) => r),
+    pool.query(
+      `SELECT tl.*, COALESCE(cw.full_name, e.full_name, tl.labour_name) AS person_name,
+              COALESCE(cw.skill_category, e.designation, tl.skill_trade) AS person_trade
+       FROM task_labour tl
+       LEFT JOIN contractor_workers cw ON cw.id = tl.worker_id AND tl.worker_type = 'labour'
+       LEFT JOIN employees e ON e.id = tl.worker_id AND tl.worker_type = 'company_employee'
+       WHERE tl.task_id = ? AND tl.subtask_id IS NOT NULL ORDER BY tl.id`, [taskId]
+    ).then(([r]) => r),
+    pool.query('SELECT * FROM task_misc WHERE task_id = ? AND subtask_id IS NOT NULL ORDER BY id', [taskId]).then(([r]) => r),
+  ]);
+
+  const liveProcurements = procurements.filter((p) => !['rejected', 'cancelled'].includes(p.status));
+  const sumBy = (rows, subtaskId, materialId, field) => rows
+    .filter((r) => sameSub(r, subtaskId) && Number(r.material_id) === Number(materialId))
+    .reduce((s, r) => s + Number(r[field] || 0), 0);
+
+  const subtasks = subs.map((st) => {
+    const sid = st.id;
+    const dw = dailyWork.filter((r) => sameSub(r, sid));
+    const wl = workerLogs.filter((r) => sameSub(r, sid));
+    const ex = expenses.filter((r) => sameSub(r, sid));
+    const util = utilFromBuckets(st, allMaterials, dw, wl, ex);
+
+    const materials = planMaterials.filter((m) => Number(m.subtask_id) === sid).map((m) => mapPlannedMaterial({
+      ...m,
+      already_procured: sumBy(liveProcurements, sid, m.material_id, 'quantity'),
+      already_used: sumBy(dw, sid, m.material_id, 'quantity_used'),
+      pending_approval_quantity: sumBy(procurements.filter((p) => p.status === 'pending_approval'), sid, m.material_id, 'quantity'),
+    }));
+
+    return {
+      id: sid,
+      taskId: st.task_id,
+      projectId: st.project_id,
+      siteId: st.site_id,
+      name: st.name,
+      description: st.description,
+      status: st.status,
+      progress: Number(st.progress || 0),
+      startDate: st.start_date,
+      endDate: st.end_date,
+      durationDays: Number(st.duration_days || 0),
+      sortOrder: Number(st.sort_order || 0),
+      budget: {
+        material: Number(st.material_budget || 0),
+        tool: Number(st.tool_budget || 0),
+        labour: Number(st.labour_budget || 0),
+        misc: Number(st.misc_budget || 0),
+        total: Number(st.total_budget || 0),
+        approvedAdditional: Number(st.approved_additional_budget || 0),
+        pendingExcess: Number(st.pending_excess_budget || 0),
+      },
+      plannedBudget: util.total.effectiveBudget,
+      actualCost: util.total.actual,
+      remainingBudget: Number((util.total.effectiveBudget - util.total.actual).toFixed(2)),
+      budgetUtilization: util,
+      materials,
+      tools: planTools.filter((t) => Number(t.subtask_id) === sid).map((t) => ({
+        id: t.id, toolId: t.tool_id, toolName: t.tool_name, toolCode: t.tool_code, rentalType: t.rental_type,
+        quantity: Number(t.quantity || 1), cost: Number(t.cost || 0), workingDays: Number(t.working_days || 1),
+        startDate: t.start_date || null, endDate: t.end_date || null, totalCost: Number(t.total_cost || 0),
+      })),
+      labour: planLabour.filter((l) => Number(l.subtask_id) === sid).map((l) => ({
+        id: l.id, labourName: l.person_name || l.labour_name || '', labourType: l.labour_type,
+        workerId: l.worker_id, workerType: l.worker_type, skillTrade: l.person_trade || l.skill_trade || null,
+        workerCount: Number(l.worker_count || 1), dailyWage: Number(l.daily_wage || 0),
+        workingDays: Number(l.working_days || 0), startDate: l.start_date, endDate: l.end_date,
+        totalCost: Number(l.total_cost || 0), remarks: l.remarks,
+      })),
+      misc: planMisc.filter((mc) => Number(mc.subtask_id) === sid).map((mc) => ({
+        id: mc.id, description: mc.description, amount: Number(mc.amount || 0),
+      })),
+      procurements: procurements.filter((p) => sameSub(p, sid)).map(mapProcurementRow),
+      assignedWorkers: assignedWorkers.filter((w) => sameSub(w, sid)).map((w) => ({
+        id: w.id, workerName: w.worker_name, workerType: w.worker_type, trade: w.trade, status: w.status,
+        expectedDays: Number(w.expected_days || 0), dailyWage: Number(w.daily_wage || 0), plannedCost: Number(w.planned_cost || 0),
+      })),
+      counts: {
+        dailyUpdates: dw.length,
+        workerLogs: wl.length,
+        expenses: ex.length,
+        materialsConsumed: dw.filter((u) => u.material_id && Number(u.quantity_used) > 0).length,
+      },
+    };
+  });
+
+  // Direct bucket: what the main task plans / spends outside any subtask.
+  const subTotals = subtasks.reduce((acc, s) => {
+    acc.material += s.budget.material; acc.tool += s.budget.tool; acc.labour += s.budget.labour;
+    acc.misc += s.budget.misc; acc.total += s.budget.total; acc.approvedAdditional += s.budget.approvedAdditional;
+    acc.actual += s.actualCost; acc.effective += s.plannedBudget;
+    return acc;
+  }, { material: 0, tool: 0, labour: 0, misc: 0, total: 0, approvedAdditional: 0, actual: 0, effective: 0 });
+
+  const r2 = (n) => Number(Number(n || 0).toFixed(2));
+  const directRow = {
+    material_budget: Math.max(0, r2(Number(task.material_budget || 0) - subTotals.material)),
+    tool_budget: Math.max(0, r2(Number(task.tool_budget || 0) - subTotals.tool)),
+    labour_budget: Math.max(0, r2(Number(task.labour_budget || 0) - subTotals.labour)),
+    misc_budget: Math.max(0, r2(Number(task.misc_budget || 0) - subTotals.misc)),
+    total_budget: Math.max(0, r2(Number(task.total_budget || 0) - subTotals.total)),
+    approved_additional_budget: Math.max(0, r2(Number(task.approved_additional_budget || 0) - subTotals.approvedAdditional)),
+  };
+  const directUtil = utilFromBuckets(
+    directRow,
+    allMaterials,
+    dailyWork.filter((r) => r.subtask_id == null),
+    workerLogs.filter((r) => r.subtask_id == null),
+    expenses.filter((r) => r.subtask_id == null)
+  );
+
+  const mainUtil = computeTaskBudgetUtilization(task, allMaterials, dailyWork, workerLogs, expenses);
+  const reconciledActual = r2(subTotals.actual + directUtil.total.actual);
+
+  return {
+    subtasks,
+    direct: {
+      plannedBudget: directUtil.total.effectiveBudget,
+      actualCost: directUtil.total.actual,
+      remainingBudget: r2(directUtil.total.effectiveBudget - directUtil.total.actual),
+      budgetUtilization: directUtil,
+    },
+    consolidation: {
+      subtaskCount: subtasks.length,
+      completedSubtasks: subtasks.filter((s) => s.status === 'completed' || s.progress >= 100).length,
+      subtasksPlanned: r2(subTotals.effective),
+      directPlanned: directUtil.total.effectiveBudget,
+      mainTaskPlanned: mainUtil.total.effectiveBudget,
+      subtasksActual: r2(subTotals.actual),
+      directActual: directUtil.total.actual,
+      mainTaskActual: mainUtil.total.actual,
+      mainTaskRemaining: r2(mainUtil.total.effectiveBudget - mainUtil.total.actual),
+      // Every record is in exactly one bucket, so these must agree.
+      reconciled: Math.abs(reconciledActual - mainUtil.total.actual) < 0.01,
+    },
+  };
+}
+
+function mapProcurementRow(p) {
+  return {
+    id: p.id,
+    requestNumber: p.request_number,
+    subtaskId: p.subtask_id || null,
+    subtaskName: p.subtask_name || null,
+    itemType: p.item_type || (p.tool_id ? 'tool' : 'material'),
+    itemName: p.material_name || p.tool_name || '—',
+    quantity: Number(p.quantity || 0),
+    unit: p.unit || p.material_unit || 'unit',
+    status: p.status,
+    isExcess: Boolean(p.is_excess),
+    amount: Number(p.total_amount != null ? p.total_amount : Number(p.quantity || 0) * Number(p.estimated_rate || 0)),
+    vehicleNumber: p.received_vehicle_number || p.vehicle_number || null,
+    requestedByName: p.requested_by_name || null,
+    createdAt: p.created_at,
+  };
+}
+
+/** Lightweight per-subtask summaries for list / site / project views (one query set for many tasks). */
+async function findSubtaskSummaries(taskIds) {
+  const out = new Map();
+  if (!taskIds.length) return out;
+  const ph = taskIds.map(() => '?').join(',');
+  const [subs] = await pool.query(
+    `SELECT * FROM task_subtasks WHERE task_id IN (${ph}) ORDER BY sort_order ASC, id ASC`, taskIds
+  );
+  if (!subs.length) return out;
+  const subIds = subs.map((s) => s.id);
+  const sph = subIds.map(() => '?').join(',');
+  const [[mats], [dws], [wls], [exs]] = await Promise.all([
+    pool.query(`SELECT task_id, material_id, cost_per_unit FROM task_materials WHERE task_id IN (${ph})`, taskIds),
+    pool.query(`SELECT * FROM daily_work_updates WHERE subtask_id IN (${sph})`, subIds),
+    pool.query(`SELECT * FROM task_worker_logs WHERE subtask_id IN (${sph})`, subIds),
+    pool.query(`SELECT * FROM expenses WHERE subtask_id IN (${sph}) AND status NOT IN ('rejected', 'cancelled')`, subIds),
+  ]);
+  for (const st of subs) {
+    const util = computeTaskBudgetUtilization(
+      st,
+      mats.filter((m) => m.task_id === st.task_id),
+      dws.filter((r) => r.subtask_id === st.id),
+      wls.filter((r) => r.subtask_id === st.id),
+      exs.filter((r) => r.subtask_id === st.id)
+    );
+    if (!out.has(st.task_id)) out.set(st.task_id, []);
+    out.get(st.task_id).push({
+      id: st.id,
+      name: st.name,
+      description: st.description,
+      status: st.status,
+      progress: Number(st.progress || 0),
+      startDate: st.start_date,
+      endDate: st.end_date,
+      durationDays: Number(st.duration_days || 0),
+      plannedBudget: util.total.effectiveBudget,
+      actualCost: util.total.actual,
+      remainingBudget: Number((util.total.effectiveBudget - util.total.actual).toFixed(2)),
+      utilization: util.total.utilization,
+      isExceeded: util.total.isExceeded,
+    });
+  }
+  return out;
+}
+
+/** Subtasks of a task for pickers (procurement, daily work, expenses, labour). */
+async function listSubtasksForTask(taskId) {
+  const [rows] = await pool.query(
+    `SELECT id, task_id, name, status, progress, start_date, end_date, total_budget, approved_additional_budget
+     FROM task_subtasks WHERE task_id = ? ORDER BY sort_order ASC, id ASC`,
+    [taskId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    taskId: r.task_id,
+    name: r.name,
+    status: r.status,
+    progress: Number(r.progress || 0),
+    startDate: r.start_date,
+    endDate: r.end_date,
+    totalBudget: Number(r.total_budget || 0) + Number(r.approved_additional_budget || 0),
+  }));
+}
+
 module.exports = {
   createTask,
   updateTask,
@@ -1765,4 +2591,19 @@ module.exports = {
   findPlannedMaterials,
   computeTaskBudgetUtilization,
   getTaskBudgetApprovals,
+  // subtasks
+  subtaskScope,
+  toSubtaskId,
+  syncTaskSubtasks,
+  findSubtaskRow,
+  createSubtask,
+  updateSubtask,
+  deleteSubtask,
+  countSubtaskTransactions,
+  recalcSubtaskBudget,
+  applyMainTaskBudgetDelta,
+  refreshProjectEstimate,
+  rollupMainTaskProgress,
+  findSubtaskSummaries,
+  listSubtasksForTask,
 };

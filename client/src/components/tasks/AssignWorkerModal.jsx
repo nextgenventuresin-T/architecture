@@ -22,7 +22,13 @@ function calcWorkingDays(startDate, endDate) {
   return count;
 }
 
-export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAssigned, onOpenQuickAdd }) {
+export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAssigned, onOpenQuickAdd, defaultSubtaskId = '' }) {
+  const subtasks = task?.subtasks || [];
+  const [subtaskId, setSubtaskId] = useState(defaultSubtaskId ? String(defaultSubtaskId) : '');
+  useEffect(() => {
+    if (isOpen) setSubtaskId(defaultSubtaskId ? String(defaultSubtaskId) : '');
+  }, [isOpen, defaultSubtaskId]);
+  const selectedSubtask = subtasks.find((st) => String(st.id) === String(subtaskId)) || null;
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'daily_wage' | 'company_labour'
   const [workforce, setWorkforce] = useState([]);
@@ -38,8 +44,13 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  const plannedWorkers = task?.labourSummary?.workersPlanned ?? (task?.labour ? task.labour.reduce((s, l) => s + Number(l.workerCount || l.worker_count || 1), 0) : 0);
-  const currentlyAssigned = task?.assignedWorkers?.length || 0;
+  // Planned vs assigned is compared within the chosen subtask (same rule as the server).
+  const plannedWorkers = selectedSubtask
+    ? (selectedSubtask.labour || []).reduce((s, l) => s + Number(l.workerCount || 1), 0)
+    : (task?.labourSummary?.workersPlanned ?? (task?.labour ? task.labour.reduce((s, l) => s + Number(l.workerCount || l.worker_count || 1), 0) : 0));
+  const currentlyAssigned = selectedSubtask
+    ? (task?.assignedWorkers || []).filter((w) => String(w.subtaskId) === String(selectedSubtask.id)).length
+    : (task?.assignedWorkers?.length || 0);
   const isAdditionalWorker = plannedWorkers > 0 && currentlyAssigned >= plannedWorkers;
 
   useEffect(() => {
@@ -111,6 +122,7 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
 
     try {
       await tasksApi.assignWorker(taskId, {
+        subtask_id: subtaskId ? Number(subtaskId) : null,
         worker_id: selectedWorker.workerId,
         worker_type: isCompanyLabour ? 'company_labour' : 'daily_wage',
         worker_name: selectedWorker.name,
@@ -315,6 +327,22 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
             <h4 className="text-xs font-bold text-ink uppercase tracking-wider">
               2. Assignment Schedule & Working Days
             </h4>
+
+            {subtasks.length > 0 && (
+              <div>
+                <label className="block text-xs font-medium text-ink mb-1">Assign to Subtask</label>
+                <select
+                  value={subtaskId}
+                  onChange={(e) => setSubtaskId(e.target.value)}
+                  className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500"
+                >
+                  <option value="">Main task (not a specific subtask)</option>
+                  {subtasks.map((st) => (
+                    <option key={st.id} value={st.id}>{st.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
