@@ -40,7 +40,7 @@ router.get(
   '/',
   [
     query('page').optional().isInt({ min: 1 }).toInt(),
-    query('pageSize').optional().isInt({ min: 1, max: 50 }).toInt(),
+    query('pageSize').optional().isInt({ min: 1, max: 500 }).toInt(),
     query('search').optional().trim(),
     query('category').optional().trim(),
     query('status').optional().trim(),

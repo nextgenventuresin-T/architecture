@@ -44,6 +44,7 @@ async function migrate() {
     await require('./migrations/20261009_serials_receipts_cost').up(connection);
     await require('./migrations/20261010_task_tool_days').up(connection);
     await require('./migrations/20261010_transport_expenses').up(connection);
+    await require('./migrations/20261010_material_movements_tool').up(connection);
     console.log(`Schema up to date on "${env.db.database}".`);
   } finally {
     await connection.end();
