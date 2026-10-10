@@ -47,6 +47,7 @@ async function migrate() {
     await require('./migrations/20261009_serials_receipts_cost').up(connection);
     await require('./migrations/20261010_task_tool_days').up(connection);
     await require('./migrations/20261010_transport_expenses').up(connection);
+    await require('./migrations/20261010_material_movements_tool').up(connection);
     await require('./migrations/20261011_task_subtasks').up(connection);
     await require('./migrations/20261014_pm_areas_vendor_city_transport').up(connection);
     await require('./migrations/20261015_labour_areas_company_attendance').up(connection);
