@@ -10,17 +10,19 @@ const { pool } = require('../config/db');
 
 const LIST_SELECT = `
   SELECT
-    mm.id, mm.movement_number, mm.material_id, mm.unit,
+    mm.id, mm.movement_number, mm.item_type, mm.material_id, mm.tool_id, mm.unit,
     mm.source_warehouse_id, mm.destination_warehouse_id,
     mm.source_contractor_id, mm.destination_contractor_id,
     mm.project_id, mm.site_id,
     mm.requested_quantity, mm.sent_quantity, mm.received_quantity,
     mm.status, mm.vehicle_number, mm.driver_name, mm.driver_phone,
     mm.transport_cost, mm.other_expenses, mm.reference, mm.remarks,
+    mm.cost_per_unit, mm.total_cost,
     mm.procurement_request_id, mm.issue_transaction_id, mm.receive_transaction_id,
-    mm.sent_by, mm.sent_at, mm.received_by, mm.received_at,
+    mm.sent_by, mm.sent_at, mm.received_by, mm.received_at, mm.received_vehicle_number,
     mm.created_at, mm.updated_at,
     m.name AS material_name, m.category AS material_category, m.default_rate AS material_default_rate,
+    t.name AS tool_name, t.code AS tool_code, t.type AS tool_type,
     sw.name AS source_warehouse_name, sw.contractor_id AS source_warehouse_contractor_id,
     dw.name AS destination_warehouse_name, dw.contractor_id AS destination_warehouse_contractor_id,
     sc.name AS source_contractor_name, dc.name AS destination_contractor_name,
@@ -37,7 +39,8 @@ const LIST_SELECT = `
     pt.name AS procurement_task_name,
     pr.procurement_kind
   FROM material_movements mm
-  JOIN materials m ON m.id = mm.material_id
+  LEFT JOIN materials m ON m.id = mm.material_id
+  LEFT JOIN tools t ON t.id = mm.tool_id
   JOIN warehouses sw ON sw.id = mm.source_warehouse_id
   JOIN warehouses dw ON dw.id = mm.destination_warehouse_id
   LEFT JOIN contractors sc ON sc.id = mm.source_contractor_id
@@ -50,7 +53,7 @@ const LIST_SELECT = `
   LEFT JOIN project_tasks pt ON pt.id = pr.task_id
 `;
 
-function buildFilters({ status, materialId, contractorId, userId, incomingForContractorId, direction }) {
+function buildFilters({ status, materialId, contractorId, userId, incomingForContractorId, direction, pmProjectIds }) {
   const where = [];
   const params = [];
   if (status && status !== 'all') { where.push('mm.status = ?'); params.push(status); }
@@ -98,6 +101,16 @@ function buildFilters({ status, materialId, contractorId, userId, incomingForCon
     where.push('(mm.source_contractor_id = ? OR sw.contractor_id = ? OR pr.source_contractor_id = ?)');
     params.push(cId, cId, cId);
   }
+  // Project Manager: movements on their assigned projects only (deny-by-default).
+  if (Array.isArray(pmProjectIds)) {
+    if (pmProjectIds.length === 0) {
+      where.push('1 = 0');
+    } else {
+      const ph = pmProjectIds.map(() => '?').join(',');
+      where.push(`(mm.project_id IN (${ph}) OR pr.project_id IN (${ph}))`);
+      params.push(...pmProjectIds.map(Number), ...pmProjectIds.map(Number));
+    }
+  }
   return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
 
@@ -122,16 +135,17 @@ async function nextMovementNumber() {
 }
 
 const WRITABLE = [
-  'movement_number', 'material_id', 'unit', 'source_warehouse_id', 'destination_warehouse_id',
+  'movement_number', 'item_type', 'material_id', 'tool_id', 'unit', 'source_warehouse_id', 'destination_warehouse_id',
   'source_contractor_id', 'destination_contractor_id', 'project_id', 'site_id',
   'requested_quantity', 'sent_quantity', 'status', 'vehicle_number', 'driver_name',
   'driver_phone', 'transport_cost', 'other_expenses', 'reference', 'remarks',
   'procurement_request_id', 'issue_transaction_id', 'sent_by',
+  'cost_per_unit', 'total_cost',
 ];
 
-async function create(payload) {
+async function create(payload, conn = null) {
   const columns = WRITABLE.filter((k) => payload[k] !== undefined);
-  const [result] = await pool.query(
+  const [result] = await (conn || pool).query(
     `INSERT INTO material_movements (${columns.map((c) => `\`${c}\``).join(', ')})
      VALUES (${columns.map(() => '?').join(', ')})`,
     columns.map((k) => payload[k])
@@ -139,14 +153,23 @@ async function create(payload) {
   return result.insertId;
 }
 
-async function markReceived(id, { receivedQuantity, receiveTransactionId, receivedBy }) {
-  await pool.query(
+async function markReceived(id, { receivedQuantity, receiveTransactionId, receivedBy, receivedVehicleNumber }, conn = null) {
+  // `AND status = 'in_transit'` makes the flip itself the duplicate-receipt
+  // guard: a second receive matches no row and reports false.
+  const [result] = await (conn || pool).query(
     `UPDATE material_movements
      SET status = 'received', received_quantity = ?, receive_transaction_id = ?,
-         received_by = ?, received_at = NOW()
-     WHERE id = ?`,
-    [receivedQuantity, receiveTransactionId ?? null, receivedBy ?? null, id]
+         received_by = ?, received_at = NOW(), received_vehicle_number = ?
+     WHERE id = ? AND status = 'in_transit'`,
+    [receivedQuantity, receiveTransactionId ?? null, receivedBy ?? null, receivedVehicleNumber ?? null, id]
   );
+  return result.affectedRows === 1;
+}
+
+/** Row lock used by receiving, so two simultaneous receives serialise. */
+async function lockById(id, conn) {
+  const [rows] = await conn.query('SELECT id, status FROM material_movements WHERE id = ? FOR UPDATE', [id]);
+  return rows[0] || null;
 }
 
 async function findByRequestId(procurementRequestId) {
@@ -157,4 +180,4 @@ async function findByRequestId(procurementRequestId) {
   return rows[0] || null;
 }
 
-module.exports = { findAll, findById, findByRequestId, nextMovementNumber, create, markReceived };
+module.exports = { findAll, findById, findByRequestId, nextMovementNumber, create, markReceived, lockById };

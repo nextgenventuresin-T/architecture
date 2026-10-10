@@ -40,6 +40,7 @@ export default function OverviewTab({ request, movement }) {
                   </Link>
                 ) : (request.site?.name || '—'),
               },
+              ...(request.task ? [{ label: 'Task', value: <span className="font-semibold text-brand-700">{request.task.name}</span> }] : []),
               ...(request.warehouseTransactionId ? [{ label: 'Stock movement', value: `Linked · ${request.billReference ? `Bill ${request.billReference}` : 'internal transfer'}` }] : []),
               ...(request.billFile ? [{ label: 'Bill / invoice', value: <BillLink id={request.id} file={request.billFile} /> }] : []),
             ]}
@@ -48,12 +49,17 @@ export default function OverviewTab({ request, movement }) {
       </Card>
 
       <Card>
-        <CardHeader title="Material & Vendor" description="What is being procured and from which vendor." />
+        <CardHeader title="Item & Vendor" description="What is being procured and from which vendor." />
         <CardBody>
           <InfoList
             columns={2}
             items={[
-              { label: 'Material', value: `${request.material.name} (${request.material.category})` },
+              ...(request.tool ? [
+                { label: 'Item category', value: <Badge tone="info">Tool / Machinery</Badge> },
+                { label: 'Tool / Equipment', value: `${request.tool.name} (${request.tool.code || ''})` },
+              ] : [
+                { label: 'Material', value: `${request.material?.name || '—'} (${request.material?.category || '—'})` },
+              ]),
               {
                 label: 'Vendor',
                 value: request.vendor ? (
@@ -143,6 +149,8 @@ export default function OverviewTab({ request, movement }) {
                 { label: 'Requested', value: movement.requestedQuantity != null ? `${formatNumber(movement.requestedQuantity)} ${movement.unit}` : '—' },
                 { label: 'Dispatched', value: `${formatNumber(movement.sentQuantity)} ${movement.unit}` },
                 { label: 'Received', value: movement.receivedQuantity != null ? `${formatNumber(movement.receivedQuantity)} ${movement.unit}` : '—' },
+                { label: 'Cost / Unit', value: formatCurrency(movement.costPerUnit || 0) },
+                { label: 'Total Value', value: formatCurrency(movement.totalMaterialCost || 0) },
                 { label: 'Vehicle', value: movement.vehicleNumber || '—' },
                 { label: 'Driver', value: movement.driverName ? `${movement.driverName}${movement.driverPhone ? ` · ${movement.driverPhone}` : ''}` : '—' },
                 { label: 'Transport cost', value: formatCurrency(movement.transportCost || 0) },

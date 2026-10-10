@@ -370,6 +370,7 @@ const TX_SELECT = `
     t.destination_warehouse_id, t.project_id, t.site_id, t.quantity, t.unit,
     t.adjustment_type, t.reason, t.reference, t.procurement_receipt_id,
     t.procurement_request_id, t.transaction_date, t.performed_by, t.notes, t.created_at,
+    t.unit_cost, t.total_cost, t.vehicle_number,
     w.code AS warehouse_code, w.name AS warehouse_name,
     dw.code AS destination_code, dw.name AS destination_name,
     COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) AS material_code,
@@ -480,6 +481,7 @@ const TX_COLUMNS = [
   'destination_warehouse_id', 'project_id', 'site_id', 'quantity', 'unit',
   'adjustment_type', 'reason', 'reference', 'procurement_receipt_id',
   'procurement_request_id', 'transaction_date', 'performed_by', 'notes',
+  'unit_cost', 'total_cost', 'vehicle_number',
 ];
 
 async function createTransaction(payload, conn) {
@@ -491,9 +493,28 @@ async function createTransaction(payload, conn) {
   return result.insertId;
 }
 
-async function findTransactionById(id) {
-  const [rows] = await pool.query(`${TX_SELECT} WHERE t.id = ? LIMIT 1`, [id]);
+async function findTransactionById(id, conn) {
+  const [rows] = await runner(conn).query(`${TX_SELECT} WHERE t.id = ? LIMIT 1`, [id]);
   return rows[0] || null;
+}
+
+/**
+ * Weighted-average acquisition cost of a material in one warehouse, from the
+ * costs stamped on its receipts (vendor receipts and inbound movements).
+ * Returns null when no receipt carries a cost, so callers can fall back.
+ */
+async function averageUnitCost(warehouseId, materialId, conn) {
+  const [[row]] = await runner(conn).query(
+    `SELECT SUM(quantity) AS qty, SUM(COALESCE(total_cost, unit_cost * quantity)) AS value
+     FROM warehouse_transactions
+     WHERE transaction_type IN ('receipt', 'transfer') AND unit_cost IS NOT NULL AND unit_cost > 0
+       AND material_id = ? AND (
+         (transaction_type = 'receipt' AND warehouse_id = ?)
+         OR (transaction_type = 'transfer' AND destination_warehouse_id = ?))`,
+    [materialId, warehouseId, warehouseId]
+  );
+  const qty = Number(row?.qty || 0);
+  return qty > 0 ? Number((Number(row.value) / qty).toFixed(4)) : null;
 }
 
 /** Has this procurement receipt already been brought into warehouse stock? */
@@ -791,7 +812,7 @@ module.exports = {
   create, update, findLocations,
   findStock, findStockSlot, totalForMaterial, adjustStockSlot, findProjectSiteStock,
   findTransactions, findRecentTransactions, findTransactionById,
-  findTransactionByReceipt, nextTransactionNumber, createTransaction,
+  findTransactionByReceipt, averageUnitCost, nextTransactionNumber, createTransaction,
   findSummary, findAlerts,
   ensureCentralWarehouse, ensureContractorWarehouses, findScopes, findCentralOverview, findContractorTransactions,
 };

@@ -32,6 +32,7 @@ function toProject(row) {
     expectedCompletion: row.expected_completion,
     expectedDurationMonths: calculateDurationMonths(row.start_date, row.expected_completion),
     estimatedBudget: Number(row.estimated_budget),
+    clientContractValue: Number(row.client_contract_value || row.estimated_budget || 0),
     spentAmount: Number(row.spent_amount || 0),
     status: row.status,
     progress: row.progress,
@@ -225,6 +226,9 @@ async function getDetail(id, hrScope) {
         rentalType: tl.rental_type,
         quantity: Number(tl.quantity || 1),
         cost: Number(tl.cost || 0),
+        workingDays: Number(tl.working_days || 1),
+        startDate: tl.start_date || null,
+        endDate: tl.end_date || null,
         totalCost: Number(tl.total_cost || 0),
       })),
     labour: taskLabour
@@ -351,9 +355,9 @@ async function getDetail(id, hrScope) {
     contractors,
     activities,
     financials: isContractor ? null : (() => {
-      const labourCost = Number(financials.labour_cost || 0);
-      const spent = Number(financials.spent || 0) + labourCost;
-      const budget = Number(financials.budget || 0);
+      const labourCost = actualLabourCost || Number(financials?.labour_cost || 0);
+      const spent = Number(financials?.spent || 0) + labourCost;
+      const budget = Number(financials?.budget || 0);
       return {
         budget,
         spent,
@@ -406,6 +410,13 @@ async function create(payload) {
     });
   }
 
+  if (payload.clientContractValue !== undefined && payload.client_contract_value === undefined) {
+    payload.client_contract_value = payload.clientContractValue;
+  }
+  if (!payload.client_contract_value && payload.estimated_budget) {
+    payload.client_contract_value = payload.estimated_budget;
+  }
+
   const id = await projectModel.create(payload);
 
   if (payload.tasks && Array.isArray(payload.tasks)) {
@@ -421,6 +432,10 @@ async function create(payload) {
 
 async function update(id, payload) {
   await getById(id);
+
+  if (payload.clientContractValue !== undefined && payload.client_contract_value === undefined) {
+    payload.client_contract_value = payload.clientContractValue;
+  }
 
   if (payload.code) {
     const existing = await projectModel.findByCode(payload.code);
@@ -815,65 +830,68 @@ async function getMaterialTracking(projectId, query = {}) {
   };
 }
 
-// --------------------------------------------------- Labour Tracking (Assigned vs Worked vs Remaining)
-const STANDARD_PHASE_ROLES = {
-  1: [
-    { labour_type: 'Excavation & Site Crew', workers_count: 2, daily_wage: 650 },
-    { labour_type: 'Mason', workers_count: 2, daily_wage: 750 },
-  ],
-  2: [
-    { labour_type: 'Shuttering Carpenter', workers_count: 2, daily_wage: 800 },
-    { labour_type: 'Bar Bender & Steel Fixer', workers_count: 2, daily_wage: 750 },
-  ],
-  3: [
-    { labour_type: 'Bricklayer / Mason', workers_count: 3, daily_wage: 700 },
-    { labour_type: 'Helper / Labourer', workers_count: 2, daily_wage: 500 },
-  ],
-  4: [
-    { labour_type: 'Electrician', workers_count: 2, daily_wage: 750 },
-    { labour_type: 'Plumber & Pipefitter', workers_count: 2, daily_wage: 750 },
-  ],
-  5: [
-    { labour_type: 'Plasterer / Tiler', workers_count: 2, daily_wage: 700 },
-    { labour_type: 'Painter', workers_count: 2, daily_wage: 650 },
-  ],
-  6: [
-    { labour_type: 'External Paving & Site Crew', workers_count: 3, daily_wage: 600 },
-  ],
-  7: [
-    { labour_type: 'QC Inspector / Supervisor', workers_count: 1, daily_wage: 900 },
-    { labour_type: 'Testing Assistant', workers_count: 1, daily_wage: 600 },
-  ],
-  8: [
-    { labour_type: 'Handover & Cleaning Crew', workers_count: 2, daily_wage: 550 },
-  ],
-};
+// --------------------------------------------------- Labour Tracking (Task-wise Assigned vs Worked vs Remaining)
 
 async function getLabourTracking(projectId, query = {}) {
   const pId = Number(projectId);
   const project = await getById(pId);
 
-  // 1. Labour Budget from project_phase_labour
-  const [budgetRows] = await pool.query(
-    `SELECT ppl.*, pp.phase_number, pp.phase_title
-     FROM project_phase_labour ppl
-     JOIN project_phases pp ON pp.id = ppl.phase_id
-     WHERE ppl.project_id = ?
-     ORDER BY pp.phase_number, ppl.labour_type`,
-    [pId]
-  );
-
-  // 2. All 8 phases from project_phases
-  const [projectPhases] = await pool.query(
-    `SELECT * FROM project_phases WHERE project_id = ? ORDER BY phase_number`,
-    [pId]
-  );
-
-  // 3. Worked Labour from labour_records and daily_work_updates
   const siteFilter = query.siteId ? Number(query.siteId) : null;
   const dateFrom = query.dateFrom ? query.dateFrom : null;
   const dateTo = query.dateTo ? query.dateTo : null;
 
+  // 1. Fetch all manual tasks for this project
+  let tasksSql = `
+    SELECT pt.*, s.name AS site_name
+    FROM project_tasks pt
+    LEFT JOIN sites s ON s.id = pt.site_id
+    WHERE pt.project_id = ?
+  `;
+  const taskParams = [pId];
+  if (siteFilter) {
+    tasksSql += ' AND pt.site_id = ?';
+    taskParams.push(siteFilter);
+  }
+  tasksSql += ' ORDER BY pt.id ASC';
+  const [tasks] = await pool.query(tasksSql, taskParams);
+
+  // 2. Fetch task labour budget allocations
+  const [taskLabourRows] = await pool.query(
+    `SELECT tl.*, pt.name AS task_name, s.name AS site_name
+     FROM task_labour tl
+     JOIN project_tasks pt ON pt.id = tl.task_id
+     LEFT JOIN sites s ON s.id = tl.site_id
+     WHERE pt.project_id = ?
+     ORDER BY tl.task_id, tl.id`,
+    [pId]
+  );
+
+  // 3. Fetch task worker logs (actual labour attendance on tasks)
+  let workerLogsSql = `
+    SELECT twl.*, pt.name AS task_name, s.name AS site_name, c.name AS contractor_name
+    FROM task_worker_logs twl
+    JOIN project_tasks pt ON pt.id = twl.task_id
+    LEFT JOIN sites s ON s.id = twl.site_id
+    LEFT JOIN contractors c ON c.id = twl.contractor_id
+    WHERE pt.project_id = ?
+  `;
+  const workerLogsParams = [pId];
+  if (siteFilter) {
+    workerLogsSql += ' AND (twl.site_id = ? OR (twl.site_id IS NULL AND pt.site_id = ?))';
+    workerLogsParams.push(siteFilter, siteFilter);
+  }
+  if (dateFrom) {
+    workerLogsSql += ' AND twl.work_date >= ?';
+    workerLogsParams.push(dateFrom);
+  }
+  if (dateTo) {
+    workerLogsSql += ' AND twl.work_date <= ?';
+    workerLogsParams.push(dateTo);
+  }
+  workerLogsSql += ' ORDER BY twl.work_date DESC, twl.id DESC';
+  const [workerLogs] = await pool.query(workerLogsSql, workerLogsParams);
+
+  // 4. Fetch general labour_records (for backward compatibility / quick logs)
   let labourSql = `
     SELECT lr.*, c.name AS contractor_name, s.name AS site_name, s.id AS site_id,
            (lr.present_count * lr.daily_rate) AS daily_cost
@@ -883,7 +901,6 @@ async function getLabourTracking(projectId, query = {}) {
     WHERE (s.project_id = ? OR lr.site_id IN (SELECT id FROM sites WHERE project_id = ?))
   `;
   const labourParams = [pId, pId];
-
   if (siteFilter) {
     labourSql += ' AND lr.site_id = ?';
     labourParams.push(siteFilter);
@@ -897,18 +914,18 @@ async function getLabourTracking(projectId, query = {}) {
     labourParams.push(dateTo);
   }
   labourSql += ' ORDER BY lr.record_date DESC, lr.id DESC';
-
   const [labourRecords] = await pool.query(labourSql, labourParams);
 
+  // 5. Fetch daily_work_updates
   let dailyWorkSql = `
-    SELECT dwu.*, c.name AS contractor_name, s.name AS site_name
+    SELECT dwu.*, c.name AS contractor_name, s.name AS site_name, pt.name AS task_name
     FROM daily_work_updates dwu
     LEFT JOIN contractors c ON c.id = dwu.contractor_id
     LEFT JOIN sites s ON s.id = dwu.site_id
+    LEFT JOIN project_tasks pt ON pt.id = dwu.task_id
     WHERE dwu.project_id = ?
   `;
   const dailyWorkParams = [pId];
-
   if (siteFilter) {
     dailyWorkSql += ' AND dwu.site_id = ?';
     dailyWorkParams.push(siteFilter);
@@ -922,94 +939,137 @@ async function getLabourTracking(projectId, query = {}) {
     dailyWorkParams.push(dateTo);
   }
   dailyWorkSql += ' ORDER BY dwu.work_date DESC, dwu.id DESC';
-
   const [dailyWorkRecords] = await pool.query(dailyWorkSql, dailyWorkParams);
 
-  // Group budget rows by phase or seed from project_phases duration
-  const phaseMap = new Map();
+  // Build taskMap from project_tasks
+  const taskMap = new Map();
 
-  // Populate from project_phases
-  for (const pp of projectPhases) {
-    const durMonths = Number(pp.duration_months) > 0 ? Number(pp.duration_months) : 2;
-    const workingDays = Math.round(durMonths * 25);
-    phaseMap.set(pp.phase_number, {
-      phase_number: pp.phase_number,
-      phase_name: pp.phase_title,
-      expected_duration_months: durMonths,
-      working_days_per_month: 25,
-      calculated_working_days: workingDays,
+  for (const t of tasks) {
+    const durDays = Number(t.duration_days) > 0 ? Number(t.duration_days) : 1;
+    taskMap.set(t.id, {
+      task_id: t.id,
+      task_name: t.name,
+      site_id: t.site_id,
+      site_name: t.site_name || 'General Site',
+      status: t.status || 'on-track',
+      duration_days: durDays,
+      calculated_working_days: durDays,
       labourItems: [],
+      totalBudgetedWorkers: 0,
       totalBudgetedDays: 0,
-      totalBudgetedCost: 0,
+      totalBudgetedCost: Number(t.labour_budget || 0),
+      workedDays: 0,
+      workedCost: 0,
+      remainingDays: 0,
+      remainingCost: 0,
     });
   }
 
-  // If budgetRows exist, append them
-  budgetRows.forEach((b) => {
-    if (!phaseMap.has(b.phase_number)) {
-      phaseMap.set(b.phase_number, {
-        phase_number: b.phase_number,
-        phase_name: b.phase_title,
-        expected_duration_months: 2,
-        working_days_per_month: 25,
-        calculated_working_days: 50,
+  // Populate labourItems from task_labour
+  taskLabourRows.forEach((tl) => {
+    let group = taskMap.get(tl.task_id);
+    if (!group) {
+      group = {
+        task_id: tl.task_id,
+        task_name: tl.task_name || `Task #${tl.task_id}`,
+        site_id: tl.site_id,
+        site_name: tl.site_name || 'General Site',
+        status: 'on-track',
+        duration_days: Number(tl.working_days || 1),
+        calculated_working_days: Number(tl.working_days || 1),
         labourItems: [],
+        totalBudgetedWorkers: 0,
         totalBudgetedDays: 0,
         totalBudgetedCost: 0,
-      });
+        workedDays: 0,
+        workedCost: 0,
+        remainingDays: 0,
+        remainingCost: 0,
+      };
+      taskMap.set(tl.task_id, group);
     }
-    const group = phaseMap.get(b.phase_number);
+
+    const workerCount = Number(tl.worker_count || 1);
+    const wage = Number(tl.daily_wage || 0);
+    const days = Number(tl.working_days || group.duration_days || 1);
+    const cost = Number(tl.total_cost || (workerCount * wage * days));
+
     group.labourItems.push({
-      labour_type: b.labour_type,
-      workers_count: Number(b.worker_count || 0),
-      daily_wage: Number(b.daily_wage || 0),
-      working_days: Number(b.working_days || 0),
-      total_cost: Number(b.total_cost || 0),
+      labour_type: tl.labour_type || tl.skill_trade || tl.labour_name || 'General Labour',
+      labour_name: tl.labour_name || '',
+      workers_count: workerCount,
+      worker_count: workerCount,
+      daily_wage: wage,
+      working_days: days,
+      total_cost: cost,
+      remarks: tl.remarks || '',
     });
-    group.totalBudgetedDays += Number(b.working_days || 0);
-    group.totalBudgetedCost += Number(b.total_cost || 0);
-    if (b.working_days > 0) {
-      group.calculated_working_days = b.working_days;
+
+    group.totalBudgetedWorkers += workerCount;
+    group.totalBudgetedDays += (workerCount * days);
+    group.totalBudgetedCost = Math.max(group.totalBudgetedCost, group.labourItems.reduce((s, i) => s + i.total_cost, 0));
+  });
+
+  // Calculate worked labour on each task from task_worker_logs
+  workerLogs.forEach((wl) => {
+    const group = taskMap.get(wl.task_id);
+    if (group) {
+      const isCompany = wl.worker_type === 'company_labour' || wl.worker_type === 'company_employee' || String(wl.labour_type || '').toLowerCase().includes('company');
+      const hours = Number(wl.hours_worked || 8);
+      const days = Number((hours / 8).toFixed(2));
+      const wage = isCompany ? 0 : Number(wl.daily_wage || 0);
+      const cost = isCompany ? 0 : Number((wage * days).toFixed(2));
+      group.workedDays += days;
+      group.workedCost += cost;
     }
   });
 
-  // For any phase without explicit labour items, supply duration-linked standard roles
-  for (const [phaseNum, group] of phaseMap.entries()) {
-    if (group.labourItems.length === 0) {
-      const defaultRoles = STANDARD_PHASE_ROLES[phaseNum] || [
-        { labour_type: 'General Labour', workers_count: 2, daily_wage: 600 },
-      ];
-      defaultRoles.forEach((role) => {
-        const itemDays = group.calculated_working_days;
-        const itemCost = role.workers_count * role.daily_wage * itemDays;
-        group.labourItems.push({
-          labour_type: role.labour_type,
-          workers_count: role.workers_count,
-          daily_wage: role.daily_wage,
-          working_days: itemDays,
-          total_cost: itemCost,
-        });
-        group.totalBudgetedDays += itemDays * role.workers_count;
-        group.totalBudgetedCost += itemCost;
-      });
-    }
+  // Compute remaining for each task
+  for (const group of taskMap.values()) {
+    group.remainingDays = Math.max(0, group.totalBudgetedDays - group.workedDays);
+    group.remainingCost = Math.max(0, group.totalBudgetedCost - group.workedCost);
   }
 
-  const allPhases = Array.from(phaseMap.values()).sort((a, b) => a.phase_number - b.phase_number);
-  const budgetedWorkers = allPhases.reduce((sum, p) => sum + p.labourItems.reduce((s, i) => s + i.workers_count, 0), 0);
-  const budgetedDays = allPhases.reduce((sum, p) => sum + p.totalBudgetedDays, 0);
-  const budgetedCost = allPhases.reduce((sum, p) => sum + p.totalBudgetedCost, 0);
+  const allTasks = Array.from(taskMap.values());
 
-  const workedFromLabourDays = labourRecords.reduce((sum, r) => sum + Number(r.present_count || 0), 0);
-  const workedFromLabourCost = labourRecords.reduce((sum, r) => sum + Number(r.daily_cost || 0), 0);
+  // Aggregate summary
+  const budgetedWorkers = allTasks.reduce((sum, t) => sum + (t.totalBudgetedWorkers || (t.labourItems.length > 0 ? t.labourItems.reduce((s, i) => s + i.workers_count, 0) : 0)), 0);
+  const budgetedDays = allTasks.reduce((sum, t) => sum + t.totalBudgetedDays, 0);
+  const budgetedCost = allTasks.reduce((sum, t) => sum + t.totalBudgetedCost, 0);
 
+  // Build unified worked list
   const workedList = [
+    ...workerLogs.map((wl) => {
+      const isCompany = wl.worker_type === 'company_labour' || wl.worker_type === 'company_employee' || String(wl.labour_type || '').toLowerCase().includes('company');
+      const hours = Number(wl.hours_worked || 8);
+      const days = Number((hours / 8).toFixed(2));
+      const wage = isCompany ? 0 : Number(wl.daily_wage || 0);
+      const cost = isCompany ? 0 : Number((wage * days).toFixed(2));
+      return {
+        daily_work_id: wl.id,
+        work_date: wl.work_date,
+        contractor_name: wl.contractor_name || 'Direct / General',
+        site_name: wl.site_name || 'Main Site',
+        site_id: wl.site_id,
+        task_id: wl.task_id,
+        task_name: wl.task_name,
+        phase_name: wl.task_name,
+        labour_type: wl.labour_type || (isEmployee ? 'Company Employee' : 'General Labour'),
+        subcategory_name: wl.worker_name ? `${wl.worker_name} (${isEmployee ? 'Company Staff' : 'Daily Wage Worker'})` : (wl.labour_type || 'Task Worker'),
+        labour_count: 1,
+        working_hours: hours,
+        work_description: wl.work_performed || `Work by ${wl.worker_name || 'labour'}`,
+        verified_by_engineer: true,
+        daily_cost: cost,
+      };
+    }),
     ...labourRecords.map((r) => ({
-      daily_work_id: r.id,
+      daily_work_id: r.id + 500000,
       work_date: r.record_date,
-      contractor_name: r.contractor_name || '—',
-      site_name: r.site_name || 'Site',
+      contractor_name: r.contractor_name || 'Direct / General',
+      site_name: r.site_name || 'Main Site',
       site_id: r.site_id,
+      task_name: 'General Attendance',
       phase_name: r.category,
       subcategory_name: r.category,
       labour_count: r.present_count,
@@ -1021,10 +1081,12 @@ async function getLabourTracking(projectId, query = {}) {
     ...dailyWorkRecords.map((dw) => ({
       daily_work_id: dw.id + 100000,
       work_date: dw.work_date,
-      contractor_name: dw.contractor_name || '—',
+      contractor_name: dw.contractor_name || 'Direct / General',
       site_name: dw.site_name || 'General Site',
       site_id: dw.site_id,
-      phase_name: dw.phase_title || `Phase ${dw.phase_number}`,
+      task_id: dw.task_id,
+      task_name: dw.task_name,
+      phase_name: dw.task_name || dw.phase_title || 'Site Work',
       subcategory_name: dw.subcategory,
       labour_count: 1,
       working_hours: 8,
@@ -1034,8 +1096,8 @@ async function getLabourTracking(projectId, query = {}) {
     })),
   ];
 
-  const totalWorkedDays = workedFromLabourDays + dailyWorkRecords.length;
-  const totalWorkedCost = workedFromLabourCost;
+  const totalWorkedDays = workedList.reduce((sum, r) => sum + Number(r.labour_count || 1), 0);
+  const totalWorkedCost = workedList.reduce((sum, r) => sum + Number(r.daily_cost || 0), 0);
 
   return {
     projectId: pId,
@@ -1050,7 +1112,25 @@ async function getLabourTracking(projectId, query = {}) {
       remainingCost: budgetedCost > 0 ? Math.max(0, budgetedCost - totalWorkedCost) : 0,
     },
     worked: workedList,
-    budgetByPhase: allPhases,
+    tasks: allTasks,
+    budgetByTask: allTasks,
+    budgetByPhase: allTasks.map((t, idx) => ({
+      phase_number: idx + 1,
+      phase_name: t.task_name,
+      task_id: t.task_id,
+      task_name: t.task_name,
+      site_name: t.site_name,
+      status: t.status,
+      calculated_working_days: t.duration_days,
+      working_days_per_month: 25,
+      expected_duration_months: Math.max(0.1, Number((t.duration_days / 25).toFixed(1))),
+      labourItems: t.labourItems,
+      totalBudgetedDays: t.totalBudgetedDays,
+      totalBudgetedCost: t.totalBudgetedCost,
+      workedDays: t.workedDays,
+      workedCost: t.workedCost,
+      remainingCost: t.remainingCost,
+    })),
   };
 }
 
@@ -1086,9 +1166,33 @@ async function logLabour(projectId, payload) {
       presentCount,
       payload.record_date || new Date().toISOString().slice(0, 10),
       dailyRate,
-      payload.payment_status || 'pending',
+      payload.payment_status || 'verified',
     ]
   );
+
+  // If task_id provided, also record in task_worker_logs for task-wise tracking!
+  if (payload.task_id) {
+    const tId = Number(payload.task_id);
+    for (let i = 0; i < presentCount; i++) {
+      const workerName = payload.worker_name || `${payload.category || 'Worker'} #${i + 1}`;
+      await pool.query(
+        `INSERT INTO task_worker_logs (task_id, project_id, site_id, contractor_id, worker_name, labour_type, work_date, hours_worked, daily_wage, work_performed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 8, ?, ?)`,
+        [
+          tId,
+          pId,
+          siteId,
+          payload.contractor_id || project.contractor_id || null,
+          workerName,
+          payload.category || 'General Labour',
+          payload.record_date || new Date().toISOString().slice(0, 10),
+          dailyRate,
+          payload.work_description || `Attendance logged: ${payload.category || 'Labour'}`,
+        ]
+      );
+    }
+  }
+
   return { id: result.insertId, site_id: siteId, ...payload };
 }
 

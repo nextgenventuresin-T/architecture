@@ -62,6 +62,8 @@ const EMPTY = {
   adjustment_type: 'increase',
   reason: '',
   reference: '',
+  vehicle_number: '',
+  transporter_name: '',
   transaction_date: today(),
   notes: '',
   procurement_receipt_id: '',
@@ -117,6 +119,12 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
 
   const selectedMaterial = lookups.materials?.find((m) => String(m.id) === String(values.material_id));
   const selectedWarehouse = lookups.warehouses?.find((w) => String(w.id) === String(values.warehouse_id));
+  const destWarehouse = lookups.warehouses?.find((w) => String(w.id) === String(values.destination_warehouse_id));
+  const isCentralWarehouse =
+    selectedWarehouse?.type === 'central' ||
+    selectedWarehouse?.name?.toLowerCase().includes('central') ||
+    destWarehouse?.type === 'central' ||
+    destWarehouse?.name?.toLowerCase().includes('central');
   const unit = selectedMaterial?.unit ?? '';
 
   const availableStock = useMemo(() => {
@@ -145,6 +153,9 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
       errors.quantity = 'Enter a quantity greater than zero.';
     } else if (['issue', 'transfer'].includes(type) && availableStock !== null && Number(values.quantity) > availableStock) {
       errors.quantity = `Only ${formatNumber(availableStock)} ${unit} available in ${selectedWarehouse?.name || 'this warehouse'}.`;
+    }
+    if (['receipt', 'transfer', 'issue'].includes(type) && isCentralWarehouse && !values.vehicle_number?.trim()) {
+      errors.vehicle_number = 'Vehicle number is mandatory for Central Warehouse movements.';
     }
     if (type === 'transfer') {
       if (!values.destination_warehouse_id) errors.destination_warehouse_id = 'Select a destination warehouse.';
@@ -178,7 +189,11 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
         quantity: Number(values.quantity),
         transaction_date: values.transaction_date,
         reference: values.reference.trim() || null,
-        notes: values.notes.trim() || null,
+        notes: [
+          values.vehicle_number ? `Vehicle: ${values.vehicle_number.trim()}` : '',
+          values.transporter_name ? `Transporter: ${values.transporter_name.trim()}` : '',
+          values.notes ? values.notes.trim() : '',
+        ].filter(Boolean).join(' | ') || null,
         ...(type === 'transfer' && { destination_warehouse_id: Number(values.destination_warehouse_id) }),
         ...(type === 'adjustment' && { adjustment_type: values.adjustment_type, reason: values.reason.trim() }),
         ...(type === 'receipt' && values.procurement_receipt_id
@@ -389,13 +404,33 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
           className="sm:col-span-2"
         />
 
+        {['receipt', 'transfer', 'issue'].includes(type) && (
+          <>
+            <InputField
+              label={isCentralWarehouse ? "Vehicle Number" : "Vehicle Number (optional)"}
+              required={isCentralWarehouse}
+              value={values.vehicle_number}
+              onChange={set('vehicle_number')}
+              error={fieldErrors.vehicle_number}
+              placeholder="e.g. MH-12-AB-1234"
+              description={isCentralWarehouse ? "Mandatory for Central Warehouse movements" : undefined}
+            />
+            <InputField
+              label="Transporter / Driver (optional)"
+              value={values.transporter_name}
+              onChange={set('transporter_name')}
+              placeholder="e.g. VRL Logistics / Driver Name"
+            />
+          </>
+        )}
+
         <TextAreaField
           label="Notes"
           value={values.notes}
           onChange={set('notes')}
           rows={2}
           className="sm:col-span-2"
-          placeholder="Vehicle, condition on arrival, who collected it…"
+          placeholder="Condition on arrival, gate entry remarks…"
         />
       </div>
     </Modal>

@@ -40,6 +40,11 @@ const updateWorker = asyncHandler(async (req, res) =>
   ok(res, { worker: await contractorWorkerService.update(req.params.id, req.body, req.hrScope) })
 );
 
+const deleteWorker = asyncHandler(async (req, res) => {
+  await contractorWorkerService.remove(req.params.id, req.hrScope);
+  return ok(res, { message: 'Worker deleted successfully.' });
+});
+
 // ------------------------------------------------------------ assignments
 
 const listAssignments = asyncHandler(async (req, res) => ok(res, await labourAssignmentService.list(req.query, req.hrScope)));
@@ -181,7 +186,7 @@ const diary = asyncHandler(async (req, res) => {
 
 module.exports = {
   dashboardSummary, siteWorkforce,
-  listWorkers, workerSkillCategories, getWorker, createWorker, updateWorker,
+  listWorkers, workerSkillCategories, getWorker, createWorker, updateWorker, deleteWorker,
   listAssignments, getAssignment, createAssignment, updateAssignment, endAssignment,
   listRequests, getRequest, createRequest, updateRequest, submitRequest, reviewRequest,
   approveRequest, rejectRequest, cancelRequest, completeRequest, assignRequestWorker,

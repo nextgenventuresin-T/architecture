@@ -2,6 +2,8 @@
 
 const ApiError = require('../utils/ApiError');
 const siteModel = require('../models/siteModel');
+const taskModel = require('../models/taskModel');
+const { pool } = require('../config/db');
 
 async function getById(id) {
   const site = await siteModel.findById(id);
@@ -14,16 +16,78 @@ async function getDetail(id) {
   const site = await getById(id);
   const snapshot = await siteModel.findSnapshot(id);
 
+  let taskMaterials = [];
+  let taskTools = [];
+  let taskLabour = [];
+  let taskMisc = [];
+  let taskWorkerLogs = [];
+  let taskDailyWork = [];
+
+  const taskIds = (snapshot.tasks || []).map((t) => t.id);
+  if (taskIds.length) {
+    const placeholders = taskIds.map(() => '?').join(',');
+    const [tmRows, ttRows, tlRows, tmcRows, twlRows, tdwRows] = await Promise.all([
+      pool.query(
+        `SELECT tm.*, m.name AS material_name, m.unit AS material_unit, m.category AS material_category
+         FROM task_materials tm
+         JOIN materials m ON m.id = tm.material_id
+         WHERE tm.task_id IN (${placeholders}) ORDER BY tm.id ASC`,
+        taskIds
+      ),
+      pool.query(
+        `SELECT tt.*, t.code AS tool_code
+         FROM task_tools tt
+         LEFT JOIN tools t ON t.id = tt.tool_id
+         WHERE tt.task_id IN (${placeholders}) ORDER BY tt.id ASC`,
+        taskIds
+      ),
+      pool.query(
+        `SELECT * FROM task_labour WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
+        taskIds
+      ),
+      pool.query(
+        `SELECT * FROM task_misc WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
+        taskIds
+      ),
+      pool.query(
+        `SELECT * FROM task_worker_logs WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
+        taskIds
+      ),
+      pool.query(
+        `SELECT * FROM daily_work_updates WHERE task_id IN (${placeholders}) ORDER BY id ASC`,
+        taskIds
+      ),
+    ]);
+    taskMaterials = tmRows[0];
+    taskTools = ttRows[0];
+    taskLabour = tlRows[0];
+    taskMisc = tmcRows[0];
+    taskWorkerLogs = twlRows[0];
+    taskDailyWork = tdwRows[0];
+  }
+
   const formattedTasks = (snapshot.tasks || []).map((t) => {
-    const actualLabourCost = Number(t.actual_labour_cost || 0);
-    const actualMaterialCost = Number(t.actual_material_cost || 0);
-    const actualTaskExpenses = Number(t.actual_task_expenses || 0);
-    const totalActualCost = Number((actualLabourCost + actualMaterialCost + actualTaskExpenses).toFixed(2));
-    const totalBudget = Number(t.total_budget || 0);
+    const tMaterials = taskMaterials.filter((m) => m.task_id === t.id);
+    const tTools = taskTools.filter((tl) => tl.task_id === t.id);
+    const tLabour = taskLabour.filter((l) => l.task_id === t.id);
+    const tMisc = taskMisc.filter((mc) => mc.task_id === t.id);
+    const tWorkerLogs = taskWorkerLogs.filter((w) => w.task_id === t.id);
+    const tDailyWork = taskDailyWork.filter((dw) => dw.task_id === t.id);
+    const tExpenses = (snapshot.expenses || []).filter((e) => e.task_id === t.id);
+
+    const budgetUtilization = taskModel.computeTaskBudgetUtilization(t, tMaterials, tDailyWork, tWorkerLogs, tExpenses);
+    const actualLabourCost = budgetUtilization.labour.actual;
+    const actualMaterialCost = budgetUtilization.materials.actual;
+    const actualToolCost = budgetUtilization.tools.actual;
+    const actualMiscCost = budgetUtilization.misc.actual;
+    const totalActualCost = budgetUtilization.total.actual;
+    const effectiveBudget = budgetUtilization.total.effectiveBudget;
+
     return {
       id: t.id,
       projectId: t.project_id,
       siteId: t.site_id,
+      siteName: site.name,
       name: t.name,
       description: t.description,
       status: t.status,
@@ -35,14 +99,22 @@ async function getDetail(id) {
       toolBudget: Number(t.tool_budget || 0),
       labourBudget: Number(t.labour_budget || 0),
       miscBudget: Number(t.misc_budget || 0),
-      totalBudget,
+      totalBudget: Number(t.total_budget || 0),
+      approvedAdditionalBudget: Number(t.approved_additional_budget || 0),
+      pendingExcessBudget: Number(t.pending_excess_budget || 0),
+      excessReason: t.excess_reason || null,
+      budgetUtilization,
       actualLabourCost,
       actualMaterialCost,
-      actualTaskExpenses,
+      actualToolCost,
+      actualMiscCost,
       actualCost: totalActualCost,
-      variance: Number((totalBudget - totalActualCost).toFixed(2)),
+      variance: Number((effectiveBudget - totalActualCost).toFixed(2)),
       workerCount: Number(t.worker_count || 0),
+      workerEntriesCount: Number(t.worker_count || 0),
+      uniqueWorkersCount: Number(t.unique_workers_count || 0),
       updatesCount: Number(t.updates_count || 0),
+      dailyUpdatesCount: Number(t.updates_count || 0),
     };
   });
 

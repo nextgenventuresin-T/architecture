@@ -12,6 +12,7 @@ const warehouseModel = require('../models/warehouseModel');
 const warehouseService = require('./warehouseService');
 const materialModel = require('../models/materialModel');
 const dailyWorkModel = require('../models/dailyWorkModel');
+const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const { PROJECT_PHASES_DEF } = require('../config/projectPhases');
 
 const EXPENSE_STATUSES = ['pending', 'approved', 'paid', 'rejected', 'cancelled'];
@@ -782,21 +783,33 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
 
   const projectId = Number(payload.project_id);
   const siteId = payload.site_id ? Number(payload.site_id) : null;
-  const phaseNumber = Number(payload.phase_number);
-  const subcategory = (payload.subcategory || '').trim();
+  const taskId = payload.task_id ? Number(payload.task_id) : (payload.taskId ? Number(payload.taskId) : null);
+  let taskName = null;
+  if (taskId) {
+    const [tRows] = await pool.query('SELECT name FROM project_tasks WHERE id = ?', [taskId]);
+    if (tRows.length > 0) taskName = tRows[0].name;
+  }
+
+  const phaseNumber = Number(payload.phase_number) || 1;
+  const subcategory = (payload.subcategory || taskName || 'General Work').trim();
   const materialId = Number(payload.material_id);
   const quantityUsed = Number(payload.quantity_used);
   const expenseDate = payload.expense_date || today();
   const remarks = (payload.remarks || '').trim();
 
   if (!projectId) throw ApiError.badRequest('Check the highlighted fields.', { project_id: 'Select an assigned project.' });
-  if (!phaseNumber || phaseNumber < 1 || phaseNumber > 8) {
-    throw ApiError.badRequest('Check the highlighted fields.', { phase_number: 'Select a valid phase (1-8).' });
-  }
-  if (!subcategory) throw ApiError.badRequest('Check the highlighted fields.', { subcategory: 'Select a subcategory.' });
   if (!materialId) throw ApiError.badRequest('Check the highlighted fields.', { material_id: 'Select a material/tool.' });
   if (!(quantityUsed > 0)) {
     throw ApiError.badRequest('Check the highlighted fields.', { quantity_used: 'Enter a quantity greater than zero.' });
+  }
+
+  // Task-wise only: material is used against the task it was procured for.
+  if (!taskId) throw ApiError.badRequest('Check the highlighted fields.', { task_id: 'Select the task - material is used task-wise.' });
+  const taskLines = await require('./dailyWorkService').getTaskMaterials(taskId, cId);
+  const taskLine = taskLines.find((x) => Number(x.material_id) === materialId);
+  if (!taskLine) throw ApiError.badRequest('Check the highlighted fields.', { material_id: 'That material was not procured for this task.' });
+  if (quantityUsed > taskLine.taskAvailable + 1e-9) {
+    throw ApiError.badRequest('Check the highlighted fields.', { quantity_used: `Only ${taskLine.taskAvailable} ${taskLine.unit} procured for this task is still unused.` });
   }
 
   // 1. Resolve contractor warehouse
@@ -825,14 +838,15 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
     quantity: quantityUsed,
     unit: material.unit,
     reference: `CONSUMPTION-${expenseDate}`,
-    notes: `Phase ${phaseNumber} (${subcategory}): ${remarks || 'Site consumption'}`,
+    notes: taskName ? `Task: ${taskName} (${subcategory}): ${remarks || 'Site consumption'}` : `Work (${subcategory}): ${remarks || 'Site consumption'}`,
     transaction_date: expenseDate,
   }, userId);
 
   // 4. Record Daily Expense first so we have expenseId
   const phaseDef = PROJECT_PHASES_DEF.find((p) => p.phase_number === phaseNumber);
-  const phaseTitle = phaseDef?.title || `Phase ${phaseNumber}`;
-  const unitRate = Number(material.default_rate || 0);
+  const phaseTitle = taskName ? `Task: ${taskName}` : (phaseDef?.title || `Phase ${phaseNumber}`);
+  // Actual cost of the stock consumed (linked to where it came from), not the catalogue default.
+  const unitRate = await getConsumptionUnitCost({ warehouseId: warehouse.id, materialId, issueTx });
   const totalAmount = Number((quantityUsed * unitRate).toFixed(2));
   const expenseNumber = await generateExpenseNumber();
 
@@ -841,8 +855,10 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
     project_id: projectId,
     site_id: siteId,
     contractor_id: cId,
+    task_id: taskId || null,
+    source_type: 'daily_work_material',
     category: 'Material Consumption',
-    description: `Consumed ${quantityUsed} ${material.unit} of ${material.name} (${phaseTitle} · ${subcategory})`,
+    description: `Consumed ${quantityUsed} ${material.unit} of ${material.name} (${phaseTitle}${subcategory ? ` · ${subcategory}` : ''})`,
     amount: totalAmount,
     expense_date: expenseDate,
     paid_by: 'Contractor Inventory',
@@ -850,7 +866,7 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
     payment_method: 'other',
     reference: issueTx.transactionNumber || issueTx.transaction_number,
     status: 'approved',
-    notes: remarks ? `Phase ${phaseNumber} (${subcategory}): ${remarks}` : `Phase ${phaseNumber} (${subcategory})`,
+    notes: remarks ? `${phaseTitle}: ${remarks}` : `${phaseTitle}`,
     created_by: userId,
   });
 
@@ -861,6 +877,7 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
       project_id: projectId,
       site_id: siteId,
       contractor_id: cId,
+      task_id: taskId,
       phase_number: phaseNumber,
       phase_title: phaseTitle,
       subcategory,
@@ -869,13 +886,16 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
       unit: material.unit,
       warehouse_transaction_id: issueTx.id,
       expense_id: expenseId,
+      unit_cost: unitRate,
+      material_cost: totalAmount,
       work_date: expenseDate,
-      work_done: `Material Used: ${quantityUsed} ${material.unit} of ${material.name}`,
+      work_done: `Material Used: ${quantityUsed} ${material.unit} of ${material.name}${taskName ? ` for Task: ${taskName}` : ''}`,
       work_status: 'in-progress',
       progress_percentage: 0,
       remarks: remarks || `Consumed ${quantityUsed} ${material.unit} from warehouse inventory`,
       created_by: userId,
     });
+    if (workUpdateId) await pool.query('UPDATE expenses SET source_id = ? WHERE id = ?', [workUpdateId, expenseId]);
   } catch (err) {
     console.error('Error creating daily work update for consumption:', err);
   }

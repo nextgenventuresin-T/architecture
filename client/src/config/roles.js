@@ -28,7 +28,7 @@ export const ROLE_LABELS = Object.freeze({
 
 export const ROLE_HOME = Object.freeze({
   [ROLES.ADMIN]: '/admin',
-  [ROLES.PROJECT_MANAGER]: '/admin/projects',
+  [ROLES.PROJECT_MANAGER]: '/pm',
   [ROLES.FINANCE]: '/finance',
   [ROLES.HR]: '/hr',
   [ROLES.PROCUREMENT]: '/procurement',

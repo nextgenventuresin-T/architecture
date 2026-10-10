@@ -2,9 +2,86 @@
 
 const ApiError = require('../utils/ApiError');
 const clientModel = require('../models/clientModel');
+const { pool } = require('../config/db');
 
-function formatClient(r) {
+function num(v, def = 0) {
+  if (v === null || v === undefined) return def;
+  const n = Number(v);
+  return isNaN(n) ? def : n;
+}
+
+async function getClientProjects(clientId) {
+  const [rows] = await pool.query(
+    `SELECT
+       p.id, p.name, p.code, p.start_date, p.expected_completion, p.status,
+       COALESCE(p.client_contract_value, p.estimated_budget, 0) AS contract_value,
+       COALESCE(p.estimated_budget, 0) AS estimated_budget,
+       COALESCE((
+         SELECT SUM(dwu.quantity_used * COALESCE(mm.cost_per_unit, pr.purchase_rate, m.default_rate, 0))
+         FROM daily_work_updates dwu
+         LEFT JOIN materials m ON m.id = dwu.material_id
+         LEFT JOIN material_movements mm ON mm.id = dwu.warehouse_transaction_id
+         LEFT JOIN procurement_requests pr ON pr.id = mm.procurement_request_id
+         WHERE dwu.project_id = p.id AND dwu.quantity_used > 0
+       ), 0) + COALESCE((
+         SELECT SUM(twl.hours_worked / 8.0 * twl.daily_wage)
+         FROM task_worker_logs twl
+         WHERE twl.project_id = p.id AND COALESCE(twl.worker_type, 'daily_wage') NOT IN ('company_labour', 'company_employee') AND LOWER(COALESCE(twl.labour_type, '')) NOT LIKE '%company%'
+       ), 0) + COALESCE((
+         SELECT SUM(dwu.tool_cost) FROM daily_work_updates dwu WHERE dwu.project_id = p.id AND dwu.tool_cost > 0
+       ), 0) + COALESCE((
+         SELECT SUM(dwu.misc_amount) FROM daily_work_updates dwu WHERE dwu.project_id = p.id AND dwu.misc_amount > 0
+       ), 0) + COALESCE((
+         SELECT SUM(e.amount) FROM expenses e
+         WHERE e.project_id = p.id AND e.status NOT IN ('rejected', 'cancelled')
+           AND (e.reference IS NULL OR (e.reference NOT LIKE 'DWU-TOOL-%' AND e.reference NOT LIKE 'DWU-MISC-%'))
+       ), 0) AS actual_cost,
+       COALESCE((
+         SELECT SUM(total_amount) FROM contractor_pos cpo WHERE cpo.project_id = p.id
+       ), 0) AS contractor_cost,
+       COALESCE((
+         SELECT SUM(amount) FROM client_payments cp WHERE cp.project_id = p.id
+       ), 0) AS client_payments
+     FROM projects p
+     WHERE p.client_id = ? AND p.is_archived = 0
+     ORDER BY p.id DESC`,
+    [clientId]
+  );
+
+  return rows.map((r) => {
+    const contractValue = Number(num(r.contract_value).toFixed(2));
+    const budget = Number(num(r.estimated_budget).toFixed(2));
+    const actualCost = Number(num(r.actual_cost).toFixed(2));
+    const contractorCost = Number(num(r.contractor_cost).toFixed(2));
+    const payments = Number(num(r.client_payments).toFixed(2));
+    const dueAmount = Number(Math.max(0, contractValue - payments).toFixed(2));
+    const profitLoss = Number((contractValue - actualCost).toFixed(2));
+
+    return {
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      startDate: r.start_date,
+      expectedCompletion: r.expected_completion,
+      status: r.status,
+      projectBudget: budget,
+      contractValue,
+      actualCost,
+      contractorCost,
+      clientPayments: payments,
+      dueAmount,
+      profitLoss,
+    };
+  });
+}
+
+function formatClient(r, projects = []) {
   if (!r) return null;
+  const projectList = Array.isArray(projects) ? projects : [];
+  const totalContractValue = Number(projectList.reduce((s, p) => s + Number(p.contractValue || 0), 0).toFixed(2));
+  const totalPaid = Number(projectList.reduce((s, p) => s + Number(p.clientPayments || 0), 0).toFixed(2));
+  const totalDue = Number(Math.max(0, totalContractValue - totalPaid).toFixed(2));
+
   return {
     id: r.id,
     name: r.name,
@@ -25,6 +102,11 @@ function formatClient(r) {
     efy: r.efy,
     adherence: r.adherence,
     notes: r.notes,
+    projects: projectList,
+    projectCount: projectList.length,
+    totalContractValue,
+    totalPaid,
+    totalDue,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -40,8 +122,15 @@ async function list(query = {}) {
     pageSize,
   });
 
+  const clients = await Promise.all(
+    rows.map(async (row) => {
+      const projects = await getClientProjects(row.id);
+      return formatClient(row, projects);
+    })
+  );
+
   return {
-    clients: rows.map(formatClient),
+    clients,
     pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
   };
 }
@@ -49,7 +138,8 @@ async function list(query = {}) {
 async function getById(id) {
   const client = await clientModel.findById(id);
   if (!client) throw ApiError.notFound('Client not found.');
-  return formatClient(client);
+  const projects = await getClientProjects(id);
+  return formatClient(client, projects);
 }
 
 async function create(payload) {
@@ -137,4 +227,4 @@ async function remove(id) {
   return { success: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+module.exports = { list, getById, create, update, remove, getClientProjects };

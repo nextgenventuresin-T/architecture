@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { X, Search, User, ShieldCheck, HardHat, Calendar, DollarSign, Clock, AlertCircle } from 'lucide-react';
+import { X, Search, User, ShieldCheck, HardHat, Calendar, DollarSign, Clock, AlertCircle, AlertTriangle } from 'lucide-react';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import Alert from '../ui/Alert';
@@ -24,7 +24,7 @@ function calcWorkingDays(startDate, endDate) {
 
 export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAssigned, onOpenQuickAdd }) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'daily_wage' | 'company_employee'
+  const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'daily_wage' | 'company_labour'
   const [workforce, setWorkforce] = useState([]);
   const [loadingWorkforce, setLoadingWorkforce] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState(null);
@@ -34,8 +34,13 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
   const [expectedDays, setExpectedDays] = useState(0);
   const [dailyWage, setDailyWage] = useState(750);
   const [remarks, setRemarks] = useState('');
+  const [additionalReason, setAdditionalReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  const plannedWorkers = task?.labourSummary?.workersPlanned ?? (task?.labour ? task.labour.reduce((s, l) => s + Number(l.workerCount || l.worker_count || 1), 0) : 0);
+  const currentlyAssigned = task?.assignedWorkers?.length || 0;
+  const isAdditionalWorker = plannedWorkers > 0 && currentlyAssigned >= plannedWorkers;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -59,8 +64,9 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
   const filteredWorkforce = useMemo(() => {
     const list = Array.isArray(workforce) ? workforce : [];
     return list.filter((w) => {
-      if (typeFilter === 'daily_wage' && w.workerType === 'company_employee') return false;
-      if (typeFilter === 'company_employee' && w.workerType !== 'company_employee') return false;
+      const isComp = w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour;
+      if (typeFilter === 'daily_wage' && isComp) return false;
+      if (typeFilter === 'company_labour' && !isComp) return false;
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase();
         const matchName = (w.name || '').toLowerCase().includes(q);
@@ -76,13 +82,13 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
 
   const handleSelectWorker = (w) => {
     setSelectedWorker(w);
-    const isCompany = w.workerType === 'company_employee';
+    const isCompany = w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour;
     setDailyWage(isCompany ? 0 : Number(w.dailyRate || 750));
     setError(null);
   };
 
-  const isCompanyEmployee = selectedWorker?.workerType === 'company_employee';
-  const plannedCost = isCompanyEmployee ? 0 : Number(expectedDays || 0) * Number(dailyWage || 0);
+  const isCompanyLabour = selectedWorker?.workerType === 'company_labour' || selectedWorker?.workerType === 'company_employee' || selectedWorker?.isCompanyLabour;
+  const plannedCost = isCompanyLabour ? 0 : Number(expectedDays || 0) * Number(dailyWage || 0);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -95,13 +101,18 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
       return;
     }
 
+    if (isAdditionalWorker && !additionalReason.trim()) {
+      setError('Additional labour above planned workers requires a mandatory justification and Admin approval.');
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
 
     try {
       await tasksApi.assignWorker(taskId, {
         worker_id: selectedWorker.workerId,
-        worker_type: selectedWorker.workerType === 'company_employee' ? 'company_employee' : 'daily_wage',
+        worker_type: isCompanyLabour ? 'company_labour' : 'daily_wage',
         worker_name: selectedWorker.name,
         worker_code: selectedWorker.code,
         phone: selectedWorker.phone,
@@ -110,9 +121,10 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
         start_date: startDate,
         end_date: endDate,
         expected_days: expectedDays,
-        daily_wage: isCompanyEmployee ? 0 : Number(dailyWage || 0),
+        daily_wage: isCompanyLabour ? 0 : Number(dailyWage || 0),
         planned_cost: plannedCost,
         remarks: remarks.trim(),
+        reason: additionalReason.trim(),
       });
 
       onAssigned();
@@ -231,12 +243,12 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
                     </button>
                     <button
                       type="button"
-                      onClick={() => setTypeFilter('company_employee')}
+                      onClick={() => setTypeFilter('company_labour')}
                       className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                        typeFilter === 'company_employee' ? 'bg-brand-600 text-white' : 'bg-white border border-line text-ink-muted hover:text-ink'
+                        typeFilter === 'company_labour' ? 'bg-brand-600 text-white' : 'bg-white border border-line text-ink-muted hover:text-ink'
                       }`}
                     >
-                      Company Staff
+                      Company Labour
                     </button>
                   </div>
                 </div>
@@ -259,36 +271,39 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
                       )}
                     </div>
                   ) : (
-                    filteredWorkforce.map((w) => (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => handleSelectWorker(w)}
-                        className="w-full p-2.5 text-left hover:bg-canvas flex items-center justify-between transition-colors"
-                      >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-xs text-ink">{w.name}</span>
-                            <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
-                              w.workerType === 'company_employee' ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
-                            }`}>
-                              {w.workerType === 'company_employee' ? 'Staff' : 'Daily Wage'}
+                    filteredWorkforce.map((w) => {
+                      const isCompany = w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour;
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          onClick={() => handleSelectWorker(w)}
+                          className="w-full p-2.5 text-left hover:bg-canvas flex items-center justify-between transition-colors"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-xs text-ink">{w.name}</span>
+                              <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
+                                isCompany ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {isCompany ? 'Company Labour' : 'Daily Wage'}
+                              </span>
+                              <span className="text-[11px] text-ink-muted">({w.trade})</span>
+                            </div>
+                            <div className="text-[11px] text-ink-subtle flex items-center gap-2 mt-0.5">
+                              {w.code && <span>ID: {w.code}</span>}
+                              {w.phone && <span>Mob: {w.phone}</span>}
+                              {w.aadhaarNumber && <span>Aadhaar: {w.aadhaarNumber}</span>}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs font-semibold text-ink">
+                              {isCompany ? '— (₹0 In-House)' : formatCurrency(w.dailyRate || 750) + '/day'}
                             </span>
-                            <span className="text-[11px] text-ink-muted">({w.trade})</span>
                           </div>
-                          <div className="text-[11px] text-ink-subtle flex items-center gap-2 mt-0.5">
-                            {w.code && <span>ID: {w.code}</span>}
-                            {w.phone && <span>Mob: {w.phone}</span>}
-                            {w.aadhaarNumber && <span>Aadhaar: {w.aadhaarNumber}</span>}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-xs font-semibold text-ink">
-                            {w.workerType === 'company_employee' ? '— (Staff)' : formatCurrency(w.dailyRate || 750) + '/day'}
-                          </span>
-                        </div>
-                      </button>
-                    ))
+                        </button>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -340,10 +355,10 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
 
               <div className="rounded-lg bg-canvas p-3">
                 <span className="text-[11px] font-medium text-ink-muted block">Daily Wage (₹)</span>
-                {isCompanyEmployee ? (
+                {isCompanyLabour ? (
                   <>
-                    <span className="text-base font-bold text-ink-muted mt-0.5 block">— (₹0)</span>
-                    <span className="text-[10px] text-ink-subtle">Company employee: wage = ₹0</span>
+                    <span className="text-base font-bold text-blue-700 mt-0.5 block">— (₹0)</span>
+                    <span className="text-[10px] text-ink-subtle">Company labour: wage = ₹0 (₹0 Cost)</span>
                   </>
                 ) : (
                   <>
@@ -370,6 +385,33 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
               </div>
             </div>
           </div>
+
+          {/* Additional Workforce Above Plan Warning & Mandatory Reason */}
+          {isAdditionalWorker && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                Additional Workforce Above Admin Plan ({currentlyAssigned} of {plannedWorkers} Planned Assigned)
+              </div>
+              <p className="text-xs text-amber-800">
+                Admin planned {plannedWorkers} worker(s) for this task. You currently have {currentlyAssigned} worker(s) assigned.
+                Assigning an additional worker will create an Admin approval request. Please provide a mandatory justification below.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-amber-900 mb-1">
+                  Mandatory Reason / Justification <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  required
+                  rows={2}
+                  value={additionalReason}
+                  onChange={(e) => setAdditionalReason(e.target.value)}
+                  placeholder="Explain why additional workforce is needed beyond the planned schedule..."
+                  className="w-full rounded-lg border border-amber-300 bg-white p-2.5 text-xs text-ink focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Remarks */}
           <div>

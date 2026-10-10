@@ -34,22 +34,25 @@ async function getDirectory({
     effectiveContractorId = Number(contractorId);
   }
 
-  // Query exclusively for Contractor Labour & Daily Wage Workers
+  // Query for Contractor Labour / Daily Wage Workers and In-House Company Labour (Decoupled from Employees)
   let unionQuery = `
     SELECT
       w.id AS raw_id,
-      'labour' AS worker_type,
-      'Labour' AS worker_type_label,
+      CASE WHEN w.is_company_labour = 1 OR w.worker_type = 'company_labour' THEN 'company_labour' ELSE 'daily_wage' END AS worker_type,
+      CASE WHEN w.is_company_labour = 1 OR w.worker_type = 'company_labour' THEN 'Company Labour' ELSE 'Daily Wage Worker' END AS worker_type_label,
       w.worker_code AS code,
       w.full_name AS name,
       w.phone,
       w.aadhaar_number,
       NULL AS department,
       w.skill_category AS trade,
-      w.daily_rate,
+      CASE WHEN w.is_company_labour = 1 OR w.worker_type = 'company_labour' THEN 0.00 ELSE w.daily_rate END AS daily_rate,
       w.status,
+      w.notes,
+      w.joining_date,
+      w.is_company_labour,
       w.contractor_id,
-      c.name AS contractor_name,
+      COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name,
       cur_task.task_id,
       cur_task.task_name,
       cur_task.project_id,
@@ -66,7 +69,7 @@ async function getDirectory({
       today_log.task_id AS today_task_id,
       today_log.task_name AS today_task_name
     FROM contractor_workers w
-    JOIN contractors c ON c.id = w.contractor_id
+    LEFT JOIN contractors c ON c.id = w.contractor_id
     LEFT JOIN (
       SELECT
         ta.worker_id,
@@ -82,9 +85,9 @@ async function getDirectory({
         ta.remarks,
         ROW_NUMBER() OVER (PARTITION BY ta.worker_id ORDER BY ta.id DESC) AS rn
       FROM (
-        SELECT worker_id, task_id, start_date, end_date, expected_days, remarks, id FROM task_assigned_workers WHERE worker_type = 'daily_wage'
+        SELECT worker_id, task_id, start_date, end_date, expected_days, remarks, id FROM task_assigned_workers
         UNION ALL
-        SELECT worker_id, task_id, start_date, end_date, working_days AS expected_days, remarks, id FROM task_labour WHERE worker_type = 'labour' AND worker_id IS NOT NULL
+        SELECT worker_id, task_id, start_date, end_date, working_days AS expected_days, remarks, id FROM task_labour WHERE worker_id IS NOT NULL
       ) ta
       JOIN project_tasks pt ON pt.id = ta.task_id
       JOIN projects p ON p.id = pt.project_id
@@ -108,13 +111,19 @@ async function getDirectory({
 
   // Apply filters on the unified result set
   if (effectiveContractorId) {
-    whereClauses.push('contractor_id = ?');
+    whereClauses.push('(contractor_id = ? OR worker_type = \'company_labour\')');
     params.push(effectiveContractorId);
   }
 
   if (workerType && workerType !== 'all') {
-    whereClauses.push('worker_type = ?');
-    params.push(workerType);
+    if (workerType === 'daily_wage' || workerType === 'labour') {
+      whereClauses.push("worker_type = 'daily_wage'");
+    } else if (workerType === 'company_labour' || workerType === 'company_employee') {
+      whereClauses.push("worker_type = 'company_labour'");
+    } else {
+      whereClauses.push('worker_type = ?');
+      params.push(workerType);
+    }
   }
 
   if (status && status !== 'all') {
@@ -197,6 +206,9 @@ async function getDirectory({
       skillCategory: r.trade,
       dailyRate: Number(r.daily_rate || 0),
       status: r.status,
+      notes: r.notes || null,
+      joiningDate: r.joining_date || null,
+      isCompanyLabour: Boolean(r.is_company_labour || r.worker_type === 'company_labour'),
       contractorId: r.contractor_id,
       contractorName: r.contractor_name,
       currentProject: r.project_name || null,
@@ -221,38 +233,32 @@ async function getDirectory({
 }
 
 /**
- * Worker Work History profile query
+ * Worker Work History profile query (Decoupled from Employees)
  */
 async function getWorkHistory(workerId, workerType) {
   const wId = Number(workerId);
-  const isEmployee = workerType === 'company_employee';
 
-  // Get worker info
-  let workerInfo = null;
-  if (isEmployee) {
-    const [empRows] = await pool.query(
-      `SELECT id, employee_code AS code, full_name AS name, phone, designation AS trade, department, status, 'Company Internal' AS contractor_name
-       FROM employees WHERE id = ? LIMIT 1`,
-      [wId]
-    );
-    if (empRows.length) {
-      workerInfo = { ...empRows[0], workerType: 'company_employee', dailyRate: 0 };
-    }
-  } else {
-    const [cwRows] = await pool.query(
-      `SELECT w.id, w.worker_code AS code, w.full_name AS name, w.phone, w.aadhaar_number, w.skill_category AS trade, w.status, w.daily_rate AS dailyRate,
-              c.name AS contractor_name
-       FROM contractor_workers w
-       JOIN contractors c ON c.id = w.contractor_id
-       WHERE w.id = ? LIMIT 1`,
-      [wId]
-    );
-    if (cwRows.length) {
-      workerInfo = { ...cwRows[0], workerType: 'labour' };
-    }
-  }
+  // Get worker info from contractor_workers
+  const [cwRows] = await pool.query(
+    `SELECT w.id, w.worker_code AS code, w.full_name AS name, w.phone, w.aadhaar_number, w.skill_category AS trade, w.status,
+            w.daily_rate, w.worker_type, w.is_company_labour,
+            COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name
+     FROM contractor_workers w
+     LEFT JOIN contractors c ON c.id = w.contractor_id
+     WHERE w.id = ? LIMIT 1`,
+    [wId]
+  );
 
-  if (!workerInfo) return null;
+  if (!cwRows.length) return null;
+
+  const w = cwRows[0];
+  const isCompany = w.is_company_labour === 1 || w.worker_type === 'company_labour' || workerType === 'company_labour';
+  const workerInfo = {
+    ...w,
+    workerType: isCompany ? 'company_labour' : 'daily_wage',
+    dailyRate: isCompany ? 0 : Number(w.daily_rate || 0),
+    contractor_name: isCompany ? 'Company Labour (In-House)' : (w.contractor_name || 'Contractor'),
+  };
 
   // Retrieve work logs
   const [logs] = await pool.query(
@@ -262,12 +268,14 @@ async function getWorkHistory(workerId, workerType) {
        twl.hours_worked,
        twl.daily_wage,
        twl.work_performed,
+       twl.worker_type,
+       twl.labour_type,
        twl.created_at,
        pt.name AS task_name,
        p.name AS project_name,
        p.code AS project_code,
        s.name AS site_name,
-       c.name AS contractor_name,
+       COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name,
        u.full_name AS logged_by_name
      FROM task_worker_logs twl
      JOIN project_tasks pt ON pt.id = twl.task_id
@@ -275,18 +283,19 @@ async function getWorkHistory(workerId, workerType) {
      LEFT JOIN sites s ON s.id = twl.site_id
      LEFT JOIN contractors c ON c.id = twl.contractor_id
      LEFT JOIN users u ON u.id = twl.created_by
-     WHERE (twl.worker_id = ? AND twl.worker_type = ?)
+     WHERE twl.worker_id = ?
         OR (twl.worker_name = ? AND twl.worker_id IS NULL)
      ORDER BY twl.work_date DESC, twl.id DESC`,
-    [wId, workerType, workerInfo.name]
+    [wId, workerInfo.name]
   );
 
   let totalHours = 0;
   let totalCost = 0;
   const history = logs.map((l) => {
     const hours = Number(l.hours_worked || 8);
-    const wage = Number(l.daily_wage || workerInfo.dailyRate || 0);
-    const earned = (hours / 8) * wage;
+    const isCompanyLog = isCompany || l.worker_type === 'company_labour' || l.worker_type === 'company_employee' || String(l.labour_type || '').toLowerCase().includes('company');
+    const wage = isCompanyLog ? 0 : Number(l.daily_wage || workerInfo.dailyRate || 0);
+    const earned = isCompanyLog ? 0 : (hours / 8) * wage;
     totalHours += hours;
     totalCost += earned;
 
@@ -352,14 +361,16 @@ async function getWorkHistory(workerId, workerType) {
 }
 
 /**
- * Workforce Lookup for Task Budget Assignment and Contractor Daily Work dropdowns
+ * Workforce Lookup for Task Budget Assignment and Contractor Daily Work dropdowns.
+ * Strictly returns Daily-Wage Workers and In-House Company Labour.
+ * Employees (office staff/management) are NEVER included here!
  */
 async function getWorkforceLookup({ hrScope = null, search = '' } = {}) {
   const whereCw = ["w.status = 'active'"];
   const paramsCw = [];
 
   if (hrScope?.role === 'contractor') {
-    whereCw.push('w.contractor_id = ?');
+    whereCw.push('(w.contractor_id = ? OR w.is_company_labour = 1 OR w.worker_type = "company_labour")');
     paramsCw.push(Number(hrScope.contractorId));
   }
 
@@ -371,73 +382,43 @@ async function getWorkforceLookup({ hrScope = null, search = '' } = {}) {
   const [contractorWorkers] = await pool.query(
     `SELECT
        w.id,
-       'labour' AS worker_type,
-       'Labour' AS worker_type_label,
+       CASE WHEN w.is_company_labour = 1 OR w.worker_type = 'company_labour' THEN 'company_labour' ELSE 'daily_wage' END AS worker_type,
+       CASE WHEN w.is_company_labour = 1 OR w.worker_type = 'company_labour' THEN 'Company Labour' ELSE 'Daily Wage Worker' END AS worker_type_label,
        w.worker_code AS code,
        w.full_name AS name,
        w.phone,
        w.skill_category AS trade,
-       w.daily_rate AS daily_rate,
+       CASE WHEN w.is_company_labour = 1 OR w.worker_type = 'company_labour' THEN 0.00 ELSE w.daily_rate END AS daily_rate,
        w.aadhaar_number AS aadhaar_number,
        w.contractor_id,
-       c.name AS contractor_name
+       COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name,
+       w.is_company_labour
      FROM contractor_workers w
-     JOIN contractors c ON c.id = w.contractor_id
+     LEFT JOIN contractors c ON c.id = w.contractor_id
      WHERE ${whereCw.join(' AND ')}
-     ORDER BY w.full_name ASC`,
+     ORDER BY w.is_company_labour DESC, w.full_name ASC`,
     paramsCw
   );
 
-  let employees = [];
-  // For Admin/HR or when looking up full workforce, include company employees
-  if (true) { // Include active company employees for both Admin and Contractor
-    const whereEmp = ["e.status IN ('active', 'on-leave')", 'e.is_active = 1'];
-    const paramsEmp = [];
-
-    if (search && search.trim()) {
-      whereEmp.push('(e.full_name LIKE ? OR e.employee_code LIKE ?)');
-      paramsEmp.push(`%${search.trim()}%`, `%${search.trim()}%`);
-    }
-
-    const [empRows] = await pool.query(
-      `SELECT
-         e.id,
-         'company_employee' AS worker_type,
-         'Company Employee' AS worker_type_label,
-         COALESCE(e.employee_code, CONCAT('EMP-', LPAD(e.id, 4, '0'))) AS code,
-         e.full_name AS name,
-         e.phone,
-         e.designation AS trade,
-         0.00 AS daily_rate,
-         NULL AS contractor_id,
-         'Company Internal' AS contractor_name
-       FROM employees e
-       WHERE ${whereEmp.join(' AND ')}
-       ORDER BY e.full_name ASC`,
-      paramsEmp
-    );
-    employees = empRows;
-  }
-
-  const combined = [...contractorWorkers, ...employees].map((item) => ({
-    id: `${item.worker_type}-${item.id}`,
-    workerId: item.id,
-    workerType: item.worker_type,
-    workerTypeLabel: item.worker_type_label,
-    code: item.code,
-    name: item.name,
-    phone: item.phone,
-    aadhaarNumber: item.aadhaar_number || null,
-    trade: item.trade || 'General Labour',
-    dailyRate: Number(item.daily_rate || 0),
-    contractorId: item.contractor_id,
-    contractorName: item.contractor_name,
-    label: `${item.name} (${item.trade || item.worker_type_label}) — ${item.worker_type === 'company_employee' ? 'Company Employee' : item.contractor_name}`,
-  }));
-
-  return combined;
+  return contractorWorkers.map((item) => {
+    const isCompany = item.is_company_labour === 1 || item.worker_type === 'company_labour';
+    return {
+      id: `${item.worker_type}-${item.id}`,
+      workerId: item.id,
+      workerType: item.worker_type,
+      workerTypeLabel: item.worker_type_label,
+      code: item.code,
+      name: item.name,
+      phone: item.phone,
+      aadhaarNumber: item.aadhaar_number || null,
+      trade: item.trade || 'General Labour',
+      dailyRate: isCompany ? 0 : Number(item.daily_rate || 0),
+      contractorId: item.contractor_id,
+      contractorName: item.contractor_name,
+      label: `${item.name} (${item.trade || item.worker_type_label}) — ${isCompany ? 'Company Labour (₹0 Cost)' : item.contractor_name}`,
+    };
+  });
 }
-
 
 async function getLabourDiary({
   page = 1,
@@ -458,7 +439,7 @@ async function getLabourDiary({
   const params = [];
 
   if (hrScope?.role === 'contractor') {
-    whereClauses.push('twl.contractor_id = ?');
+    whereClauses.push('(twl.contractor_id = ? OR twl.worker_type = "company_labour")');
     params.push(Number(hrScope.contractorId));
   }
 
@@ -467,8 +448,14 @@ async function getLabourDiary({
     params.push(Number(workerId));
   }
   if (workerType && workerType !== 'all') {
-    whereClauses.push('twl.worker_type = ?');
-    params.push(workerType === 'daily_wage' ? 'labour' : (workerType === 'company_employee' ? 'company_employee' : workerType));
+    if (workerType === 'daily_wage' || workerType === 'labour') {
+      whereClauses.push("twl.worker_type = 'daily_wage'");
+    } else if (workerType === 'company_labour' || workerType === 'company_employee') {
+      whereClauses.push("(twl.worker_type = 'company_labour' OR twl.worker_type = 'company_employee')");
+    } else {
+      whereClauses.push('twl.worker_type = ?');
+      params.push(workerType);
+    }
   }
   if (siteId && siteId !== 'all') {
     whereClauses.push('twl.site_id = ?');
@@ -506,7 +493,7 @@ async function getLabourDiary({
        twl.worker_name,
        twl.worker_code,
        COALESCE(twl.aadhaar_number, cw.aadhaar_number) AS aadhaar_number,
-       COALESCE(cw.phone, e.phone) AS phone,
+       cw.phone AS phone,
        twl.labour_type,
        twl.hours_worked,
        twl.daily_wage,
@@ -519,15 +506,14 @@ async function getLabourDiary({
        twl.site_id,
        s.name AS site_name,
        twl.contractor_id,
-       c.name AS contractor_name,
+       COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name,
        dwu.remarks AS daily_remarks
      FROM task_worker_logs twl
      JOIN project_tasks pt ON pt.id = twl.task_id
      JOIN projects p ON p.id = twl.project_id
      LEFT JOIN sites s ON s.id = twl.site_id
      LEFT JOIN contractors c ON c.id = twl.contractor_id
-     LEFT JOIN contractor_workers cw ON cw.id = twl.worker_id AND twl.worker_type = 'labour'
-     LEFT JOIN employees e ON e.id = twl.worker_id AND twl.worker_type = 'company_employee'
+     LEFT JOIN contractor_workers cw ON cw.id = twl.worker_id
      LEFT JOIN daily_work_updates dwu ON dwu.id = twl.daily_work_id
      ${whereSql}
      ORDER BY twl.work_date DESC, twl.id DESC
@@ -542,8 +528,7 @@ async function getLabourDiary({
      JOIN projects p ON p.id = twl.project_id
      LEFT JOIN sites s ON s.id = twl.site_id
      LEFT JOIN contractors c ON c.id = twl.contractor_id
-     LEFT JOIN contractor_workers cw ON cw.id = twl.worker_id AND twl.worker_type = 'labour'
-     LEFT JOIN employees e ON e.id = twl.worker_id AND twl.worker_type = 'company_employee'
+     LEFT JOIN contractor_workers cw ON cw.id = twl.worker_id
      LEFT JOIN daily_work_updates dwu ON dwu.id = twl.daily_work_id
      ${whereSql}`,
     params
@@ -554,7 +539,7 @@ async function getLabourDiary({
        COUNT(*) AS total_logs,
        COUNT(DISTINCT COALESCE(twl.worker_id, twl.worker_name)) AS unique_workers,
        COALESCE(SUM(twl.hours_worked / 8), 0) AS total_days_worked,
-       COALESCE(SUM(CASE WHEN twl.worker_type = 'company_employee' THEN 0 ELSE (twl.hours_worked / 8) * twl.daily_wage END), 0) AS total_wages_paid
+       COALESCE(SUM(CASE WHEN twl.worker_type IN ('company_labour', 'company_employee') OR LOWER(COALESCE(twl.labour_type, '')) LIKE '%company%' THEN 0 ELSE (twl.hours_worked / 8) * twl.daily_wage END), 0) AS total_wages_paid
      FROM task_worker_logs twl
      JOIN project_tasks pt ON pt.id = twl.task_id
      JOIN projects p ON p.id = twl.project_id
@@ -566,34 +551,56 @@ async function getLabourDiary({
   return {
     rows: rows.map((r) => {
       const hours = Number(r.hours_worked || 8);
-      const isCompany = r.worker_type === 'company_employee';
+      const isCompany = r.worker_type === 'company_labour' || r.worker_type === 'company_employee' || String(r.labour_type || '').toLowerCase().includes('company');
       const wage = isCompany ? 0 : Number(r.daily_wage || 0);
       const earned = isCompany ? 0 : (hours / 8) * wage;
       return {
         id: r.id,
         date: r.work_date,
+        work_date: r.work_date,
         workerId: r.worker_id,
-        workerType: r.worker_type,
-        workerTypeLabel: isCompany ? 'Company Employee' : 'Daily Wage Worker',
+        worker_id: r.worker_id,
+        workerType: isCompany ? 'company_labour' : (r.worker_type || 'daily_wage'),
+        worker_type: isCompany ? 'company_labour' : (r.worker_type || 'daily_wage'),
+        is_company_labour: isCompany ? 1 : 0,
+        workerTypeLabel: isCompany ? 'Company Labour' : 'Daily Wage Worker',
         workerName: r.worker_name,
+        worker_name: r.worker_name,
         workerCode: r.worker_code,
+        worker_code: r.worker_code,
         phone: r.phone,
         aadhaarNumber: r.aadhaar_number,
+        aadhaar_number: r.aadhaar_number,
         trade: r.labour_type,
+        labour_type: r.labour_type,
         hoursWorked: hours,
+        hours_worked: hours,
         daysWorked: Number((hours / 8).toFixed(1)),
+        days_worked: Number((hours / 8).toFixed(1)),
         dailyWage: wage,
+        daily_wage: wage,
         earnedAmount: Number(earned.toFixed(2)),
+        earned_amount: Number(earned.toFixed(2)),
         taskId: r.task_id,
+        task_id: r.task_id,
         taskName: r.task_name,
+        task_name: r.task_name,
         projectId: r.project_id,
+        project_id: r.project_id,
         projectName: r.project_name,
+        project_name: r.project_name,
         projectCode: r.project_code,
+        project_code: r.project_code,
         siteId: r.site_id,
+        site_id: r.site_id,
         siteName: r.site_name || '—',
+        site_name: r.site_name || '—',
         contractorName: r.contractor_name || '—',
+        contractor_name: r.contractor_name || '—',
         workDone: r.work_performed || 'Site labour execution',
+        work_performed: r.work_performed || 'Site labour execution',
         remarks: r.daily_remarks || '',
+        daily_remarks: r.daily_remarks || '',
       };
     }),
     total,

@@ -14,6 +14,9 @@ export const materialMovementApi = {
   stock: () => axiosClient.get('/material-movements/stock').then((r) => r.data.data),
   detail: (id) => axiosClient.get(`/material-movements/${id}`).then((r) => r.data.data.movement),
   send: (payload) => axiosClient.post('/material-movements/send', payload).then((r) => r.data.data.movement),
+  // Fetch the recorded dispatch (driver, material, qty, source, destination...) by vehicle number.
+  lookup: (vehicleNumber) =>
+    axiosClient.get('/material-movements/lookup', { params: { vehicle_number: vehicleNumber } }).then((r) => r.data.data),
   receive: (id, payload = {}) => axiosClient.post(`/material-movements/${id}/receive`, payload).then((r) => r.data.data.movement),
 };
 

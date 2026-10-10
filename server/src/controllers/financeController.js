@@ -90,6 +90,60 @@ const recordConsumption = asyncHandler(async (req, res) =>
   ok(res, await financeService.recordMaterialConsumption(req.body, req.hrScope, req.user.id), 201)
 );
 
+const restructuredFinanceService = require('../services/restructuredFinanceService');
+
+const projectCosts = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getProjectCosts(req.query))
+);
+
+const actualExpenses = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getActualExpenses(req.query))
+);
+
+const budgetVsActual = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getBudgetVsActual(req.query))
+);
+
+const procurementLedger = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getProcurementLedger(req.query))
+);
+
+const ledgerEntry = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getLedgerEntryDetail({ type: req.query.type, id: req.query.id }))
+);
+
+const vendorPayables = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getVendorPayables(req.query))
+);
+
+const recordVendorPayment = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.recordVendorPayment(req.body, req.user?.id), 201)
+);
+
+const vendorPaymentsHistory = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getVendorPaymentsHistory(req.params.id))
+);
+
+const clientPaymentsSummary = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getClientPaymentsSummary(req.query))
+);
+
+const recordClientPayment = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.recordClientPayment(req.body, req.user?.id), 201)
+);
+
+const clientPaymentsHistory = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getClientPaymentsHistory(req.query))
+);
+
+const profitabilitySummary = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getProfitabilitySummary(req.query))
+);
+
+const drilldownDetails = asyncHandler(async (req, res) =>
+  ok(res, await restructuredFinanceService.getDrilldownTransactions(req.query))
+);
+
 module.exports = {
   summary, lookups,
   listExpenses, getExpense, createExpense, updateExpense, updateExpenseStatus,
@@ -97,4 +151,8 @@ module.exports = {
   contractorPayments, contractorPaymentDetail,
   procurement, projectFinancials, projectFinancialDetail, projectMaterialConsumption, payments,
   contractorInventory, recordConsumption,
+  projectCosts, actualExpenses, budgetVsActual, procurementLedger, ledgerEntry,
+  vendorPayables, recordVendorPayment, vendorPaymentsHistory,
+  clientPaymentsSummary, recordClientPayment, clientPaymentsHistory,
+  profitabilitySummary, drilldownDetails,
 };

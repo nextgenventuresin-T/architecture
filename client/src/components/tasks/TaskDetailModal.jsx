@@ -586,7 +586,13 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                   {formatDate(ba.createdAt)}
                                 </td>
                                 <td className="py-2.5 px-3 font-semibold text-ink">
-                                  {ba.category || 'Task Total'}
+                                  <div>{ba.category || 'Task Total'}</div>
+                                  {ba.category === 'labour' && (ba.originalPlannedWorkers > 0 || ba.additionalWorkers > 0) && (
+                                    <div className="text-[10px] text-ink-muted font-normal">
+                                      Plan: {ba.originalPlannedWorkers} | Addl: +{ba.additionalWorkers} worker(s)
+                                      {ba.revisedLabourBudget > 0 && ` | Revised: ₹${ba.revisedLabourBudget.toLocaleString('en-IN')}`}
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="py-2.5 px-3 text-right font-bold text-rose-700 tabular-nums">
                                   +{formatCurrency(ba.requestedExcess)}
@@ -611,7 +617,19 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                   </span>
                                 </td>
                                 <td className="py-2.5 px-3 text-ink-muted max-w-xs truncate">
-                                  {ba.decisionNote ? `${ba.decisionNote} (by ${ba.decidedByName || 'Admin'})` : (ba.status === 'pending' ? 'Pending Admin review' : '—')}
+                                  {ba.decidedByName ? (
+                                    <div>
+                                      <span className="font-medium text-ink">Decided by {ba.decidedByName}</span>
+                                      {ba.decidedAt && <span className="text-[10px] block">on {formatDate(ba.decidedAt)}</span>}
+                                      {ba.decisionNote && <span className="text-[10px] text-ink-muted italic block">"{ba.decisionNote}"</span>}
+                                    </div>
+                                  ) : ba.decisionNote ? (
+                                    ba.decisionNote
+                                  ) : ba.status === 'pending' ? (
+                                    'Pending Admin review'
+                                  ) : (
+                                    '—'
+                                  )}
                                 </td>
                               </tr>
                             ))}
@@ -768,7 +786,8 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                             <th className="py-2.5 px-3">Tool / Machine</th>
                             <th className="py-2.5 px-3">Rent / Purchase</th>
                             <th className="py-2.5 px-3 text-right">Quantity</th>
-                            <th className="py-2.5 px-3 text-right">Unit Cost</th>
+                            <th className="py-2.5 px-3 text-right">Rate/Day or Cost</th>
+                            <th className="py-2.5 px-3 text-right">Days</th>
                             <th className="py-2.5 px-3 text-right">Total Cost</th>
                           </tr>
                         </thead>
@@ -781,6 +800,9 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                               </td>
                               <td className="py-2.5 px-3 text-right tabular-nums">{t.quantity}</td>
                               <td className="py-2.5 px-3 text-right tabular-nums">{formatCurrency(t.cost)}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums">
+                                {String(t.rental_type).toLowerCase() === 'purchase' ? '—' : Number(t.working_days ?? t.workingDays ?? 1)}
+                              </td>
                               <td className="py-2.5 px-3 text-right font-semibold tabular-nums text-ink">
                                 {formatCurrency(t.total_cost)}
                               </td>
@@ -912,7 +934,7 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                           </thead>
                           <tbody className="divide-y divide-line">
                             {(taskData?.task?.assignedWorkers || []).map((w) => {
-                              const isCompany = w.workerType === 'company_employee';
+                              const isCompany = w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour;
                               return (
                                 <tr key={w.id} className="hover:bg-canvas/40 transition-colors">
                                   <td className="py-2.5 px-3 font-semibold text-ink">
@@ -927,9 +949,17 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                     )}
                                   </td>
                                   <td className="py-2.5 px-3">
-                                    <Badge tone={isCompany ? 'neutral' : 'success'}>
-                                      {isCompany ? 'Company Employee' : 'Daily Wage Worker'}
-                                    </Badge>
+                                    <div className="flex flex-col gap-1 items-start">
+                                      <Badge tone={isCompany ? 'info' : 'success'}>
+                                        {isCompany ? 'Company Labour' : 'Daily Wage Worker'}
+                                      </Badge>
+                                      {w.status === 'pending_approval' && (
+                                        <Badge tone="warning">Pending Approval</Badge>
+                                      )}
+                                      {w.status === 'rejected' && (
+                                        <Badge tone="danger">Rejected</Badge>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="py-2.5 px-3 text-ink-muted text-[11px]">
                                     {w.phone && <div>Mob: {w.phone}</div>}
@@ -940,10 +970,10 @@ export default function TaskDetailModal({ taskId, onClose, onUpdated, isAdmin = 
                                   <td className="py-2.5 px-3 text-ink-muted">{formatDate(w.endDate)}</td>
                                   <td className="py-2.5 px-3 text-right font-medium tabular-nums">{w.expectedDays} d</td>
                                   <td className="py-2.5 px-3 text-right tabular-nums">
-                                    {isCompany ? <span className="text-ink-subtle">—</span> : formatCurrency(w.dailyWage)}
+                                    {isCompany ? <span className="text-blue-700 font-semibold">₹0</span> : formatCurrency(w.dailyWage)}
                                   </td>
                                   <td className="py-2.5 px-3 text-right font-semibold text-ink tabular-nums">
-                                    {isCompany ? <span className="text-ink-subtle">₹0</span> : formatCurrency(w.plannedCost)}
+                                    {isCompany ? <span className="text-blue-700 font-semibold">₹0</span> : formatCurrency(w.plannedCost)}
                                   </td>
                                   <td className="py-2.5 px-3 text-center">
                                     <button

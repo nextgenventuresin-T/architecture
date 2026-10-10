@@ -14,6 +14,7 @@ const LIST_SELECT = `
   SELECT
     w.id, w.contractor_id, w.worker_code, w.full_name, w.phone, w.aadhaar_number, w.skill_category,
     w.daily_rate, w.status, w.joining_date, w.notes, w.created_at, w.updated_at,
+    w.is_company_labour, w.worker_type,
     c.name AS contractor_name,
     COALESCE(active_assign.total, 0) AS active_assignment_count,
     curr_assign.project_name,
@@ -21,7 +22,7 @@ const LIST_SELECT = `
     curr_assign.site_name,
     curr_assign.work_notes
   FROM contractor_workers w
-  JOIN contractors c ON c.id = w.contractor_id
+  LEFT JOIN contractors c ON c.id = w.contractor_id
   LEFT JOIN (
     SELECT contractor_worker_id, COUNT(*) AS total
     FROM labour_assignments
@@ -116,7 +117,7 @@ async function nextCodeNumber() {
 
 const WRITABLE = [
   'contractor_id', 'worker_code', 'full_name', 'phone', 'aadhaar_number', 'skill_category',
-  'daily_rate', 'status', 'joining_date', 'notes',
+  'daily_rate', 'status', 'joining_date', 'notes', 'is_company_labour', 'worker_type',
 ];
 
 async function create(payload) {
@@ -130,12 +131,38 @@ async function create(payload) {
 }
 
 async function update(id, payload) {
-  const columns = WRITABLE.filter((key) => payload[key] !== undefined && key !== 'contractor_id');
+  const columns = WRITABLE.filter((key) => payload[key] !== undefined);
   if (columns.length === 0) return;
   await pool.query(
     `UPDATE contractor_workers SET ${columns.map((c) => `\`${c}\` = ?`).join(', ')} WHERE id = ?`,
     [...columns.map((key) => payload[key]), id]
   );
+}
+
+async function remove(id) {
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+  try {
+    // 1. Unlink from task_assigned_workers
+    await connection.query('DELETE FROM task_assigned_workers WHERE worker_id = ?', [id]);
+    // 2. Unlink from labour_assignments
+    await connection.query('DELETE FROM labour_assignments WHERE contractor_worker_id = ?', [id]);
+    // 3. Unlink from labour_request_assignments
+    await connection.query('DELETE FROM labour_request_assignments WHERE contractor_worker_id = ?', [id]);
+    // 4. Unlink from attendance_records
+    await connection.query('DELETE FROM attendance_records WHERE contractor_worker_id = ?', [id]);
+    // 5. Unlink from task_worker_logs (preserve log worker_name for history, set worker_id to NULL)
+    await connection.query('UPDATE task_worker_logs SET worker_id = NULL WHERE worker_id = ?', [id]);
+    // 6. Delete from contractor_workers
+    const [result] = await connection.query('DELETE FROM contractor_workers WHERE id = ?', [id]);
+    await connection.commit();
+    return result.affectedRows > 0;
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
 
 /** Distinct skill categories in use, for the list filter dropdown. */
@@ -147,5 +174,5 @@ async function findSkillCategories() {
 }
 
 module.exports = {
-  findAll, findById, findByCode, nextCodeNumber, create, update, findSkillCategories,
+  findAll, findById, findByCode, nextCodeNumber, create, update, remove, findSkillCategories,
 };

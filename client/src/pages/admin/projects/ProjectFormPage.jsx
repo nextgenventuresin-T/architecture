@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom';
 import {
   Save,
   X,
@@ -49,6 +49,7 @@ function calcWorkingDays(start, end) {
 const EMPTY = {
   name: '',
   client_id: '',
+  client_contract_value: '',
   project_type: 'residential',
   description: '',
   location: '',
@@ -96,10 +97,19 @@ function createEmptyTask(defaultSiteId = '', durationDays = 14) {
   };
 }
 
+// Rented machines are budgeted per day (Qty x Rate/Day x Days), like labour; purchases are one-time.
+function machineLineTotal(tl) {
+  const days = tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1);
+  return Number(tl.quantity || 1) * Number(tl.cost || 0) * days;
+}
+
 export default function ProjectFormPage({ mode = 'create' }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const isEdit = mode === 'edit';
+
+  const [searchParams] = useSearchParams();
+  const queryClientId = searchParams.get('client_id');
 
   const [values, setValues] = useState(EMPTY);
   const [fieldErrors, setFieldErrors] = useState({});
@@ -117,6 +127,12 @@ export default function ProjectFormPage({ mode = 'create' }) {
   const [tasks, setTasks] = useState([]);
   const [expandedTasks, setExpandedTasks] = useState({});
   const [workforceList, setWorkforceList] = useState([]);
+
+  useEffect(() => {
+    if (!isEdit && queryClientId) {
+      setValues((v) => ({ ...v, client_id: String(queryClientId) }));
+    }
+  }, [isEdit, queryClientId]);
 
   useEffect(() => {
     hrApi.labourDirectory
@@ -143,6 +159,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
       code: p.code ?? '',
       name: p.name ?? '',
       client_id: p.client?.id ? String(p.client.id) : '',
+      client_contract_value: p.clientContractValue != null ? String(p.clientContractValue) : (p.estimatedBudget != null ? String(p.estimatedBudget) : ''),
       project_type: p.projectType ?? 'residential',
       description: p.description ?? '',
       location: p.location ?? '',
@@ -182,6 +199,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
             rentalType: tl.rentalType || tl.rental_type || 'Rent',
             quantity: Number(tl.quantity || 1),
             cost: Number(tl.cost || 0),
+            workingDays: Number(tl.workingDays || tl.working_days || 1),
           })),
           labour: (t.labour || []).map((l) => {
             const isCompany = (l.labourType || l.labour_type || l.worker_type || '').toLowerCase().includes('company');
@@ -191,9 +209,9 @@ export default function ProjectFormPage({ mode = 'create' }) {
             const wage = isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0);
             return {
               workerId: l.worker_id || l.workerId || null,
-              workerType: l.worker_type || l.workerType || (isCompany ? 'company_employee' : 'labour'),
+              workerType: l.worker_type || l.workerType || (isCompany ? 'company_labour' : 'labour'),
               labourName: l.person_name || l.labourName || l.labour_name || '',
-              labourType: isCompany ? 'Company Employee' : 'Labour',
+              labourType: isCompany ? 'Company Labour' : 'Labour',
               skillTrade: l.person_trade || l.skill_trade || l.skillTrade || '',
               startDate: lStart,
               endDate: lEnd,
@@ -241,6 +259,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
               rentalType: tl.rentalType || tl.rental_type || 'Rent',
               quantity: Number(tl.quantity || 1),
               cost: Number(tl.cost || 0),
+              workingDays: Number(tl.workingDays || tl.working_days || 1),
             })),
             labour: (p.labour || []).map((l) => ({
               labourName: l.labourName || l.labour_name || '',
@@ -296,7 +315,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
       0
     );
     const toolTotal = (t.tools || []).reduce(
-      (sum, tl) => sum + (Number(tl.quantity || 1) * Number(tl.cost || 0)),
+      (sum, tl) => sum + machineLineTotal(tl),
       0
     );
     const labourTotal = (t.labour || []).reduce((sum, l) => {
@@ -414,17 +433,19 @@ export default function ProjectFormPage({ mode = 'create' }) {
               rental_type: tl.rentalType || 'Rent',
               quantity: Number(tl.quantity || 1),
               cost: Number(tl.cost || 0),
-              totalCost: Number(tl.quantity || 1) * Number(tl.cost || 0),
+              workingDays: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
+              working_days: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
+              totalCost: machineLineTotal(tl),
             })),
           labour: (t.labour || []).map((l) => {
-            const isCompany = l.labourType === 'Company Employee';
+            const isCompany = l.labourType === 'Company Labour' || l.labourType === 'Company Employee' || l.workerType === 'company_labour';
             const dw = isCompany ? 0 : Number(l.dailyWage || 0);
             const wd = Number(l.workingDays || calcWorkingDays(l.startDate, l.endDate));
             return {
               workerId: l.workerId || null,
               worker_id: l.workerId || null,
-              workerType: l.workerType || (isCompany ? 'company_employee' : 'labour'),
-              worker_type: l.workerType || (isCompany ? 'company_employee' : 'labour'),
+              workerType: l.workerType || (isCompany ? 'company_labour' : 'labour'),
+              worker_type: l.workerType || (isCompany ? 'company_labour' : 'labour'),
               labourName: (l.labourName || '').trim() || null,
               labour_name: (l.labourName || '').trim() || null,
               labourType: l.labourType || 'Labour',
@@ -457,6 +478,14 @@ export default function ProjectFormPage({ mode = 'create' }) {
     const payload = { ...values, tasks: formattedTasks };
     for (const key of ['client_id', 'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id']) {
       payload[key] = payload[key] === '' ? null : Number(payload[key]);
+    }
+
+    if (values.client_contract_value !== '' && values.client_contract_value != null) {
+      payload.client_contract_value = Number(values.client_contract_value);
+      payload.clientContractValue = Number(values.client_contract_value);
+    } else {
+      payload.client_contract_value = totalProjectBudget > 0 ? totalProjectBudget : null;
+      payload.clientContractValue = totalProjectBudget > 0 ? totalProjectBudget : null;
     }
 
     try {
@@ -499,7 +528,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
     <>
       <PageHeader
         title={isEdit ? 'Edit project' : 'New project'}
-        description={isEdit ? 'Update project details, documents and phase budget breakdown.' : 'Create project with auto-code, client assignment, documents and 8-phase budget planning.'}
+        description={isEdit ? 'Update project details, documents and task budget planning.' : 'Create project with auto-code, client assignment, documents and task budget planning.'}
         breadcrumbs={[
           { label: 'Dashboard', to: '/admin' },
           { label: 'Projects', to: '/admin/projects' },
@@ -570,6 +599,17 @@ export default function ProjectFormPage({ mode = 'create' }) {
                 onChange={set('project_type')}
                 options={PROJECT_TYPES}
                 error={fieldErrors.project_type}
+              />
+
+              <InputField
+                label="Client Contract Value (₹)"
+                type="number"
+                min="0"
+                step="any"
+                value={values.client_contract_value}
+                onChange={set('client_contract_value')}
+                placeholder="Optional (defaults to task budget rollup)"
+                helperText="Total contract/revenue value billed to client."
               />
 
               <InputField
@@ -1021,7 +1061,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                                   copy[mIdx] = {
                                                     ...copy[mIdx],
                                                     materialId: selId,
-                                                    costPerUnit: mat?.default_rate ? Number(mat.default_rate) : copy[mIdx].costPerUnit,
+                                                    costPerUnit: mat?.procurement_rate ? Number(mat.procurement_rate) : copy[mIdx].costPerUnit,
                                                   };
                                                   return { ...task, materials: copy };
                                                 });
@@ -1107,7 +1147,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                 onClick={() =>
                                   updateTask(t.tempId, (task) => ({
                                     ...task,
-                                    tools: [...task.tools, { toolId: '', toolName: '', rentalType: 'Rent', quantity: 1, cost: 0 }],
+                                    tools: [...task.tools, { toolId: '', toolName: '', rentalType: 'Rent', quantity: 1, cost: 0, workingDays: Number(task.durationDays || 1) }],
                                   }))
                                 }
                               >
@@ -1127,14 +1167,15 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                       <th className="p-2.5">Tool / Machine</th>
                                       <th className="p-2.5 w-28">Type</th>
                                       <th className="p-2.5 w-24">Quantity</th>
-                                      <th className="p-2.5 w-28">Cost (₹)</th>
+                                      <th className="p-2.5 w-28">Rate/Day or Cost (₹)</th>
+                                      <th className="p-2.5 w-20">Days</th>
                                       <th className="p-2.5 w-28">Total Cost (₹)</th>
                                       <th className="p-2.5 w-12 text-center"></th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-line">
                                     {t.tools.map((tl, tlIdx) => {
-                                      const lineTotal = Number(tl.quantity || 1) * Number(tl.cost || 0);
+                                      const lineTotal = machineLineTotal(tl);
                                       return (
                                         <tr key={tlIdx}>
                                           <td className="p-2">
@@ -1205,6 +1246,25 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                               }
                                               className="w-full rounded-lg border border-line p-1.5 text-xs text-ink"
                                             />
+                                          </td>
+                                          <td className="p-2">
+                                            {tl.rentalType === 'Purchase' ? (
+                                              <span className="text-ink-subtle">—</span>
+                                            ) : (
+                                              <input
+                                                type="number"
+                                                min="1"
+                                                value={tl.workingDays ?? 1}
+                                                onChange={(e) =>
+                                                  updateTask(t.tempId, (task) => {
+                                                    const copy = [...task.tools];
+                                                    copy[tlIdx].workingDays = e.target.value;
+                                                    return { ...task, tools: copy };
+                                                  })
+                                                }
+                                                className="w-full rounded-lg border border-line p-1.5 text-xs text-ink"
+                                              />
+                                            )}
                                           </td>
                                           <td className="p-2 font-semibold text-ink">
                                             {formatCurrency(lineTotal)}

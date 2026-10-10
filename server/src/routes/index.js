@@ -23,6 +23,7 @@ const themeSettingsRoutes = require('./themeSettingsRoutes');
 const taskRoutes = require('./taskRoutes');
 const vendorRoutes = require('./vendorRoutes');
 const notificationRoutes = require('./notificationRoutes');
+const pmRoutes = require('./pmRoutes');
 
 const router = express.Router();
 
@@ -53,6 +54,7 @@ router.use('/settings', themeSettingsRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/vendors', vendorRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/pm', pmRoutes);
 
 // Future ERP modules mount here, one per interface.
 

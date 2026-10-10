@@ -67,6 +67,14 @@ router.get(
   controller.detail
 );
 
+router.get(
+  '/:id/projects',
+  requirePermission('projects', 'view'),
+  [param('id').isInt({ min: 1 })],
+  validate,
+  controller.projects
+);
+
 router.post(
   '/',
   requirePermission('projects', 'create'),

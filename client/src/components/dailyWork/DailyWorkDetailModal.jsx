@@ -14,6 +14,7 @@ import {
   UserCheck,
   UserX,
   ExternalLink,
+  Wrench,
 } from 'lucide-react';
 import Badge from '../ui/Badge';
 import Skeleton from '../ui/Skeleton';
@@ -192,8 +193,10 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                       </thead>
                       <tbody className="divide-y divide-line/70">
                         {detail.workedLabour.map((w, idx) => {
-                          const isEmployee =
+                          const isCompanyLabour =
+                            w.workerType === 'company_labour' ||
                             w.workerType === 'company_employee' ||
+                            w.isCompanyLabour ||
                             (w.labourType || '').toLowerCase().includes('company');
                           return (
                             <tr key={w.id || idx} className="hover:bg-canvas/40">
@@ -206,8 +209,8 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                                 )}
                               </td>
                               <td className="px-3 py-2.5">
-                                <Badge tone={isEmployee ? 'info' : 'neutral'}>
-                                  {isEmployee ? 'Company Employee' : 'Labour'}
+                                <Badge tone={isCompanyLabour ? 'info' : 'neutral'}>
+                                  {isCompanyLabour ? 'Company Labour' : 'Daily Wage'}
                                 </Badge>
                               </td>
                               <td className="px-3 py-2.5 text-ink-muted">
@@ -217,7 +220,11 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                                 {w.hoursWorked || 8} hrs
                               </td>
                               <td className="px-3 py-2.5 text-right font-semibold text-ink tabular-nums">
-                                {isEmployee ? '—' : formatCurrency(w.dailyWage || 0)}
+                                {isCompanyLabour ? (
+                                  <span className="text-blue-700 text-xs font-semibold">₹0 (In-House)</span>
+                                ) : (
+                                  formatCurrency(w.dailyWage || 0)
+                                )}
                               </td>
                               <td className="px-3.5 py-2.5 text-ink-muted">
                                 {w.workPerformed || <span className="text-ink-subtle italic">Standard task duties</span>}
@@ -273,8 +280,69 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                 )}
               </div>
 
-              {/* Material Usage, Miscellaneous Expenses & Linked Finance Grid */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {/* Material Usage, Machines, Miscellaneous Expenses & Linked Finance Grid */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Material Used */}
+                <div className="rounded-xl border border-line bg-white p-4 space-y-2 shadow-2xs">
+                  <div className="flex items-center gap-2 text-xs font-bold text-ink uppercase tracking-wider">
+                    <Package className="h-4 w-4 text-amber-700" />
+                    Material Consumption
+                  </div>
+                  {detail.materialName || detail.materialId ? (
+                    <div className="space-y-1.5 pt-1 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-ink-muted">Material:</span>
+                        <span className="font-semibold text-ink">
+                          {detail.materialName} ({detail.materialCode || '—'})
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-ink-muted">Quantity Consumed:</span>
+                        <span className="font-bold text-amber-900">
+                          {formatNumber(detail.quantityUsed)} {detail.unit}
+                        </span>
+                      </div>
+                      {detail.transactionNumber && (
+                        <div className="flex justify-between text-[11px] text-ink-subtle">
+                          <span>Stock Ref:</span>
+                          <span className="font-mono font-medium">{detail.transactionNumber}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="pt-2 text-xs text-ink-subtle italic">
+                      No material consumption deducted.
+                    </p>
+                  )}
+                </div>
+
+                {/* Machine / Tool Used */}
+                <div className="rounded-xl border border-line bg-white p-4 space-y-2 shadow-2xs">
+                  <div className="flex items-center gap-2 text-xs font-bold text-ink uppercase tracking-wider">
+                    <Wrench className="h-4 w-4 text-indigo-700" />
+                    Machine / Tool Used
+                  </div>
+                  {detail.toolName || Number(detail.toolCost) > 0 ? (
+                    <div className="space-y-1.5 pt-1 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-ink-muted">Equipment:</span>
+                        <span className="font-semibold text-ink">{detail.toolName || 'Machinery'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-ink-muted">Tool Cost:</span>
+                        <span className="font-bold text-indigo-800">{formatCurrency(detail.toolCost || 0)}</span>
+                      </div>
+                      {detail.toolRemarks && (
+                        <div className="text-[11px] text-ink-subtle italic pt-1 border-t border-line/60">
+                          {detail.toolRemarks}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="pt-2 text-xs text-ink-subtle italic">No machine/tool used.</p>
+                  )}
+                </div>
+
                 {/* Miscellaneous Expense */}
                 <div className="rounded-xl border border-line bg-white p-4 space-y-2 shadow-2xs">
                   <div className="flex items-center gap-2 text-xs font-bold text-ink uppercase tracking-wider">
@@ -298,40 +366,7 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                       )}
                     </div>
                   ) : (
-                    <p className="pt-2 text-xs text-ink-subtle italic">No miscellaneous operational expenses logged.</p>
-                  )}
-                </div>
-                {/* Material Used */}
-                <div className="rounded-xl border border-line bg-white p-4 space-y-2 shadow-2xs">
-                  <div className="flex items-center gap-2 text-xs font-bold text-ink uppercase tracking-wider">
-                    <Package className="h-4 w-4 text-amber-700" />
-                    Material / Tool Consumption
-                  </div>
-                  {detail.materialName || detail.materialId ? (
-                    <div className="space-y-1.5 pt-1 text-xs">
-                      <div className="flex justify-between">
-                        <span className="text-ink-muted">Material:</span>
-                        <span className="font-semibold text-ink">
-                          {detail.materialName} ({detail.materialCode || '—'})
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-ink-muted">Quantity Consumed:</span>
-                        <span className="font-bold text-amber-900">
-                          {formatNumber(detail.quantityUsed)} {detail.unit}
-                        </span>
-                      </div>
-                      {detail.transactionNumber && (
-                        <div className="flex justify-between text-[11px] text-ink-subtle">
-                          <span>Warehouse Stock Ref:</span>
-                          <span className="font-mono font-medium">{detail.transactionNumber}</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="pt-2 text-xs text-ink-subtle italic">
-                      No material consumption deducted for this day.
-                    </p>
+                    <p className="pt-2 text-xs text-ink-subtle italic">No misc operational expense.</p>
                   )}
                 </div>
 
@@ -344,7 +379,7 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                   {detail.linkedExpense ? (
                     <div className="space-y-1.5 pt-1 text-xs">
                       <div className="flex justify-between">
-                        <span className="text-ink-muted">Expense Ref:</span>
+                        <span className="text-ink-muted">Ref:</span>
                         <span className="font-mono font-semibold text-ink">
                           {detail.linkedExpense.expenseNumber}
                         </span>
@@ -370,7 +405,7 @@ export default function DailyWorkDetailModal({ updateId, isOpen, onClose }) {
                     </div>
                   ) : (
                     <p className="pt-2 text-xs text-ink-subtle italic">
-                      No external finance expense linked to this record.
+                      No external finance expense linked.
                     </p>
                   )}
                 </div>

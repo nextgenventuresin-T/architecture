@@ -221,4 +221,21 @@ router.get(
   controller.payments
 );
 
+// Admin/Finance only: these expose company-wide cost, receivable and profit figures.
+// -------------------------------------------------------- Restructured Finance Tabs
+router.get('/project-costs', canManage, controller.projectCosts);
+router.get('/actual-expenses', canManage, controller.actualExpenses);
+router.get('/budget-vs-actual', canManage, controller.budgetVsActual);
+router.get('/procurement-ledger', canManage, controller.procurementLedger);
+// Click-through: one ledger entry down to its source transaction.
+router.get('/ledger-entry', canManage, [query('type').trim().notEmpty(), query('id').isInt({ min: 1 })], validate, controller.ledgerEntry);
+router.get('/vendor-payables', canManage, controller.vendorPayables);
+router.post('/vendor-payments', canManage, controller.recordVendorPayment);
+router.get('/vendor-payments/:id', canManage, controller.vendorPaymentsHistory);
+router.get('/client-payments', canManage, controller.clientPaymentsSummary);
+router.post('/client-payments', canManage, controller.recordClientPayment);
+router.get('/client-payments/history', canManage, controller.clientPaymentsHistory);
+router.get('/profitability', canManage, controller.profitabilitySummary);
+router.get('/drilldown', canManage, controller.drilldownDetails);
+
 module.exports = router;

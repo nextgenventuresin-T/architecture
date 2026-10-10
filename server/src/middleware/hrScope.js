@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../config/roles');
 const contractorModel = require('../models/contractorModel');
 const employeeModel = require('../models/employeeModel');
+const pmScopeService = require('../services/pmScopeService');
 
 /**
  * HR & Labour Management (Interface 11) needs one more kind of scoping than
@@ -33,6 +34,10 @@ async function attachHrScope(req, res, next) {
       // Non-null only for a signed-in EMPLOYEE whose account is linked to an
       // employee record.
       employeeId: null,
+      // Non-null arrays only for a PROJECT MANAGER: the projects/sites they are
+      // assigned to (deny-by-default - an empty list means no access).
+      pmProjectIds: null,
+      pmSiteIds: null,
     };
 
     if (req.user.role === ROLES.CONTRACTOR) {
@@ -50,6 +55,13 @@ async function attachHrScope(req, res, next) {
       // dashboards/read-only content; anything requiring "my own record"
       // (leave, attendance) 403s at the point it is actually needed.
       if (employee) scope.employeeId = employee.id;
+    }
+
+    if (req.user.role === ROLES.PROJECT_MANAGER) {
+      const pm = await pmScopeService.resolve(req.user.id);
+      scope.pmProjectIds = pm.projectIds;
+      scope.pmSiteIds = pm.siteIds;
+      scope.employeeId = pm.employeeId;
     }
 
     req.hrScope = scope;

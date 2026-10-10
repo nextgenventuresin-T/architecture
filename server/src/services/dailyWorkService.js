@@ -14,6 +14,54 @@ const notificationModel = require('../models/notificationModel');
 const userModel = require('../models/userModel');
 const { PROJECT_PHASES_DEF } = require('../config/projectPhases');
 const { pool } = require('../config/db');
+const { getConsumptionUnitCost } = require('../utils/materialPricing');
+const pmScope = require('./pmScopeService');
+
+/** The warehouse row that belongs to a contractor (null when none is provisioned). */
+async function contractorWarehouseFor(contractorId) {
+  await warehouseModel.ensureContractorWarehouses();
+  const { contractors } = await warehouseModel.findScopes();
+  return contractors.find((c) => Number(c.contractor_id) === Number(contractorId)) || null;
+}
+
+/**
+ * TASK-WISE MATERIAL. Material a contractor procured for a Task may be used only on that Task:
+ * received quantity (from requests raised for this task) minus what the daily log has already
+ * booked against it, and never more than the contractor's actual warehouse stock.
+ */
+async function getTaskMaterials(taskId, contractorId) {
+  if (!taskId || !contractorId) return [];
+  const [rows] = await pool.query(
+    `SELECT pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit) AS unit,
+            SUM(COALESCE(
+              (SELECT SUM(r.received_quantity) FROM procurement_receipts r WHERE r.procurement_request_id = pr.id),
+              (SELECT mm.received_quantity FROM material_movements mm WHERE mm.procurement_request_id = pr.id AND mm.status = 'received' LIMIT 1),
+              0)) AS procured
+     FROM procurement_requests pr
+     JOIN materials m ON m.id = pr.material_id
+     WHERE pr.task_id = ? AND pr.item_type = 'material' AND pr.status IN ('received', 'partially_received')
+       AND (pr.contractor_id = ? OR pr.destination_contractor_id = ?)
+     GROUP BY pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit)`,
+    [taskId, contractorId, contractorId]
+  );
+  const wh = await contractorWarehouseFor(contractorId);
+  const out = [];
+  for (const r of rows) {
+    const [[u]] = await pool.query(
+      'SELECT COALESCE(SUM(quantity_used), 0) AS used FROM daily_work_updates WHERE task_id = ? AND material_id = ?',
+      [taskId, r.material_id]
+    );
+    const stock = wh ? Number(await warehouseModel.totalForMaterial(wh.id, r.material_id) || 0) : 0;
+    const left = Math.max(0, Number(r.procured) - Number(u.used));
+    const cost = wh ? await warehouseModel.averageUnitCost(wh.id, r.material_id) : null;
+    out.push({
+      material_id: r.material_id, name: r.name, code: r.code, unit: r.unit,
+      procured: Number(r.procured), used: Number(u.used), taskAvailable: left,
+      availableStock: Math.min(left, stock), costPerUnit: cost || 0,
+    });
+  }
+  return out.filter((x) => x.procured > 0);
+}
 
 async function list(query = {}, hrScope) {
   const page = Math.max(1, Number(query.page) || 1);
@@ -27,6 +75,7 @@ async function list(query = {}, hrScope) {
     taskId: query.taskId,
     contractorId,
     date: query.date,
+    pmProjectIds: pmScope.isPm(hrScope) ? (hrScope.pmProjectIds || []) : undefined,
     page,
     pageSize,
   });
@@ -69,6 +118,10 @@ async function list(query = {}, hrScope) {
       miscAmount: r.misc_amount ? Number(r.misc_amount) : 0,
       miscDescription: r.misc_description,
       miscRemarks: r.misc_remarks,
+      toolId: r.tool_id || null,
+      toolName: r.tool_name || null,
+      toolCost: r.tool_cost ? Number(r.tool_cost) : 0,
+      toolRemarks: r.tool_remarks || null,
       warehouseTransactionId: r.warehouse_transaction_id,
       transactionNumber: r.transaction_number,
       expenseId: r.expense_id,
@@ -99,6 +152,9 @@ async function getById(id, hrScope) {
   if (hrScope?.role === 'contractor' && Number(update.contractor_id) !== Number(hrScope.contractorId)) {
     throw ApiError.notFound('Daily work update not found.');
   }
+  if (pmScope.isPm(hrScope) && !(hrScope.pmProjectIds || []).includes(Number(update.project_id))) {
+    throw ApiError.notFound('Daily work update not found.');
+  }
 
   // Load material if present for rate calculation
   let material = null;
@@ -121,15 +177,14 @@ async function getById(id, hrScope) {
       `SELECT taw.*,
               taw.worker_name AS person_name,
               taw.worker_code AS person_code,
-              COALESCE(taw.phone, cw.phone, e.phone) AS person_phone,
+              COALESCE(taw.phone, cw.phone) AS person_phone,
               COALESCE(taw.aadhaar_number, cw.aadhaar_number) AS person_aadhaar,
-              COALESCE(taw.trade, cw.skill_category, e.designation) AS person_trade,
+              COALESCE(taw.trade, cw.skill_category) AS person_trade,
               taw.worker_type,
-              c.name AS contractor_name
+              COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name
        FROM task_assigned_workers taw
-       LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id AND taw.worker_type = 'daily_wage'
+       LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id
        LEFT JOIN contractors c ON c.id = cw.contractor_id
-       LEFT JOIN employees e ON e.id = taw.worker_id AND taw.worker_type = 'company_employee'
        WHERE taw.task_id = ? ORDER BY taw.id ASC`,
       [update.task_id]
     );
@@ -138,17 +193,16 @@ async function getById(id, hrScope) {
     if (!assignedRows.length) {
       const [legacyRows] = await pool.query(
         `SELECT tl.*,
-                COALESCE(cw.full_name, e.full_name, tl.labour_name) AS person_name,
-                COALESCE(cw.worker_code, e.employee_code) AS person_code,
-                COALESCE(cw.phone, e.phone) AS person_phone,
+                COALESCE(cw.full_name, tl.labour_name) AS person_name,
+                cw.worker_code AS person_code,
+                cw.phone AS person_phone,
                 cw.aadhaar_number AS person_aadhaar,
-                COALESCE(cw.skill_category, e.designation, tl.skill_trade) AS person_trade,
+                COALESCE(cw.skill_category, tl.skill_trade) AS person_trade,
                 tl.worker_type,
-                c.name AS contractor_name
+                COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name
          FROM task_labour tl
-         LEFT JOIN contractor_workers cw ON cw.id = tl.worker_id AND tl.worker_type = 'labour'
+         LEFT JOIN contractor_workers cw ON cw.id = tl.worker_id
          LEFT JOIN contractors c ON c.id = cw.contractor_id
-         LEFT JOIN employees e ON e.id = tl.worker_id AND tl.worker_type = 'company_employee'
          WHERE tl.task_id = ? ORDER BY tl.id ASC`,
         [update.task_id]
       );
@@ -158,20 +212,23 @@ async function getById(id, hrScope) {
     const workedNames = new Set(workers.map((w) => (w.worker_name || '').toLowerCase().trim()));
     const workedCodes = new Set(workers.map((w) => (w.worker_code || '').toLowerCase().trim()));
 
-    assignedLabour = assignedRows.map((a) => ({
-      id: a.id,
-      workerId: a.worker_id,
-      workerType: a.worker_type,
-      name: a.person_name || 'Worker',
-      code: a.person_code || null,
-      phone: a.person_phone || null,
-      trade: a.person_trade || a.labour_type || 'Labour',
-      dailyWage: Number(a.daily_wage || 0),
-      workingDays: Number(a.working_days || 0),
-      startDate: a.start_date,
-      endDate: a.end_date,
-      contractorName: a.contractor_name || (a.worker_type === 'company_employee' ? 'Company Internal' : null),
-    }));
+    assignedLabour = assignedRows.map((a) => {
+      const isCompany = a.worker_type === 'company_labour' || a.worker_type === 'company_employee' || String(a.person_trade || a.trade || a.labour_type || '').toLowerCase().includes('company');
+      return {
+        id: a.id,
+        workerId: a.worker_id,
+        workerType: isCompany ? 'company_labour' : (a.worker_type || 'daily_wage'),
+        name: a.person_name || 'Worker',
+        code: a.person_code || null,
+        phone: a.person_phone || null,
+        trade: a.person_trade || a.labour_type || 'Labour',
+        dailyWage: isCompany ? 0 : Number(a.daily_wage || 0),
+        workingDays: Number(a.working_days || 0),
+        startDate: a.start_date,
+        endDate: a.end_date,
+        contractorName: isCompany ? 'Company Labour (In-House)' : (a.contractor_name || 'Contractor'),
+      };
+    });
 
     absentLabour = assignedLabour.filter((a) => {
       const matchName = workedNames.has((a.name || '').toLowerCase());
@@ -231,11 +288,16 @@ async function getById(id, hrScope) {
     miscAmount: update.misc_amount ? Number(update.misc_amount) : 0,
     miscDescription: update.misc_description,
     miscRemarks: update.misc_remarks,
+    toolId: update.tool_id || null,
+    toolName: update.tool_name || null,
+    toolCost: update.tool_cost ? Number(update.tool_cost) : 0,
+    toolRemarks: update.tool_remarks || null,
     totalDailyExpense: Number(
       (
         workers.reduce((s, w) => s + (Number(w.hours_worked || 8) / 8) * Number(w.daily_wage || 0), 0) +
         (update.quantity_used ? Number(update.quantity_used) * Number(material ? material.default_rate || 0 : 0) : 0) +
-        Number(update.misc_amount || 0)
+        Number(update.misc_amount || 0) +
+        Number(update.tool_cost || 0)
       ).toFixed(2)
     ),
     createdAt: update.created_at,
@@ -281,6 +343,17 @@ async function create(payload, files, hrScope, userId) {
     contractorId = Number(hrScope.contractorId);
   }
 
+  // Project Manager: only on an assigned project/site, recorded against the
+  // contractor responsible for that site.
+  if (pmScope.isPm(hrScope)) {
+    pmScope.assertPmAssigned(hrScope, projectId, siteId);
+    const owner = await pmScope.responsibleContractorId(projectId, siteId);
+    if (contractorId && owner && Number(contractorId) !== Number(owner)) {
+      throw ApiError.badRequest('That contractor is not responsible for this site.');
+    }
+    contractorId = contractorId || owner;
+  }
+
   if (!contractorId) {
     throw ApiError.badRequest('Contractor must be specified.');
   }
@@ -302,6 +375,17 @@ async function create(payload, files, hrScope, userId) {
         throw ApiError.forbidden('You are not assigned to this project or site.');
       }
     }
+  }
+
+  // Machine/tool parameters
+  const toolId = payload.tool_id ? Number(payload.tool_id) : (payload.toolId ? Number(payload.toolId) : null);
+  let toolName = (payload.tool_name || payload.toolName || '').trim();
+  const toolCost = payload.tool_cost ? Number(payload.tool_cost) : (payload.toolCost ? Number(payload.toolCost) : 0);
+  const toolRemarks = (payload.tool_remarks || payload.toolRemarks || '').trim();
+
+  if (toolId && !toolName) {
+    const [tRows] = await pool.query('SELECT name FROM tools WHERE id = ? LIMIT 1', [toolId]);
+    if (tRows.length) toolName = tRows[0].name;
   }
 
   // Task & Phase handling
@@ -336,26 +420,26 @@ async function create(payload, files, hrScope, userId) {
     // Calculate this update's incoming costs
     let incomingMaterialCost = 0;
     if (materialId && quantityUsed > 0) {
-      const mat = await materialModel.findById(materialId);
-      if (mat) {
-        incomingMaterialCost = Number((quantityUsed * Number(mat.default_rate || 0)).toFixed(2));
-      }
+      const preWh = await contractorWarehouseFor(contractorId);
+      const matRate = await getConsumptionUnitCost({ warehouseId: preWh?.id, materialId });
+      incomingMaterialCost = Number((quantityUsed * matRate).toFixed(2));
     }
 
     const incomingMiscCost = payload.misc_amount ? Number(payload.misc_amount) : 0;
+    const incomingToolCost = toolCost;
 
     let incomingLabourCost = 0;
     for (const w of workersList) {
       const name = (w.worker_name || w.workerName || '').trim();
-      const workerType = w.worker_type || w.workerType || (String(w.labour_type || w.labourType || '').toLowerCase().includes('company') ? 'company_employee' : 'labour');
-      if (name && workerType !== 'company_employee') {
+      const isCompany = (w.worker_type === 'company_labour' || w.worker_type === 'company_employee' || w.workerType === 'company_labour' || w.workerType === 'company_employee' || String(w.labour_type || w.labourType || '').toLowerCase().includes('company'));
+      if (name && !isCompany) {
         const hours = Number(w.hours_worked || w.hoursWorked || 8.0);
         const wage = Number(w.daily_wage || w.dailyWage || 0.0);
         incomingLabourCost += (hours / 8.0) * wage;
       }
     }
     incomingLabourCost = Number(incomingLabourCost.toFixed(2));
-    const thisUpdateCost = Number((incomingMaterialCost + incomingMiscCost + incomingLabourCost).toFixed(2));
+    const thisUpdateCost = Number((incomingMaterialCost + incomingMiscCost + incomingLabourCost + incomingToolCost).toFixed(2));
 
     if (thisUpdateCost > 0) {
       const currentActual = Number(taskDetail.budgetUtilization?.total?.actual || 0);
@@ -393,8 +477,23 @@ async function create(payload, files, hrScope, userId) {
   let issueTx = null;
   let expenseId = null;
   let material = null;
+  let consumptionUnitCost = null;
+  let consumptionTotal = null;
 
   if (materialId && quantityUsed > 0) {
+    // Material is booked TASK-WISE only: it must be logged against a task, and only up to what was
+    // procured for that task and not yet used.
+    if (!taskId) {
+      throw ApiError.badRequest('Select the Task - material can only be used task-wise, against the task it was procured for.');
+    }
+    const taskStock = await getTaskMaterials(taskId, contractorId);
+    const line = taskStock.find((x) => Number(x.material_id) === materialId);
+    if (!line) {
+      throw ApiError.badRequest('That material was not procured for this task, so it cannot be used on it. Raise a procurement request for this task first.');
+    }
+    if (quantityUsed > line.taskAvailable + 1e-9) {
+      throw ApiError.badRequest(`Only ${line.taskAvailable} ${line.unit} procured for this task is still unused (procured ${line.procured}, already used ${line.used}).`);
+    }
     await warehouseModel.ensureContractorWarehouses();
     const { contractors } = await warehouseModel.findScopes();
     const warehouse = contractors.find((c) => Number(c.contractor_id) === contractorId);
@@ -422,8 +521,11 @@ async function create(payload, files, hrScope, userId) {
       transaction_date: workDate,
     }, userId);
 
-    const unitRate = Number(material.default_rate || 0);
+    // Actual cost of the stock consumed, linked to where it came from.
+    const unitRate = await getConsumptionUnitCost({ warehouseId: warehouse.id, materialId, issueTx });
     const totalAmount = Number((quantityUsed * unitRate).toFixed(2));
+    consumptionUnitCost = unitRate;
+    consumptionTotal = totalAmount;
     const expenseNumber = `EXP-DWU-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
 
     expenseId = await financeModel.createExpense({
@@ -443,11 +545,35 @@ async function create(payload, files, hrScope, userId) {
       status: 'approved',
       notes: payload.remarks ? `${taskLabel}: ${payload.remarks}` : taskLabel,
       created_by: userId,
+      source_type: 'daily_work_material',
     });
   }
 
   const workDoneText = payload.work_done?.trim()
     || (material ? `Material Used: ${quantityUsed} ${material.unit} of ${material.name}` : (task ? `${task.name} site work` : 'Site work'));
+
+  // Machine / Tool expense processing
+  if (toolCost > 0) {
+    const toolExpenseNumber = `EXP-TOOL-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
+    await financeModel.createExpense({
+      expense_number: toolExpenseNumber,
+      project_id: projectId,
+      site_id: siteId,
+      contractor_id: contractorId,
+      task_id: task ? task.id : null,
+      category: 'Machine / Tool',
+      description: toolRemarks || `Machine/Tool used: ${toolName || 'Equipment'} (${task ? task.name : 'Site'})`,
+      amount: toolCost,
+      expense_date: workDate,
+      paid_by: 'Contractor Daily Operational',
+      party_name: toolName || 'Machine/Tool Usage',
+      payment_method: 'other',
+      reference: `DWU-TOOL-${workDate}`,
+      status: 'approved',
+      notes: toolRemarks || null,
+      created_by: userId,
+    });
+  }
 
   // Miscellaneous expense processing
   const miscAmount = payload.misc_amount ? Number(payload.misc_amount) : 0;
@@ -498,7 +624,17 @@ async function create(payload, files, hrScope, userId) {
     misc_description: miscDescription || null,
     misc_amount: miscAmount,
     misc_remarks: miscRemarks || null,
+    tool_id: toolId,
+    tool_name: toolName || null,
+    tool_cost: toolCost,
+    tool_remarks: toolRemarks || null,
+    unit_cost: consumptionUnitCost,
+    material_cost: consumptionTotal,
   });
+
+  if (expenseId) {
+    await pool.query('UPDATE expenses SET source_id = ? WHERE id = ?', [updateId, expenseId]);
+  }
 
   // Attach photos
   if (files && files.length) {
@@ -535,20 +671,24 @@ async function create(payload, files, hrScope, userId) {
     for (const w of workersList) {
       const name = (w.worker_name || w.workerName || '').trim();
       if (name) {
+        const isCompany = (w.worker_type === 'company_labour' || w.worker_type === 'company_employee' || w.workerType === 'company_labour' || w.workerType === 'company_employee' || String(w.labour_type || w.labourType || '').toLowerCase().includes('company'));
+        const workerType = isCompany ? 'company_labour' : (w.worker_type || w.workerType || 'daily_wage');
+        const dailyWage = isCompany ? 0.0 : Number(w.daily_wage || w.dailyWage || 0.0);
+
         await taskModel.addWorkerLog({
           task_id: task.id,
           project_id: projectId,
-          site_id: siteId,
+          site_id: siteId || task.site_id || null,
           contractor_id: contractorId,
           daily_work_id: updateId,
           worker_id: w.worker_id || w.workerId || null,
-          worker_type: w.worker_type || w.workerType || (String(w.labour_type || w.labourType || '').toLowerCase().includes('company') ? 'company_employee' : 'labour'),
+          worker_type: workerType,
           worker_name: name,
           worker_code: w.worker_code || w.workerCode || w.worker_id || null,
-          labour_type: (w.labour_type || w.labourType || 'Labour').trim(),
+          labour_type: (w.labour_type || w.labourType || (isCompany ? 'Company Labour' : 'Labour')).trim(),
           work_date: workDate,
           hours_worked: Number(w.hours_worked || w.hoursWorked || 8.0),
-          daily_wage: Number(w.daily_wage || w.dailyWage || 0.0),
+          daily_wage: dailyWage,
           work_performed: (w.work_performed || w.workPerformed) ? String(w.work_performed || w.workPerformed).trim() : null,
           created_by: userId,
         });
@@ -642,4 +782,4 @@ async function create(payload, files, hrScope, userId) {
   return getById(updateId, hrScope);
 }
 
-module.exports = { list, getById, create };
+module.exports = { list, getById, create, getTaskMaterials };

@@ -144,6 +144,8 @@ const EXPENSE_WRITABLE = [
   'expense_date', 'paid_by', 'party_name', 'payment_method', 'reference',
   'bill_file_path', 'bill_file_name', 'bill_file_type', 'bill_file_size', 'bill_uploaded_at',
   'status', 'notes', 'created_by',
+  // Linkage: which Task it belongs to and which source transaction produced it.
+  'task_id', 'source_type', 'source_id', 'tool_unit_id',
 ];
 
 async function createExpense(payload) {

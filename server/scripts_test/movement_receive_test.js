@@ -32,9 +32,12 @@ const stubs = {
   'models/materialMovementModel.js': {
     findById: async () => movement,
     findAll: async () => [movement],
+    lockById: async () => ({ id: movement.id, status: movement.status }),
     markReceived: async (id, { receivedQuantity }) => {
+      if (movement.status !== 'in_transit') return false;
       movement.status = 'received';
       movement.received_quantity = receivedQuantity;
+      return true;
     },
   },
   'services/warehouseService.js': {
@@ -47,7 +50,22 @@ const stubs = {
   },
   'models/warehouseModel.js': { findScopes: async () => ({ central: [], contractors: [] }), ensureContractorWarehouses: async () => {} },
   'models/materialModel.js': { findById: async () => ({ id: 5, unit: 'bag' }) },
-  'config/db.js': { pool: { query: async () => [[]] } },
+  // receiving is transactional now: the request flip happens on the shared connection
+  'config/db.js': {
+    pool: {
+      query: async () => [[]],
+      getConnection: async () => ({
+        beginTransaction: async () => {},
+        commit: async () => {},
+        rollback: async () => {},
+        release: () => {},
+        query: async (sql) => {
+          if (/UPDATE procurement_requests/.test(sql) && /status = 'received'/.test(sql)) requestStatus = 'received';
+          return [[]];
+        },
+      }),
+    },
+  },
 };
 
 const originalLoad = Module._load;
@@ -121,8 +139,10 @@ async function expectReject(label, fn, status, messageLike) {
   await expectReject('receive — double receipt refused', () => mms.receiveMaterial(1, { vehicle_number: 'PB11 AB 1234' }, c2, 20), 400, 'already');
 
   resetWorld();
-  await expectOk('receive — Admin may still receive (unchanged)',
-    () => mms.receiveMaterial(1, { received_quantity: 10 }, admin, 99),
+  await expectReject('receive — Admin must ALSO enter the vehicle number', () => mms.receiveMaterial(1, { received_quantity: 10 }, admin, 99), 400, 'vehicle');
+  resetWorld();
+  await expectOk('receive — Admin may receive with the verified vehicle number',
+    () => mms.receiveMaterial(1, { received_quantity: 10, vehicle_number: 'PB11 AB 1234' }, admin, 99),
     () => (movement.status === 'received' ? null : 'admin receive failed'));
 
   const width = Math.max(...results.map((r) => r[1].length));

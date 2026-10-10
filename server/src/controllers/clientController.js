@@ -10,5 +10,6 @@ const detail = asyncHandler(async (req, res) => ok(res, { client: await clientSe
 const create = asyncHandler(async (req, res) => ok(res, { client: await clientService.create(req.body) }, 201));
 const update = asyncHandler(async (req, res) => ok(res, { client: await clientService.update(req.params.id, req.body) }));
 const remove = asyncHandler(async (req, res) => ok(res, await clientService.remove(req.params.id)));
+const projects = asyncHandler(async (req, res) => ok(res, { projects: await clientService.getClientProjects(req.params.id) }));
 
-module.exports = { list, detail, create, update, remove };
+module.exports = { list, detail, create, update, remove, projects };

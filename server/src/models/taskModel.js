@@ -8,6 +8,99 @@ const { pool } = require('../config/db');
  * worker logging, material usage, actual expenses, and budget utilization.
  */
 
+function inclusiveDays(start, end) {
+  if (!start || !end) return 0;
+  const s = new Date(String(start).slice(0, 10));
+  const e = new Date(String(end).slice(0, 10));
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || e < s) return 0;
+  return Math.round((e - s) / 86400000) + 1;
+}
+
+/**
+ * Machines & tools are budgeted by days, like labour: a rented machine costs
+ * quantity x rate per day x days; a purchased one is a one-time quantity x cost.
+ * The total is always recomputed here, never taken from the client.
+ */
+function normalizeToolRow(t, fallbackDays) {
+  const rentalType = t.rental_type || t.rentalType || 'Rent';
+  const isPurchase = String(rentalType).toLowerCase() === 'purchase';
+  const qty = Math.max(0, Number(t.quantity || 1));
+  const cost = Math.max(0, Number(t.cost || 0));
+  const startDate = t.start_date || t.startDate || null;
+  const endDate = t.end_date || t.endDate || null;
+  let days = Number(t.working_days ?? t.workingDays ?? 0);
+  if (!(days > 0)) days = inclusiveDays(startDate, endDate) || Number(fallbackDays || 0) || 1;
+  if (isPurchase) days = 1;
+  const total = Number((qty * cost * days).toFixed(2));
+  return {
+    toolId: t.tool_id || t.toolId || null,
+    toolName: (t.tool_name || t.toolName || t.name || '').trim(),
+    rentalType,
+    qty,
+    cost,
+    days,
+    total,
+    startDate: isPurchase ? null : startDate,
+    endDate: isPurchase ? null : endDate,
+  };
+}
+
+/**
+ * Machines & tools planned in the task budget (allocation rows written by the old
+ * allocate flow carry contractor_id / requested_by and are not planning rows).
+ * Rows typed as free text are matched to the tool master by name.
+ */
+async function findPlannedTools(taskId, conn = pool) {
+  const [rows] = await conn.query(
+    `SELECT tt.id, COALESCE(tt.tool_id, tm.id) AS tool_id, COALESCE(t.name, tm.name, tt.tool_name) AS tool_name,
+            COALESCE(t.type, tm.type) AS tool_type, tt.rental_type, tt.quantity, tt.working_days, tt.cost, tt.total_cost
+     FROM task_tools tt
+     LEFT JOIN tools t ON t.id = tt.tool_id
+     LEFT JOIN tools tm ON tt.tool_id IS NULL AND LOWER(TRIM(tm.name)) = LOWER(TRIM(tt.tool_name))
+     WHERE tt.task_id = ? AND tt.contractor_id IS NULL AND tt.requested_by IS NULL
+     ORDER BY tt.id`,
+    [taskId]
+  );
+  const [req] = await conn.query(
+    `SELECT tool_id, COALESCE(SUM(quantity), 0) AS qty
+     FROM procurement_requests
+     WHERE task_id = ? AND item_type = 'tool' AND status NOT IN ('rejected', 'cancelled')
+     GROUP BY tool_id`,
+    [taskId]
+  );
+  const requested = new Map(req.map((r) => [Number(r.tool_id), Number(r.qty)]));
+  const byTool = new Map();
+  for (const r of rows) {
+    const key = r.tool_id ? Number(r.tool_id) : `name:${r.tool_name}`;
+    const cur = byTool.get(key) || {
+      toolId: r.tool_id ? Number(r.tool_id) : null,
+      toolName: r.tool_name,
+      toolType: r.tool_type || null,
+      plannedQuantity: 0,
+      plannedDays: 0,
+      plannedRate: Number(r.cost || 0),
+      plannedTotal: 0,
+      rentalType: r.rental_type,
+    };
+    cur.plannedQuantity += Number(r.quantity || 0);
+    cur.plannedDays = Math.max(cur.plannedDays, Number(r.working_days || 0));
+    cur.plannedTotal = Number((cur.plannedTotal + Number(r.total_cost || 0)).toFixed(2));
+    byTool.set(key, cur);
+  }
+  return [...byTool.values()].map((t) => {
+    const alreadyRequested = t.toolId ? requested.get(t.toolId) || 0 : 0;
+    return { ...t, alreadyRequested, remainingQuantity: Math.max(0, t.plannedQuantity - alreadyRequested) };
+  });
+}
+
+async function insertToolRow(connection, taskId, projectId, siteId, r) {
+  await connection.query(
+    `INSERT INTO task_tools (task_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, working_days, total_cost, start_date, end_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [taskId, projectId, siteId, r.toolId, r.toolName, r.rentalType, r.qty, r.cost, r.days, r.total, r.startDate, r.endDate]
+  );
+}
+
 function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], workerLogs = [], expenses = []) {
   // 1. Materials
   const budgetedMaterial = Number(task.material_budget || task.materialBudget || 0);
@@ -33,11 +126,18 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
 
   // 2. Tools / Machines
   const budgetedTools = Number(task.tool_budget || task.toolBudget || 0);
-  const toolExpenseCategories = new Set(['Equipment Rental', 'Tools', 'Machinery', 'Equipment', 'Tools & Equipment']);
+  const toolExpenseCategories = new Set(['Equipment Rental', 'Tools', 'Machinery', 'Equipment', 'Tools & Equipment', 'Machine / Tool']);
   let actualTools = 0;
+  dailyWork.forEach((dw) => {
+    if (dw.tool_cost || dw.toolCost) {
+      actualTools += Number(dw.tool_cost || dw.toolCost || 0);
+    }
+  });
   expenses.forEach((e) => {
     if (toolExpenseCategories.has(e.category)) {
-      actualTools += Number(e.amount || 0);
+      if (!e.reference?.startsWith('DWU-TOOL-')) {
+        actualTools += Number(e.amount || 0);
+      }
     }
   });
   actualTools = Number(actualTools.toFixed(2));
@@ -51,18 +151,13 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
   let actualLabour = 0;
   if (workerLogs.length > 0) {
     workerLogs.forEach((w) => {
-      if (w.worker_type !== 'company_employee' && w.workerType !== 'company_employee') {
+      const isEmployee = (w.worker_type === 'company_employee' || w.workerType === 'company_employee' || String(w.labour_type || w.labourType || '').toLowerCase().includes('company'));
+      if (!isEmployee) {
         const hours = Number(w.hours_worked || w.hoursWorked || 8);
         const wage = Number(w.daily_wage || w.dailyWage || 0);
         actualLabour += (hours / 8) * wage;
       }
     });
-  } else if (dailyWork.length > 0) {
-    const distinctDates = new Set(dailyWork.map((d) => (d.work_date || d.workDate ? String(d.work_date || d.workDate).slice(0, 10) : null)).filter(Boolean));
-    const completedDays = distinctDates.size;
-    const durationDays = Number(task.duration_days || task.durationDays || 0) || 1;
-    const dailyLabourCost = budgetedLabour / durationDays;
-    actualLabour = completedDays * dailyLabourCost;
   }
   actualLabour = Number(actualLabour.toFixed(2));
   const remainingLabour = Math.max(0, Number((budgetedLabour - actualLabour).toFixed(2)));
@@ -79,8 +174,10 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
     }
   });
   expenses.forEach((e) => {
-    if (['Miscellaneous', 'Misc', 'Operational Misc'].includes(e.category)) {
-      actualMisc += Number(e.amount || 0);
+    if (['Miscellaneous', 'Misc', 'Operational Misc', 'Material Transport'].includes(e.category)) {
+      if (!e.reference?.startsWith('DWU-MISC-')) {
+        actualMisc += Number(e.amount || 0);
+      }
     }
   });
   actualMisc = Number(actualMisc.toFixed(2));
@@ -177,6 +274,12 @@ async function getTaskBudgetApprovals(taskId) {
     decisionNote: r.decision_note,
     createdAt: r.created_at,
     decidedAt: r.decided_at,
+    originalPlannedWorkers: Number(r.original_planned_workers || 0),
+    additionalWorkers: Number(r.additional_workers || 0),
+    revisedLabourBudget: Number(r.revised_labour_budget || 0),
+    workerId: r.worker_id,
+    workerType: r.worker_type,
+    workerName: r.worker_name,
   }));
 }
 
@@ -212,13 +315,10 @@ async function createTask(payload) {
     }
 
     // Tools
-    const tools = Array.isArray(payload.tools) ? payload.tools : [];
-    for (const t of tools) {
-      const qty = Number(t.quantity || 1);
-      const cost = Number(t.cost || 0);
-      const total = t.total_cost != null ? Number(t.total_cost) : qty * cost;
-      toolBudget += total;
-    }
+    const tools = (Array.isArray(payload.tools) ? payload.tools : [])
+      .map((t) => normalizeToolRow(t, durationDays))
+      .filter((r) => r.toolName);
+    for (const r of tools) toolBudget += r.total;
 
     // Labour
     const labour = Array.isArray(payload.labour) ? payload.labour : [];
@@ -283,19 +383,7 @@ async function createTask(payload) {
       }
     }
 
-    for (const t of tools) {
-      const toolName = (t.tool_name || t.toolName || t.name || '').trim();
-      if (toolName) {
-        const qty = Number(t.quantity || 1);
-        const cost = Number(t.cost || 0);
-        const total = t.total_cost != null ? Number(t.total_cost) : qty * cost;
-        await connection.query(
-          `INSERT INTO task_tools (task_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, total_cost)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [taskId, projectId, siteId, t.tool_id || t.toolId || null, toolName, t.rental_type || t.rentalType || 'Rent', qty, cost, total]
-        );
-      }
-    }
+    for (const r of tools) await insertToolRow(connection, taskId, projectId, siteId, r);
 
     const seenWorkers = new Set();
     for (const l of labour) {
@@ -416,18 +504,12 @@ async function updateTask(taskId, payload) {
     if (hasTools) {
       toolBudget = 0;
       await connection.query('DELETE FROM task_tools WHERE task_id = ?', [taskId]);
+      const toolDays = Number(payload.duration_days || task.duration_days || 0);
       for (const t of payload.tools) {
-        const toolName = (t.tool_name || t.toolName || t.name || '').trim();
-        if (toolName) {
-          const qty = Number(t.quantity || 1);
-          const cost = Number(t.cost || 0);
-          const total = t.total_cost != null ? Number(t.total_cost) : qty * cost;
-          toolBudget += total;
-          await connection.query(
-            `INSERT INTO task_tools (task_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, total_cost)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [taskId, projectId, siteId, t.tool_id || t.toolId || null, toolName, t.rental_type || t.rentalType || 'Rent', qty, cost, total]
-          );
+        const r = normalizeToolRow(t, toolDays);
+        if (r.toolName) {
+          toolBudget += r.total;
+          await insertToolRow(connection, taskId, projectId, siteId, r);
         }
       }
     }
@@ -682,30 +764,27 @@ async function findTaskById(taskId) {
   // Actual assigned workers for this task
   const [assignedWorkers] = await pool.query(
     `SELECT taw.*,
-            COALESCE(taw.phone, cw.phone, e.phone) AS phone,
+            COALESCE(taw.phone, cw.phone) AS phone,
             COALESCE(taw.aadhaar_number, cw.aadhaar_number) AS aadhaar_number,
             c.name AS contractor_name
      FROM task_assigned_workers taw
-     LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id AND taw.worker_type = 'daily_wage'
+     LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id
      LEFT JOIN contractors c ON c.id = cw.contractor_id
-     LEFT JOIN employees e ON e.id = taw.worker_id AND taw.worker_type = 'company_employee'
      WHERE taw.task_id = ?
      ORDER BY taw.id ASC`,
     [taskId]
   );
 
-  // Actual labour cost from worker logs + daily labour records
-  let actualLabourCost = workerLogs.reduce(
-    (sum, w) => sum + (w.worker_type !== 'company_employee' ? (Number(w.daily_wage || 0) * (Number(w.hours_worked || 8) / 8)) : 0),
-    0
+  // Actual labour cost from worker logs (Daily Wage only; Company Labour = ₹0)
+  let actualLabourCost = Number(
+    workerLogs.reduce(
+      (sum, w) => {
+        const isComp = w.worker_type === 'company_labour' || w.worker_type === 'company_employee' || w.workerType === 'company_labour' || w.workerType === 'company_employee' || String(w.labour_type || '').toLowerCase().includes('company');
+        return sum + (!isComp ? (Number(w.daily_wage || 0) * (Number(w.hours_worked || 8) / 8)) : 0);
+      },
+      0
+    ).toFixed(2)
   );
-  if (workerLogs.length === 0 && dailyWork.length > 0) {
-    const distinctDates = new Set(dailyWork.map((d) => (d.work_date ? String(d.work_date).slice(0, 10) : null)).filter(Boolean));
-    const completedDays = distinctDates.size;
-    const durationDays = Number(task.duration_days || 0) || 1;
-    const dailyLabourCost = Number(task.labour_budget || 0) / durationDays;
-    actualLabourCost = completedDays * dailyLabourCost;
-  }
 
   // Actual material consumption
   const materialUsageList = dailyWork
@@ -836,6 +915,9 @@ async function findTaskById(taskId) {
       rentalType: t.rental_type,
       quantity: Number(t.quantity || 1),
       cost: Number(t.cost || 0),
+      workingDays: Number(t.working_days || 1),
+      startDate: t.start_date || null,
+      endDate: t.end_date || null,
       totalCost: Number(t.total_cost || 0),
     })),
     assignedWorkers: assignedWorkers.map((w) => ({
@@ -865,6 +947,15 @@ async function findTaskById(taskId) {
       workingDays: Number(l.working_days || 0),
       totalCost: Number(l.total_cost || 0),
     })),
+    labourSummary: {
+      plannedLabourCost: Number(task.labour_budget || 0),
+      actualLabourCost,
+      remainingLabourBudget: Math.max(0, Number((Number(task.labour_budget || 0) - actualLabourCost).toFixed(2))),
+      daysPlanned: labour.length ? Math.max(...labour.map((l) => Number(l.working_days || 0)), Number(task.duration_days || 0)) : Number(task.duration_days || 0),
+      daysWorked: new Set(workerLogs.map((w) => String(w.work_date).slice(0, 10))).size,
+      workersPlanned: labour.reduce((s, l) => s + Number(l.worker_count || 1), 0),
+      workersWorked: new Set(workerLogs.map((w) => w.worker_name?.trim().toLowerCase()).filter(Boolean)).size,
+    },
     misc: misc.map((mc) => ({
       id: mc.id,
       description: mc.description,
@@ -971,7 +1062,7 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
             c.name AS contractor_name,
             (SELECT COUNT(*) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS worker_entries_count,
             (SELECT COUNT(DISTINCT twl.worker_name) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS unique_workers_count,
-            (SELECT COALESCE(SUM(twl.daily_wage * (twl.hours_worked / 8)), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
+            (SELECT COALESCE(SUM(CASE WHEN twl.worker_type IN ('company_labour', 'company_employee') OR LOWER(COALESCE(twl.labour_type, '')) LIKE '%company%' THEN 0 ELSE twl.daily_wage * (twl.hours_worked / 8) END), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
             (SELECT COUNT(*) FROM daily_work_updates dwu WHERE dwu.task_id = t.id AND dwu.material_id IS NOT NULL AND dwu.quantity_used > 0) AS material_used_count,
             (SELECT COUNT(*) FROM daily_work_updates dwu WHERE dwu.task_id = t.id) AS daily_updates_count
      FROM project_tasks t
@@ -1090,13 +1181,13 @@ async function addWorkerLog({
       contractor_id || null,
       daily_work_id || null,
       worker_id ? Number(worker_id) : null,
-      worker_type || 'labour',
+      (worker_type === 'company_labour' || worker_type === 'company_employee' || String(labour_type || '').toLowerCase().includes('company')) ? 'company_labour' : (worker_type || 'daily_wage'),
       worker_name.trim(),
       worker_code ? String(worker_code).trim() : null,
       labour_type ? String(labour_type).trim() : 'Labour',
       work_date,
       hours_worked,
-      daily_wage,
+      (worker_type === 'company_labour' || worker_type === 'company_employee' || String(labour_type || '').toLowerCase().includes('company')) ? 0.0 : Number(daily_wage || 0.0),
       work_performed ? work_performed.trim() : null,
       created_by || null,
     ]
@@ -1106,7 +1197,7 @@ async function addWorkerLog({
 
 async function getTaskLabourSummary(taskId) {
   const [workerLogs] = await pool.query(
-    `SELECT twl.*, c.name AS contractor_name
+    `SELECT twl.*, COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name
      FROM task_worker_logs twl
      LEFT JOIN contractors c ON c.id = twl.contractor_id
      WHERE twl.task_id = ?
@@ -1131,7 +1222,8 @@ async function getTaskLabourSummary(taskId) {
   let totalCost = 0;
 
   for (const log of workerLogs) {
-    const cost = Number(log.daily_wage || 0) * (Number(log.hours_worked || 8) / 8);
+    const isCompany = log.worker_type === 'company_labour' || log.worker_type === 'company_employee' || log.workerType === 'company_labour' || log.workerType === 'company_employee' || String(log.labour_type || '').toLowerCase().includes('company');
+    const cost = isCompany ? 0 : Number(log.daily_wage || 0) * (Number(log.hours_worked || 8) / 8);
     totalCost += cost;
 
     const key = log.worker_name;
@@ -1221,7 +1313,9 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
       const endDate = t.endDate || t.end_date || null;
 
       const materials = Array.isArray(t.materials) ? t.materials : [];
-      const tools = Array.isArray(t.tools) ? t.tools : [];
+      const tools = (Array.isArray(t.tools) ? t.tools : [])
+        .map((tl) => normalizeToolRow(tl, durationDays))
+        .filter((r) => r.toolName);
       const labour = Array.isArray(t.labour) ? t.labour : [];
       const misc = Array.isArray(t.misc) ? t.misc : [];
 
@@ -1235,11 +1329,7 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
         const rate = Number(m.costPerUnit || m.cost_per_unit || 0);
         materialBudget += Number(m.totalCost != null ? m.totalCost : qty * rate);
       });
-      tools.forEach((tl) => {
-        const qty = Number(tl.quantity || 1);
-        const cost = Number(tl.cost || 0);
-        toolBudget += Number(tl.totalCost != null ? tl.totalCost : qty * cost);
-      });
+      tools.forEach((r) => { toolBudget += r.total; });
       labour.forEach((l) => {
         const wc = Number(l.workerCount || l.worker_count || 1);
         const dw = Number(l.dailyWage || l.daily_wage || 0);
@@ -1300,26 +1390,14 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
         }
       }
 
-      for (const tl of tools) {
-        const toolName = (tl.toolName || tl.tool_name || tl.name || '').trim();
-        if (toolName) {
-          const qty = Number(tl.quantity || 1);
-          const cost = Number(tl.cost || 0);
-          const total = tl.totalCost != null ? Number(tl.totalCost) : qty * cost;
-          await connection.query(
-            `INSERT INTO task_tools (task_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, total_cost)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [taskId, projectId, siteId, tl.toolId || tl.tool_id || null, toolName, tl.rentalType || tl.rental_type || 'Rent', qty, cost, total]
-          );
-        }
-      }
+      for (const r of tools) await insertToolRow(connection, taskId, projectId, siteId, r);
 
       const seenWorkers = new Set();
       for (const l of labour) {
         const lType = (l.labourType || l.labour_type || 'Labour').trim();
         const lName = (l.labourName || l.labour_name || l.workerName || l.worker_name || '').trim();
         const workerId = l.workerId || l.worker_id ? Number(l.workerId || l.worker_id) : null;
-        const workerType = l.workerType || l.worker_type || (lType.toLowerCase().includes('company') ? 'company_employee' : 'labour');
+        const workerType = l.workerType || l.worker_type || (lType.toLowerCase().includes('company') ? 'company_labour' : 'labour');
         const startDate = l.startDate || l.start_date || null;
         const endDate = l.endDate || l.end_date || null;
         const remarks = (l.remarks || '').trim() || null;
@@ -1387,13 +1465,12 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
 async function getTaskAssignments(taskId) {
   const [rows] = await pool.query(
     `SELECT taw.*,
-            COALESCE(taw.phone, cw.phone, e.phone) AS phone,
+            COALESCE(taw.phone, cw.phone) AS phone,
             COALESCE(taw.aadhaar_number, cw.aadhaar_number) AS aadhaar_number,
-            c.name AS contractor_name
+            COALESCE(c.name, 'Company Labour (In-House)') AS contractor_name
      FROM task_assigned_workers taw
-     LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id AND taw.worker_type = 'daily_wage'
+     LEFT JOIN contractor_workers cw ON cw.id = taw.worker_id
      LEFT JOIN contractors c ON c.id = cw.contractor_id
-     LEFT JOIN employees e ON e.id = taw.worker_id AND taw.worker_type = 'company_employee'
      WHERE taw.task_id = ?
      ORDER BY taw.id ASC`,
     [taskId]
@@ -1437,8 +1514,9 @@ async function assignWorkerToTask(payload) {
   const startDate = payload.startDate || payload.start_date || null;
   const endDate = payload.endDate || payload.end_date || null;
   const expectedDays = Number(payload.expectedDays || payload.expected_days || 0);
-  const dailyWage = workerType === 'company_employee' ? 0 : Number(payload.dailyWage || payload.daily_wage || 0);
-  const plannedCost = workerType === 'company_employee' ? 0 : Number(payload.plannedCost || payload.planned_cost || (expectedDays * dailyWage));
+  const isCompany = workerType === 'company_labour' || workerType === 'company_employee' || String(payload.trade || '').toLowerCase().includes('company');
+  const dailyWage = isCompany ? 0 : Number(payload.dailyWage || payload.daily_wage || 0);
+  const plannedCost = isCompany ? 0 : Number(payload.plannedCost || payload.planned_cost || (expectedDays * dailyWage));
   const remarks = (payload.remarks || '').trim() || null;
   const assignedBy = payload.assignedBy || payload.assigned_by || null;
 
@@ -1453,16 +1531,110 @@ async function assignWorkerToTask(payload) {
     throw err;
   }
 
+  // Check planned workers vs assigned workers
+  const [[planRow]] = await pool.query(
+    'SELECT COALESCE(SUM(worker_count), 0) AS planned_count FROM task_labour WHERE task_id = ?',
+    [taskId]
+  );
+  const plannedCount = Number(planRow?.planned_count || 0);
+
+  const [[assignedRow]] = await pool.query(
+    'SELECT COUNT(*) AS assigned_count FROM task_assigned_workers WHERE task_id = ?',
+    [taskId]
+  );
+  const assignedCount = Number(assignedRow?.assigned_count || 0);
+
+  const isAdditional = plannedCount > 0 && assignedCount >= plannedCount;
+  const reason = (payload.reason || payload.remarks || '').trim();
+
+  if (isAdditional && !reason) {
+    const err = new Error('Additional labour above planned workers requires a mandatory reason and Admin approval.');
+    err.status = 400;
+    throw err;
+  }
+
+  let approvalRequestId = null;
+  const status = isAdditional ? 'pending_approval' : 'active';
+
+  if (isAdditional) {
+    const [[projTask]] = await pool.query('SELECT name FROM project_tasks WHERE id = ?', [taskId]);
+    const taskName = projTask?.name || `Task #${taskId}`;
+    const approvalTitle = `Additional Labour: ${workerName} for ${taskName}`;
+    const approvalAmount = isCompany ? 0 : plannedCost;
+
+    const [approvalRes] = await pool.query(
+      `INSERT INTO approval_requests
+        (project_id, site_id, request_type, title, requested_by, amount, details, status, requested_on)
+       VALUES (?, ?, 'additional_labour', ?, ?, ?, ?, 'pending', CURDATE())`,
+      [
+        projectId,
+        siteId,
+        approvalTitle,
+        payload.requested_by_name || payload.contractorName || 'Contractor',
+        approvalAmount,
+        JSON.stringify({
+          taskId,
+          taskName,
+          workerId,
+          workerName,
+          workerType,
+          originalPlannedWorkers: plannedCount,
+          additionalWorkers: assignedCount + 1 - plannedCount,
+          reason,
+          dailyWage,
+          expectedDays,
+          plannedCost: approvalAmount,
+        }),
+      ]
+    );
+    approvalRequestId = approvalRes.insertId;
+
+    await pool.query(
+      `INSERT INTO task_budget_approvals
+        (task_id, project_id, site_id, category, budget_amount, actual_amount, requested_excess,
+         reason, status, requested_by, approval_request_id, original_planned_workers,
+         additional_workers, revised_labour_budget, worker_id, worker_type, worker_name)
+       VALUES (?, ?, ?, 'labour', (SELECT COALESCE(labour_budget, 0) FROM project_tasks WHERE id = ?), ?, ?,
+               ?, 'pending', ?, ?, ?, ?, (SELECT COALESCE(labour_budget, 0) + ? FROM project_tasks WHERE id = ?), ?, ?, ?)`,
+      [
+        taskId,
+        projectId,
+        siteId,
+        taskId,
+        approvalAmount,
+        approvalAmount,
+        reason,
+        assignedBy || null,
+        approvalRequestId,
+        plannedCount,
+        assignedCount + 1 - plannedCount,
+        isCompany ? 0 : approvalAmount,
+        taskId,
+        workerId,
+        workerType,
+        workerName,
+      ]
+    );
+
+    // If daily wage, mark pending_excess_budget so it doesn't silently increase approved budget
+    if (!isCompany && approvalAmount > 0) {
+      await pool.query(
+        'UPDATE project_tasks SET pending_excess_budget = pending_excess_budget + ? WHERE id = ?',
+        [approvalAmount, taskId]
+      );
+    }
+  }
+
   const [res] = await pool.query(
     `INSERT INTO task_assigned_workers
       (task_id, project_id, site_id, contractor_id, worker_type, worker_id,
        worker_name, worker_code, phone, aadhaar_number, trade, start_date,
-       end_date, expected_days, daily_wage, planned_cost, remarks, assigned_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       end_date, expected_days, daily_wage, planned_cost, remarks, status, assigned_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       taskId, projectId, siteId, contractorId, workerType, workerId,
       workerName, workerCode, phone, aadhaarNumber, trade, startDate,
-      endDate, expectedDays, dailyWage, plannedCost, remarks, assignedBy
+      endDate, expectedDays, dailyWage, plannedCost, remarks, status, assignedBy
     ]
   );
 
@@ -1481,35 +1653,42 @@ async function createQuickWorker(payload, contractorId) {
   const fullName = (payload.full_name || payload.fullName || payload.name || '').trim();
   if (!fullName) throw new Error('Worker full name is required.');
 
+  const isCompany = payload.worker_type === 'company_labour' || payload.is_company_labour || String(payload.skill_category || '').toLowerCase().includes('company');
+  const workerType = isCompany ? 'company_labour' : 'daily_wage';
+  const isCompanyLabour = isCompany ? 1 : 0;
+
   const [cwMax] = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM contractor_workers');
   const nextId = cwMax[0].next_id;
-  const workerCode = `CW-${String(nextId).padStart(4, '0')}`;
+  const prefix = isCompany ? 'CL' : 'CW';
+  const workerCode = `${prefix}-${String(nextId).padStart(4, '0')}`;
 
   const phone = (payload.phone || payload.mobile || '').trim() || null;
   const aadhaar = (payload.aadhaar_number || payload.aadhaarNumber || payload.aadhaar || '').trim() || null;
   const trade = (payload.skill_category || payload.trade || 'General Labour').trim();
-  const dailyRate = Number(payload.daily_rate || payload.dailyRate || payload.daily_wage || 750);
+  const dailyRate = isCompany ? 0.0 : Number(payload.daily_rate || payload.dailyRate || payload.daily_wage || 750);
   const notes = (payload.notes || '').trim() || null;
+  const effectiveContractorId = isCompany ? null : Number(contractorId || 1);
 
   const [res] = await pool.query(
     `INSERT INTO contractor_workers
-      (contractor_id, worker_code, full_name, phone, aadhaar_number, skill_category, daily_rate, status, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
-    [Number(contractorId || 1), workerCode, fullName, phone, aadhaar, trade, dailyRate, notes]
+      (contractor_id, worker_type, is_company_labour, worker_code, full_name, phone, aadhaar_number, skill_category, daily_rate, status, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+    [effectiveContractorId, workerType, isCompanyLabour, workerCode, fullName, phone, aadhaar, trade, dailyRate, notes]
   );
 
   return {
     id: res.insertId,
     workerId: res.insertId,
-    workerType: 'daily_wage',
-    workerTypeLabel: 'Daily Wage Worker',
+    workerType,
+    workerTypeLabel: isCompany ? 'Company Labour' : 'Daily Wage Worker',
     code: workerCode,
     name: fullName,
     phone,
     aadhaarNumber: aadhaar,
     trade,
     dailyRate,
-    contractorId: Number(contractorId || 1),
+    contractorId: effectiveContractorId,
+    contractorName: isCompany ? 'Company Labour (In-House)' : 'Contractor',
     status: 'active',
   };
 }
@@ -1576,6 +1755,8 @@ module.exports = {
   findAllTasks,
   addWorkerLog,
   getTaskLabourSummary,
+  normalizeToolRow,
+  findPlannedTools,
   saveProjectTasks,
   getTaskAssignments,
   assignWorkerToTask,

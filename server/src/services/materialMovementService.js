@@ -6,23 +6,37 @@ const { ROLES } = require('../config/roles');
 const movementModel = require('../models/materialMovementModel');
 const warehouseModel = require('../models/warehouseModel');
 const warehouseService = require('./warehouseService');
+const transportExpenseService = require('./transportExpenseService');
 const materialModel = require('../models/materialModel');
 const procurementModel = require('../models/procurementModel');
+const toolModel = require('../models/toolModel');
+const { getActualMaterialRate } = require('../utils/materialPricing');
+const { normalizeVehicle, vehiclesMatch, vehicleSql } = require('../utils/vehicle');
 
 function num(v) { return v === null || v === undefined ? null : Number(v); }
 
 function toMovement(row) {
   if (!row) return null;
-  const costPerUnit = num(row.procurement_purchase_rate) || num(row.procurement_estimated_rate) || num(row.material_default_rate) || 0;
+  const costPerUnit = num(row.cost_per_unit) || num(row.procurement_purchase_rate) || num(row.procurement_estimated_rate) || num(row.material_default_rate) || 0;
   const qty = num(row.sent_quantity) != null ? num(row.sent_quantity) : (num(row.requested_quantity) || 0);
-  const totalMaterialCost = num(row.procurement_total_amount) != null
-    ? num(row.procurement_total_amount)
-    : Number((qty * costPerUnit).toFixed(2));
+  const totalMaterialCost = num(row.total_cost) != null
+    ? num(row.total_cost)
+    : (num(row.procurement_total_amount) != null
+      ? num(row.procurement_total_amount)
+      : Number((qty * costPerUnit).toFixed(2)));
+
+  const isTool = row.item_type === 'tool' || (!row.material_id && row.tool_id);
 
   return {
     id: row.id,
     movementNumber: row.movement_number,
-    material: { id: row.material_id, name: row.material_name, category: row.material_category, defaultRate: num(row.material_default_rate) },
+    itemType: isTool ? 'tool' : 'material',
+    material: row.material_id
+      ? { id: row.material_id, name: row.material_name, category: row.material_category, defaultRate: num(row.material_default_rate) }
+      : (row.tool_id
+          ? { id: row.tool_id, name: row.tool_name, category: row.tool_type || 'Tool/Machinery', defaultRate: 0 }
+          : { id: null, name: '—', category: '—', defaultRate: 0 }),
+    tool: row.tool_id ? { id: row.tool_id, name: row.tool_name, code: row.tool_code, type: row.tool_type } : null,
     unit: row.unit,
     source: { warehouseId: row.source_warehouse_id, warehouseName: row.source_warehouse_name, contractorId: row.source_contractor_id, contractorName: row.source_contractor_name },
     destination: { warehouseId: row.destination_warehouse_id, warehouseName: row.destination_warehouse_name, contractorId: row.destination_contractor_id, contractorName: row.destination_contractor_name },
@@ -47,6 +61,9 @@ function toMovement(row) {
     sentAt: row.sent_at,
     receivedBy: row.received_by ? { id: row.received_by, name: row.received_by_name } : null,
     receivedAt: row.received_at,
+    receivedVehicleNumber: row.received_vehicle_number || null,
+    dispatchDate: row.sent_at,
+    requestedBy: row.procurement_requested_by || null,
   };
 }
 
@@ -70,6 +87,7 @@ async function listMovements(query, hrScope, userId) {
     materialId: query.materialId,
     contractorId: cId,
     userId: cId ? userId : null,
+    pmProjectIds: hrScope?.role === ROLES.PROJECT_MANAGER ? (hrScope.pmProjectIds || []) : undefined,
   });
   return rows.map(toMovement);
 }
@@ -83,6 +101,11 @@ async function listIncoming(hrScope) {
 async function getById(id, hrScope) {
   const row = await movementModel.findById(id);
   if (!row) throw ApiError.notFound('That material movement does not exist.');
+  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+    const ids = hrScope.pmProjectIds || [];
+    const pid = row.project_id != null ? Number(row.project_id) : null;
+    if (pid == null || !ids.includes(pid)) throw ApiError.notFound('That material movement does not exist.');
+  }
   const cId = contractorId(hrScope);
   if (cId) {
     const isSource = Number(row.source_contractor_id) === cId
@@ -110,53 +133,119 @@ async function getById(id, hrScope) {
  * dispatch, so there is exactly one place that moves stock for a shipment.
  */
 async function createDispatch(spec, userId) {
-  const material = await materialModel.findById(spec.materialId);
-  if (!material) throw ApiError.badRequest('Check the highlighted fields.', { material_id: 'That material does not exist.' });
+  const isTool = spec.itemType === 'tool' || (!spec.materialId && spec.toolId);
+  let material = null;
+  let tool = null;
+  let unit = spec.unit || 'unit';
+
+  if (isTool) {
+    tool = await toolModel.findById(spec.toolId);
+    if (!tool) throw ApiError.badRequest('Check the highlighted fields.', { tool_id: 'That tool does not exist.' });
+  } else {
+    material = await materialModel.findById(spec.materialId);
+    if (!material) throw ApiError.badRequest('Check the highlighted fields.', { material_id: 'That material does not exist.' });
+    unit = spec.unit || material.unit;
+  }
   const sentQuantity = Number(spec.sentQuantity);
   if (!(sentQuantity > 0)) throw ApiError.badRequest('Check the highlighted fields.', { sent_quantity: 'Enter a quantity greater than zero.' });
 
-  // Leg 1: issue out of source. A warehouse-to-warehouse movement moves
-  // warehouse-level stock, so it draws from the source warehouse's general
-  // (unslotted) stock — the project/site are recorded on the movement itself
-  // for traceability, not used as the stock slot. This keeps Central -> Contractor
-  // working regardless of which project the destination request is for.
-  const issueTx = await warehouseService.issueStock({
-    material_id: spec.materialId,
-    warehouse_id: spec.sourceWarehouseId,
-    project_id: null,
-    site_id: null,
-    quantity: sentQuantity,
-    unit: spec.unit || material.unit,
-    reference: spec.reference || null,
-    transaction_date: spec.transactionDate || undefined,
-  }, userId);
+  // The receiver identifies the shipment by this number, so every dispatch
+  // must carry one.
+  if (!normalizeVehicle(spec.vehicleNumber)) {
+    throw ApiError.badRequest('Check the highlighted fields.', {
+      vehicle_number: 'Vehicle number is required on dispatch - the receiver uses it to fetch and verify the shipment.',
+    });
+  }
 
-  const id = await movementModel.create({
-    movement_number: `MV-${String(await movementModel.nextMovementNumber()).padStart(4, '0')}`,
-    material_id: spec.materialId,
-    unit: spec.unit || material.unit,
-    source_warehouse_id: spec.sourceWarehouseId,
-    destination_warehouse_id: spec.destWarehouseId,
-    source_contractor_id: spec.sourceContractorId ?? null,
-    destination_contractor_id: spec.destContractorId ?? null,
-    project_id: spec.projectId ?? null,
-    site_id: spec.siteId ?? null,
-    requested_quantity: spec.requestedQuantity ?? null,
-    sent_quantity: sentQuantity,
-    status: 'in_transit',
-    vehicle_number: spec.vehicleNumber ?? null,
-    driver_name: spec.driverName ?? null,
-    driver_phone: spec.driverPhone ?? null,
-    transport_cost: spec.transportCost ?? 0,
-    other_expenses: spec.otherExpenses ?? 0,
-    reference: spec.reference ?? null,
-    remarks: spec.remarks ?? null,
-    procurement_request_id: spec.procurementRequestId ?? null,
-    issue_transaction_id: issueTx.id,
-    sent_by: userId ?? null,
-  });
+  // Issue from the source and record the shipment in ONE transaction: stock can
+  // never leave the source without a movement row to receive it against.
+  const ownConn = !spec.conn;
+  const conn = spec.conn || await pool.getConnection();
+  try {
+    if (ownConn) await conn.beginTransaction();
 
-  return toMovement(await movementModel.findById(id));
+    // A request can be dispatched exactly once: lock it and require a
+    // dispatchable status, so two simultaneous clicks cannot both ship.
+    if (spec.procurementRequestId) {
+      const [[lockedReq]] = await conn.query(
+        'SELECT id, status FROM procurement_requests WHERE id = ? FOR UPDATE',
+        [spec.procurementRequestId]
+      );
+      if (!lockedReq || !['approved', 'source_confirmed'].includes(lockedReq.status)) {
+        throw ApiError.badRequest('This request has already been dispatched.');
+      }
+    }
+
+    let issueTx = null;
+    if (!isTool && spec.materialId) {
+      issueTx = await warehouseService.issueStock({
+        material_id: spec.materialId,
+        warehouse_id: spec.sourceWarehouseId,
+        project_id: null,
+        site_id: null,
+        quantity: sentQuantity,
+        unit,
+        reference: spec.reference || null,
+        transaction_date: spec.transactionDate || undefined,
+        vehicle_number: spec.vehicleNumber || null,
+      }, userId, { conn });
+    }
+
+    // Value the shipment at what the SOURCE stock actually cost (weighted-average
+    // of its costed receipts); fall back to the request's rate, then to history.
+    let costPerUnit = issueTx?.unitCost > 0 ? Number(issueTx.unitCost) : null;
+    if (costPerUnit === null && spec.costPerUnit != null && Number(spec.costPerUnit) > 0) costPerUnit = Number(spec.costPerUnit);
+    if (costPerUnit === null) costPerUnit = (!isTool && spec.materialId) ? await getActualMaterialRate(spec.materialId) : 0;
+    const totalCost = Number((costPerUnit * sentQuantity).toFixed(2));
+
+    const id = await movementModel.create({
+      movement_number: `MV-${String(await movementModel.nextMovementNumber()).padStart(4, '0')}`,
+      item_type: isTool ? 'tool' : 'material',
+      material_id: isTool ? null : spec.materialId,
+      tool_id: isTool ? spec.toolId : null,
+      unit,
+      source_warehouse_id: spec.sourceWarehouseId,
+      destination_warehouse_id: spec.destWarehouseId,
+      source_contractor_id: spec.sourceContractorId ?? null,
+      destination_contractor_id: spec.destContractorId ?? null,
+      project_id: spec.projectId ?? null,
+      site_id: spec.siteId ?? null,
+      requested_quantity: spec.requestedQuantity ?? null,
+      sent_quantity: sentQuantity,
+      cost_per_unit: costPerUnit,
+      total_cost: totalCost,
+      status: 'in_transit',
+      vehicle_number: String(spec.vehicleNumber).trim(),
+      driver_name: spec.driverName ?? null,
+      driver_phone: spec.driverPhone ?? null,
+      transport_cost: spec.transportCost ?? 0,
+      other_expenses: spec.otherExpenses ?? 0,
+      reference: spec.reference ?? null,
+      remarks: spec.remarks ?? null,
+      procurement_request_id: spec.procurementRequestId ?? null,
+      issue_transaction_id: issueTx ? issueTx.id : null,
+      sent_by: userId ?? null,
+    }, conn);
+
+    if (spec.procurementRequestId) {
+      // 'ordered' == dispatched / in transit.
+      await conn.query("UPDATE procurement_requests SET status = 'ordered' WHERE id = ?", [spec.procurementRequestId]);
+    }
+
+    if (ownConn) await conn.commit();
+    return { __movementId: id };
+  } catch (error) {
+    if (ownConn) await conn.rollback();
+    throw error;
+  } finally {
+    if (ownConn) conn.release();
+  }
+}
+
+/** Public wrapper: dispatch then return the shaped movement. */
+async function dispatchAndLoad(spec, userId) {
+  const { __movementId } = await createDispatch(spec, userId);
+  return toMovement(await movementModel.findById(__movementId));
 }
 
 /** Contractor "Send material" UI path — both ends are contractors. */
@@ -177,6 +266,9 @@ async function sendMaterial(payload, hrScope, userId) {
     if (!source || source.status !== 'active') {
       throw ApiError.badRequest('Check the highlighted fields.', { source_warehouse_id: 'That source warehouse does not exist or is inactive.' });
     }
+    if ((source.type === 'central' || source.name?.toLowerCase().includes('central')) && !payload.vehicle_number?.trim()) {
+      throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Vehicle number is mandatory for Central Warehouse movements.' });
+    }
   } else {
     source = await contractorWarehouse(sourceContractorId);
   }
@@ -186,7 +278,7 @@ async function sendMaterial(payload, hrScope, userId) {
     throw ApiError.badRequest('Check the highlighted fields.', { destination_contractor_id: 'Choose a different destination to send to.' });
   }
 
-  return createDispatch({
+  return dispatchAndLoad({
     materialId: payload.material_id,
     unit: payload.unit,
     sourceWarehouseId: source.id,
@@ -217,8 +309,17 @@ async function sendMaterial(payload, hrScope, userId) {
 async function dispatchForRequest(request, payload, userId) {
   const existing = await movementModel.findAll({}).then((rows) => rows.find((m) => Number(m.procurement_request_id) === Number(request.id) && m.status !== 'cancelled'));
   if (existing) throw ApiError.badRequest('This request has already been dispatched.');
-  return createDispatch({
-    materialId: request.material_id,
+  const rate = Number(request.purchase_rate || request.estimated_rate || (request.material_id ? await getActualMaterialRate(request.material_id) : 0) || 0);
+  if (!normalizeVehicle(payload.vehicle_number)) {
+    throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Vehicle number is mandatory on dispatch - the receiver verifies it.' });
+  }
+
+  const sentQuantity = payload.sent_quantity ?? request.quantity;
+  const isTool = request.item_type === 'tool' || (!request.material_id && request.tool_id);
+  const spec = {
+    itemType: isTool ? 'tool' : 'material',
+    materialId: isTool ? null : request.material_id,
+    toolId: isTool ? request.tool_id : null,
     unit: request.unit,
     sourceWarehouseId: request.source_warehouse_id,
     destWarehouseId: request.destination_warehouse_id,
@@ -227,7 +328,8 @@ async function dispatchForRequest(request, payload, userId) {
     projectId: request.project_id,
     siteId: request.destination_site_id ?? request.site_id,
     requestedQuantity: Number(request.quantity),
-    sentQuantity: payload.sent_quantity ?? request.quantity,
+    sentQuantity,
+    costPerUnit: rate,
     vehicleNumber: payload.vehicle_number,
     driverName: payload.driver_name,
     driverPhone: payload.driver_phone,
@@ -236,81 +338,218 @@ async function dispatchForRequest(request, payload, userId) {
     reference: payload.reference || request.request_number,
     remarks: payload.remarks,
     procurementRequestId: request.id,
-  }, userId);
+  };
+  const { __movementId } = await createDispatch(spec, userId);
+  return toMovement(await movementModel.findById(__movementId));
 }
 
 /**
- * RECEIVE MATERIAL. Only now is the destination warehouse increased. Pulls the
- * shipment details from the send transaction; the receiver may adjust the
- * received quantity (e.g. damage in transit), which stays traceable against the
- * sent quantity.
+ * RECEIVE MATERIAL. Only now is the destination warehouse increased.
+ *
+ * The receiver must enter the vehicle number; it has to match the dispatch the
+ * sender recorded (the shipment details are fetched by that number first, see
+ * lookupByVehicle). Everything - the movement flip, the destination stock, the
+ * ledger row and the procurement status - happens in ONE transaction behind a
+ * row lock, and the flip itself only matches an in_transit row, so the same
+ * shipment can never be received (or its stock added) twice.
  */
 async function receiveMaterial(id, payload, hrScope, userId) {
-  const row = await movementModel.findById(id);
-  if (!row) throw ApiError.notFound('That material movement does not exist.');
+  const enteredVehicle = String(payload.vehicle_number ?? '').trim().toUpperCase();
 
-  const cId = contractorId(hrScope);
-  if (cId) {
-    const isDest = Number(row.destination_contractor_id) === cId
-      || Number(row.destination_warehouse_contractor_id) === cId
-      || Number(row.procurement_dest_contractor_id) === cId;
-    if (!isDest) {
-      throw ApiError.forbidden('Only the receiving contractor can receive this shipment.');
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const locked = await movementModel.lockById(id, conn);
+    if (!locked) throw ApiError.notFound('That material movement does not exist.');
+
+    const row = await movementModel.findById(id);
+
+    const cId = contractorId(hrScope);
+    if (cId) {
+      const isDest = Number(row.destination_contractor_id) === cId
+        || Number(row.destination_warehouse_contractor_id) === cId
+        || Number(row.procurement_dest_contractor_id) === cId;
+      if (!isDest) {
+        throw ApiError.forbidden('Only the receiving contractor can receive this shipment.');
+      }
     }
-  }
-  if (row.status !== 'in_transit') {
-    throw ApiError.badRequest(`This shipment is already ${row.status.replace('_', ' ')}.`);
-  }
+    if (locked.status !== 'in_transit') {
+      throw ApiError.badRequest(`This shipment is already ${String(locked.status).replace('_', ' ')} - it cannot be received again.`);
+    }
 
-  // Vehicle confirmation: if the sender recorded a vehicle number on dispatch
-  // and the receiver supplies one, they must match. (No vehicle supplied — e.g.
-  // an Admin/Warehouse receive — is allowed as before.)
-  if (payload.vehicle_number && row.vehicle_number) {
-    const norm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
-    if (norm(payload.vehicle_number) !== norm(row.vehicle_number)) {
+    // Permission and state are checked first; only then is the vehicle number required.
+    if (!normalizeVehicle(enteredVehicle)) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'Enter the vehicle number to fetch and verify the dispatch before receiving.',
+      });
+    }
+    if (!row.vehicle_number) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'No vehicle number was recorded on dispatch, so this shipment cannot be verified. Ask the sender to correct the dispatch.',
+      });
+    }
+    if (!vehiclesMatch(enteredVehicle, row.vehicle_number)) {
       throw ApiError.badRequest('Check the highlighted fields.', {
         vehicle_number: 'Vehicle number does not match the dispatch.',
       });
     }
-  }
 
-  const sent = Number(row.sent_quantity);
-  const receivedQuantity = payload.received_quantity !== undefined ? Number(payload.received_quantity) : sent;
-  if (!(receivedQuantity > 0)) throw ApiError.badRequest('Check the highlighted fields.', { received_quantity: 'Enter a quantity greater than zero.' });
-  if (receivedQuantity > sent) {
-    throw ApiError.badRequest('Check the highlighted fields.', { received_quantity: `Only ${sent} ${row.unit} was sent.` });
-  }
+    const sent = Number(row.sent_quantity);
+    const receivedQuantity = payload.received_quantity !== undefined && payload.received_quantity !== null
+      ? Number(payload.received_quantity)
+      : sent;
+    if (!(receivedQuantity > 0)) throw ApiError.badRequest('Check the highlighted fields.', { received_quantity: 'Enter a quantity greater than zero.' });
+    if (receivedQuantity > sent) {
+      throw ApiError.badRequest('Check the highlighted fields.', { received_quantity: `Only ${sent} ${row.unit} was sent.` });
+    }
 
-  // Leg 2: receive into destination now, at the destination warehouse's general
-  // (unslotted) stock — mirroring the issue leg so warehouse-level stock stays
-  // consistent. Project/site remain recorded on the movement for traceability.
-  const receiveTx = await warehouseService.receiveStock({
-    material_id: row.material_id,
-    warehouse_id: row.destination_warehouse_id,
-    project_id: null,
-    site_id: null,
-    quantity: receivedQuantity,
-    unit: row.unit,
-    reference: row.reference || row.movement_number,
-    transaction_date: payload.receiving_date || undefined,
-  }, userId);
+    // Leg 2: receive into destination now (for materials), valued at the cost
+    // the shipment was dispatched at.
+    const isTool = row.item_type === 'tool' || (!row.material_id && row.tool_id);
+    let receiveTx = null;
+    if (!isTool && row.material_id) {
+      const unitCost = Number(row.cost_per_unit || 0) || null;
+      receiveTx = await warehouseService.receiveStock({
+        material_id: row.material_id,
+        warehouse_id: row.destination_warehouse_id,
+        project_id: null,
+        site_id: null,
+        quantity: receivedQuantity,
+        unit: row.unit,
+        reference: row.reference || row.movement_number,
+        transaction_date: payload.receiving_date || undefined,
+        vehicle_number: row.vehicle_number,
+        unit_cost: unitCost,
+        total_cost: unitCost ? Number((unitCost * receivedQuantity).toFixed(2)) : null,
+        procurement_request_id: row.procurement_request_id || null,
+        notes: `Received against ${row.movement_number}; verified vehicle ${enteredVehicle}`,
+      }, userId, { conn });
+    }
 
-  await movementModel.markReceived(id, {
-    receivedQuantity,
-    receiveTransactionId: receiveTx.id,
-    receivedBy: userId ?? null,
-  });
+    const flipped = await movementModel.markReceived(id, {
+      receivedQuantity,
+      receiveTransactionId: receiveTx ? receiveTx.id : null,
+      receivedBy: userId ?? null,
+      receivedVehicleNumber: enteredVehicle,
+    }, conn);
+    if (!flipped) throw ApiError.badRequest('This shipment has already been received.');
 
-  // If this shipment fulfilled a procurement request, complete that request and
-  // link the receipt transaction — closing the request -> movement -> ledger loop.
-  if (row.procurement_request_id) {
-    await procurementModel.updateFulfilment(row.procurement_request_id, {
-      warehouseTransactionId: receiveTx.id,
-      status: 'received',
-    }).catch(() => {});
+    // Close the request -> movement -> ledger loop in the same transaction.
+    if (row.procurement_request_id) {
+      await conn.query(
+        `UPDATE procurement_requests
+         SET warehouse_transaction_id = ?, fulfilled_at = NOW(), status = 'received',
+             received_by = ?, received_vehicle_number = ?
+         WHERE id = ?`,
+        [receiveTx ? receiveTx.id : null, userId ?? null, enteredVehicle, row.procurement_request_id]
+      );
+    }
+
+    // The shipment's transport / other charges become a project expense now, once.
+    await transportExpenseService.bookForMovement(id, userId ?? null, conn);
+
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
   }
 
   return toMovement(await movementModel.findById(id));
+}
+
+/**
+ * FETCH BY VEHICLE NUMBER. The receiver types the arriving vehicle number and
+ * gets back the dispatch the sender already recorded - driver, material,
+ * quantity, source, destination, project/site, dispatch date - to verify
+ * before confirming. Scoped to what the caller is allowed to receive:
+ *   contractor -> in-transit shipments addressed to THEIR warehouse only
+ *   admin / warehouse / procurement -> all in-transit shipments, plus approved
+ *                 vendor purchases into the central warehouse carrying that vehicle.
+ */
+async function lookupByVehicle(vehicleNumber, hrScope) {
+  const normalized = normalizeVehicle(vehicleNumber);
+  if (!normalized) {
+    throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Enter the vehicle number.' });
+  }
+
+  const cId = contractorId(hrScope);
+  const movementRows = await movementModel.findAll(cId ? { incomingForContractorId: cId } : { status: 'in_transit' });
+  const shipments = movementRows
+    .filter((r) => r.status === 'in_transit' && vehiclesMatch(r.vehicle_number, vehicleNumber))
+    .map((r) => {
+      const m = toMovement(r);
+      return {
+        kind: 'movement',
+        id: m.id,
+        reference: m.movementNumber,
+        requestNumber: m.procurement?.requestNumber || null,
+        itemType: m.itemType,
+        material: m.material?.name || null,
+        quantity: m.sentQuantity,
+        unit: m.unit,
+        costPerUnit: m.costPerUnit,
+        totalCost: m.totalMaterialCost,
+        vehicleNumber: m.vehicleNumber,
+        driverName: m.driverName,
+        driverPhone: m.driverPhone,
+        source: m.source?.contractorName || m.source?.warehouseName || null,
+        destination: m.destination?.contractorName || m.destination?.warehouseName || null,
+        project: m.project?.name || null,
+        site: m.site?.name || null,
+        task: m.task?.name || null,
+        dispatchDate: m.sentAt,
+        status: m.status,
+      };
+    });
+
+  if (!cId) {
+    const [pending] = await pool.query(
+      `SELECT r.id, r.request_number, r.po_number, r.quantity, r.ordered_quantity, r.unit, r.purchase_rate, r.total_amount,
+              r.vehicle_number, r.driver_name, r.driver_phone, r.order_date, r.purchase_date, r.created_at, r.status,
+              r.supplier, v.name AS vendor_name, m.name AS material_name, dw.name AS destination_name
+       FROM procurement_requests r
+       LEFT JOIN vendors v ON v.id = r.vendor_id
+       LEFT JOIN materials m ON m.id = r.material_id
+       LEFT JOIN warehouses dw ON dw.id = r.destination_warehouse_id
+       WHERE r.item_type = 'material'
+         AND (r.procurement_kind = 'central_purchase'
+              OR (r.source_type = 'supplier' AND r.vehicle_number IS NOT NULL AND r.vehicle_number <> ''))
+         AND r.status IN ('approved', 'ordered', 'partially_received')
+         AND r.warehouse_transaction_id IS NULL
+         AND ${vehicleSql('r.vehicle_number')} = ?`,
+      [normalized]
+    );
+    for (const r of pending) {
+      const qty = Number(r.ordered_quantity || r.quantity);
+      shipments.push({
+        kind: 'vendor_purchase',
+        id: r.id,
+        reference: r.request_number,
+        requestNumber: r.request_number,
+        itemType: 'material',
+        material: r.material_name,
+        quantity: qty,
+        unit: r.unit,
+        costPerUnit: r.purchase_rate != null ? Number(r.purchase_rate) : null,
+        totalCost: r.total_amount != null ? Number(r.total_amount) : null,
+        vehicleNumber: r.vehicle_number,
+        driverName: r.driver_name,
+        driverPhone: r.driver_phone,
+        source: r.vendor_name || r.supplier || 'Outside vendor',
+        destination: r.destination_name || 'Central Warehouse',
+        project: null,
+        site: null,
+        task: null,
+        dispatchDate: r.order_date || r.purchase_date || r.created_at,
+        status: r.status,
+      });
+    }
+  }
+
+  return { vehicleNumber: String(vehicleNumber).trim(), shipments };
 }
 
 async function getByRequest(procurementRequestId) {
@@ -352,4 +591,4 @@ async function myWarehouseStock(hrScope) {
   };
 }
 
-module.exports = { listMovements, listIncoming, getById, getByRequest, sendMaterial, receiveMaterial, dispatchForRequest, myWarehouseStock, toMovement };
+module.exports = { listMovements, listIncoming, getById, getByRequest, sendMaterial, receiveMaterial, lookupByVehicle, dispatchForRequest, myWarehouseStock, toMovement };

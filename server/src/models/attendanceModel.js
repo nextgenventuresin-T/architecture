@@ -13,7 +13,9 @@ const LIST_SELECT = `
   SELECT
     a.id, a.attendance_date, a.labour_type, a.employee_id, a.contractor_worker_id,
     a.contractor_id, a.project_id, a.site_id, a.status, a.check_in, a.check_out,
-    a.remarks, a.recorded_by, a.created_at, a.updated_at,
+    a.remarks, a.recorded_by, a.task_id, a.created_at, a.updated_at,
+    pt.name               AS task_name,
+    ru.full_name          AS recorded_by_name,
     e.full_name        AS employee_name,
     e.designation       AS employee_designation,
     w.full_name          AS worker_name,
@@ -27,11 +29,19 @@ const LIST_SELECT = `
   LEFT JOIN contractors c ON c.id = a.contractor_id
   LEFT JOIN projects p ON p.id = a.project_id
   LEFT JOIN sites s ON s.id = a.site_id
+  LEFT JOIN project_tasks pt ON pt.id = a.task_id
+  LEFT JOIN users ru ON ru.id = a.recorded_by
 `;
 
-function buildFilters({ contractorId, labourType, projectId, siteId, status, date, dateFrom, dateTo, employeeId, workerId, search }) {
+function buildFilters({ contractorId, labourType, projectId, siteId, status, date, dateFrom, dateTo, employeeId, workerId, search, pmProjectIds }) {
   const where = [];
   const params = [];
+
+  // Project Manager: attendance on their assigned projects only (deny-by-default).
+  if (Array.isArray(pmProjectIds)) {
+    if (pmProjectIds.length === 0) where.push('1 = 0');
+    else { where.push(`a.project_id IN (${pmProjectIds.map(() => '?').join(',')})`); params.push(...pmProjectIds.map(Number)); }
+  }
 
   if (contractorId) {
     where.push('a.contractor_id = ?');
@@ -111,13 +121,13 @@ async function findById(id, contractorId = null) {
 async function findExisting({ attendanceDate, employeeId, contractorWorkerId }) {
   if (employeeId) {
     const [rows] = await pool.query(
-      'SELECT id FROM attendance_records WHERE attendance_date = ? AND employee_id = ? LIMIT 1',
+      'SELECT id, project_id, site_id FROM attendance_records WHERE attendance_date = ? AND employee_id = ? LIMIT 1',
       [attendanceDate, employeeId]
     );
     return rows[0] || null;
   }
   const [rows] = await pool.query(
-    'SELECT id FROM attendance_records WHERE attendance_date = ? AND contractor_worker_id = ? LIMIT 1',
+    'SELECT id, project_id, site_id FROM attendance_records WHERE attendance_date = ? AND contractor_worker_id = ? LIMIT 1',
     [attendanceDate, contractorWorkerId]
   );
   return rows[0] || null;
@@ -125,7 +135,7 @@ async function findExisting({ attendanceDate, employeeId, contractorWorkerId }) 
 
 const WRITABLE = [
   'attendance_date', 'labour_type', 'employee_id', 'contractor_worker_id', 'contractor_id',
-  'project_id', 'site_id', 'status', 'check_in', 'check_out', 'remarks', 'recorded_by',
+  'project_id', 'site_id', 'task_id', 'status', 'check_in', 'check_out', 'remarks', 'recorded_by',
 ];
 
 async function create(payload) {

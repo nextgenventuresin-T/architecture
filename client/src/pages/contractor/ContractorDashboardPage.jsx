@@ -67,7 +67,7 @@ export default function ContractorDashboardPage() {
     <>
       <PageHeader
         title="Contractor Dashboard"
-        description="Assigned projects, sites, phase progress, and material movements at a glance."
+        description="Assigned projects, sites, task progress, and material movements at a glance."
       />
 
       {error && <Alert tone="error" className="mb-4">{error.message}</Alert>}
@@ -79,7 +79,7 @@ export default function ContractorDashboardPage() {
           tone="text-brand-700 bg-brand-50"
           label="Assigned Projects"
           value={formatNumber(assignedProjectsCount)}
-          sub="Tap to view project & phase scopes"
+          sub="Tap to view project & task scopes"
           onClick={() => navigate('/contractor/projects')}
           cta
         />
@@ -153,7 +153,7 @@ export default function ContractorDashboardPage() {
           className="inline-flex items-center gap-2 rounded-xl border border-line bg-white px-4 py-2.5 text-sm font-medium text-ink hover:bg-canvas transition-colors"
         >
           <Layers className="h-4 w-4 text-brand-600" />
-          View Project Phases
+          View Projects & Tasks
         </button>
         <button
           type="button"
@@ -171,7 +171,7 @@ export default function ContractorDashboardPage() {
         <Card>
           <CardHeader
             title="Assigned Projects"
-            description="Phase-based execution and progress tracking"
+            description="Task-based execution and progress tracking"
             action={
               <button
                 type="button"

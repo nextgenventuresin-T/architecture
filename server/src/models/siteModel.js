@@ -70,7 +70,8 @@ async function findSnapshot(siteId) {
   const [tasks] = await pool.query(
     `SELECT t.*,
             (SELECT COUNT(*) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS worker_count,
-            (SELECT COALESCE(SUM(twl.daily_wage * (twl.hours_worked / 8)), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
+            (SELECT COUNT(DISTINCT twl.worker_name) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS unique_workers_count,
+            (SELECT COALESCE(SUM(CASE WHEN twl.worker_type IN ('company_labour', 'company_employee') OR LOWER(COALESCE(twl.labour_type, '')) LIKE '%company%' THEN 0 ELSE twl.daily_wage * (twl.hours_worked / 8) END), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
             (SELECT COALESCE(SUM(dwu.quantity_used * COALESCE(tm.cost_per_unit, 0)), 0)
              FROM daily_work_updates dwu
              LEFT JOIN task_materials tm ON tm.task_id = dwu.task_id AND tm.material_id = dwu.material_id

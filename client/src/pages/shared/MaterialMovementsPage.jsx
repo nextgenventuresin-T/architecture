@@ -9,6 +9,7 @@ import Alert from '../../components/ui/Alert';
 import ExcelTable from '../../components/warehouse/ExcelTable';
 import useAuth from '../../hooks/useAuth';
 import { ROLES } from '../../config/roles';
+import ReceiveMovementDialog from '../../components/procurement/ReceiveMovementDialog';
 import { materialMovementApi } from '../../api/materialMovementApi';
 import { procurementApi } from '../../api/procurementApi';
 import { materialsApi } from '../../api/materialsApi';
@@ -39,7 +40,7 @@ export default function MaterialMovementsPage() {
   const [error, setError] = useState(null);
   const [flash, setFlash] = useState(null);
   const [sending, setSending] = useState(false);
-  const [receivingId, setReceivingId] = useState(null);
+  const [receivingMovement, setReceivingMovement] = useState(null);
 
   const reload = useCallback(() => {
     materialMovementApi.list({}).then(setMovements).catch(() => setMovements([]));
@@ -95,6 +96,12 @@ export default function MaterialMovementsPage() {
     setFieldErrors((c) => ({ ...c, [key]: undefined }));
   };
 
+  const isCentralSource = values.source?.startsWith('warehouse:') && (() => {
+    const wId = values.source.split(':')[1];
+    const w = warehouseLookups.warehouses?.find((wh) => String(wh.id) === String(wId));
+    return w?.type === 'central' || w?.name?.toLowerCase().includes('central');
+  })();
+
   async function handleSend() {
     setError(null);
     setFlash(null);
@@ -105,6 +112,10 @@ export default function MaterialMovementsPage() {
     if (!values.sent_quantity || Number(values.sent_quantity) <= 0) errs.sent_quantity = 'Enter a quantity greater than zero.';
     else if (availableStock !== null && Number(values.sent_quantity) > availableStock) {
       errs.sent_quantity = `Only ${formatNumber(availableStock)} ${selectedMaterial?.unit || 'units'} available in selected source.`;
+    }
+    // The receiver identifies the shipment by this number, so every dispatch must carry one.
+    if (!values.vehicle_number?.trim()) {
+      errs.vehicle_number = 'Vehicle number is required - the receiver uses it to fetch and verify this shipment.';
     }
     if (Object.keys(errs).length) { setFieldErrors(errs); return; }
 
@@ -144,18 +155,10 @@ export default function MaterialMovementsPage() {
     }
   }
 
-  async function handleReceive(id) {
+  // Receiving always goes through the vehicle-verification dialog.
+  function handleReceive(mv) {
     setError(null);
-    setReceivingId(id);
-    try {
-      const mv = await materialMovementApi.receive(id, {});
-      setFlash(`Received ${formatNumber(mv.receivedQuantity)} ${mv.unit} into ${mv.destination.warehouseName}.`);
-      reload();
-    } catch (caught) {
-      setError(toApiError(caught));
-    } finally {
-      setReceivingId(null);
-    }
+    setReceivingMovement(mv);
   }
 
   const columns = [
@@ -244,7 +247,15 @@ export default function MaterialMovementsPage() {
             )}
             <InputField label="Requested qty (PO)" type="number" min="0" step="0.01" value={values.requested_quantity} onChange={set('requested_quantity')} error={fieldErrors.requested_quantity} hint="What was requested." />
             <InputField label="Sent qty" required type="number" min="0" step="0.01" value={values.sent_quantity} onChange={set('sent_quantity')} error={fieldErrors.sent_quantity} hint="What you actually send." />
-            <InputField label="Vehicle number" value={values.vehicle_number} onChange={set('vehicle_number')} placeholder="PB11 AB 1234" />
+            <InputField
+              label="Vehicle number"
+              required
+              value={values.vehicle_number}
+              onChange={set('vehicle_number')}
+              error={fieldErrors.vehicle_number}
+              placeholder="PB11 AB 1234"
+              description="Required — the receiver enters it to fetch and verify this shipment"
+            />
             <InputField label="Driver name" value={values.driver_name} onChange={set('driver_name')} />
             <InputField label="Driver phone" value={values.driver_phone} onChange={set('driver_phone')} />
             <InputField label="Transport cost" type="number" min="0" step="0.01" value={values.transport_cost} onChange={set('transport_cost')} />
@@ -270,9 +281,9 @@ export default function MaterialMovementsPage() {
                   <div className="min-w-0">
                     <p className="font-medium text-ink">{mv.material.name} · {formatNumber(mv.sentQuantity)} {mv.unit}</p>
                     <p className="text-xs text-ink-subtle">From {mv.source.contractorName || mv.source.warehouseName} · {mv.movementNumber}</p>
-                    <p className="mt-0.5 text-xs text-ink-subtle">{mv.vehicleNumber ? `Vehicle ${mv.vehicleNumber}` : ''}{mv.driverName ? ` · ${mv.driverName}` : ''}{mv.driverPhone ? ` · ${mv.driverPhone}` : ''}</p>
+                    <p className="mt-0.5 text-xs text-ink-subtle">Enter the arriving vehicle number to fetch and verify the dispatch details.</p>
                   </div>
-                  <Button type="button" variant="primary" isLoading={receivingId === mv.id} loadingText="Receiving…" onClick={() => handleReceive(mv.id)}>
+                  <Button type="button" variant="primary" onClick={() => handleReceive(mv)}>
                     <PackageCheck className="h-4 w-4" aria-hidden="true" /> Receive
                   </Button>
                 </div>
@@ -286,6 +297,17 @@ export default function MaterialMovementsPage() {
         <CardHeader title="Movement history" description="Every send and receive, fully traceable." icon={Truck} />
         <ExcelTable columns={columns} rows={movements} initialSort={{ key: 'movement', dir: 'desc' }} searchPlaceholder="Search movements…" />
       </Card>
+
+      <ReceiveMovementDialog
+        movement={receivingMovement}
+        onClose={() => setReceivingMovement(null)}
+        onReceived={(message) => {
+          setReceivingMovement(null);
+          setFlash(message);
+          reload();
+        }}
+        onError={setError}
+      />
     </>
   );
 }

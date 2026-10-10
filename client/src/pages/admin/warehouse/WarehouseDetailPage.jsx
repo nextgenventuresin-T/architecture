@@ -347,10 +347,12 @@ export default function WarehouseDetailPage() {
     },
     {
       key: 'phase',
-      header: 'Phase & Scope',
+      header: 'Task / Scope',
       render: (row) => (
         <div>
-          <p className="font-medium text-ink">Phase {row.phase_number}: {row.phase_name}</p>
+          <p className="font-medium text-ink">
+            {row.task_name ? `Task: ${row.task_name}` : (row.phase_name ? `Phase ${row.phase_number}: ${row.phase_name}` : 'General')}
+          </p>
           <p className="text-xs text-ink-subtle">{row.subcategory}</p>
         </div>
       ),

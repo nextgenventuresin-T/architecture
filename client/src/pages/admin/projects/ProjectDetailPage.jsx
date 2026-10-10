@@ -19,7 +19,6 @@ import ApprovalsTab from '../../../components/projects/ApprovalsTab';
 import IssuesTab from '../../../components/projects/IssuesTab';
 import DocumentsTab from '../../../components/projects/DocumentsTab';
 import ReportsTab from '../../../components/projects/ReportsTab';
-import PhasesBudgetTab from '../../../components/projects/PhasesBudgetTab';
 import TasksBudgetTab from '../../../components/projects/TasksBudgetTab';
 import DailyWorkTab from '../../../components/projects/DailyWorkTab';
 import useAsync from '../../../hooks/useAsync';

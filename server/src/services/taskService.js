@@ -156,18 +156,24 @@ async function logWorker(taskId, payload, userId, hrScope) {
 
   const workDate = payload.work_date || new Date().toISOString().slice(0, 10);
 
+  const isCompany = (payload.worker_type === 'company_labour' || payload.worker_type === 'company_employee' || payload.workerType === 'company_labour' || payload.workerType === 'company_employee' || String(payload.labour_type || '').toLowerCase().includes('company'));
+  const workerType = isCompany ? 'company_labour' : (payload.worker_type || payload.workerType || 'daily_wage');
+  const dailyWage = isCompany ? 0.0 : Number(payload.daily_wage || payload.dailyWage || 0.0);
+
   const logId = await taskModel.addWorkerLog({
     task_id: taskId,
     project_id: task.projectId,
     site_id: task.siteId,
     contractor_id: contractorId,
     daily_work_id: payload.daily_work_id || null,
+    worker_id: payload.worker_id || payload.workerId || null,
+    worker_type: workerType,
     worker_name: payload.worker_name.trim(),
-    worker_code: payload.worker_code || payload.worker_id || null,
-    labour_type: payload.labour_type.trim(),
+    worker_code: payload.worker_code || payload.workerCode || null,
+    labour_type: (payload.labour_type || (isEmployee ? 'Company Employee' : 'Labour')).trim(),
     work_date: workDate,
-    hours_worked: Number(payload.hours_worked || 8.0),
-    daily_wage: Number(payload.daily_wage || 0.0),
+    hours_worked: Number(payload.hours_worked || payload.hoursWorked || 8.0),
+    daily_wage: dailyWage,
     work_performed: payload.work_performed ? payload.work_performed.trim() : null,
     created_by: userId,
   });
@@ -265,6 +271,18 @@ async function getPlannedMaterials(taskId, hrScope) {
   return { materials };
 }
 
+/**
+ * Machines & tools planned for the task with their estimated cost from the task budget.
+ * Whether the machine is rented or purchased is Admin's decision, so a contractor gets
+ * the plan and its estimate but not the rent / purchase mode.
+ */
+async function getPlannedTools(taskId, hrScope) {
+  await getPlannedMaterials(taskId, hrScope); // same existence + contractor assignment check
+  const tools = await taskModel.findPlannedTools(taskId);
+  if (hrScope?.role === 'contractor') return { tools: tools.map(({ rentalType, ...t }) => t) };
+  return { tools };
+}
+
 async function getBudgetApprovals(taskId) {
   const approvals = await taskModel.getTaskBudgetApprovals(taskId);
   return { approvals };
@@ -283,5 +301,6 @@ module.exports = {
   unassignWorkerFromTask,
   createQuickWorker,
   getPlannedMaterials,
+  getPlannedTools,
   getBudgetApprovals,
 };

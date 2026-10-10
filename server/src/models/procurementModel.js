@@ -38,7 +38,7 @@ const LIST_SELECT = `
     r.created_at, r.updated_at,
     p.name AS project_name, p.code AS project_code,
     s.name AS site_name,
-    m.name AS material_name, m.unit AS material_unit, m.category AS material_category,
+    m.name AS material_name, m.unit AS material_unit, m.category AS material_category, m.default_rate AS material_default_rate,
     u.full_name AS requested_by_name,
     sw.name AS source_warehouse_name, dw.name AS destination_warehouse_name,
     scn.name AS source_contractor_name, dcn.name AS destination_contractor_name,
@@ -51,12 +51,19 @@ const LIST_SELECT = `
          ELSE NULL END AS remaining_quantity,
     r.vendor_id, v.name AS vendor_name, v.contact_person AS vendor_contact_person, v.phone AS vendor_phone,
     r.vehicle_number, r.driver_name, r.driver_phone,
-    r.challan_number, r.challan_date, r.invoice_number, r.invoice_date, r.remarks
+    r.challan_number, r.challan_date, r.invoice_number, r.invoice_date, r.remarks,
+    r.item_type, r.tool_id, t.name AS tool_name, t.code AS tool_code, t.type AS tool_type,
+    r.tool_procurement_type, r.rental_cost, r.usage_charge_rate, r.rental_days, r.rental_start_date, r.rental_end_date,
+    r.amount_paid, r.amount_due, r.payment_status,
+    r.tool_unit_id, tu.serial_number AS tool_unit_serial, r.usage_charge_total, r.usage_charge_days, r.usage_charge_policy,
+    r.requester_role, r.contractor_id, rc.name AS responsible_contractor_name,
+    r.received_by, r.received_vehicle_number
   FROM procurement_requests r
   LEFT JOIN projects p ON p.id = r.project_id
   LEFT JOIN sites s ON s.id = r.site_id
   LEFT JOIN project_tasks pt ON pt.id = r.task_id
-  JOIN materials m ON m.id = r.material_id
+  LEFT JOIN materials m ON m.id = r.material_id
+  LEFT JOIN tools t ON t.id = r.tool_id
   LEFT JOIN users u ON u.id = r.requested_by
   LEFT JOIN warehouses sw  ON sw.id = r.source_warehouse_id
   LEFT JOIN warehouses dw  ON dw.id = r.destination_warehouse_id
@@ -66,22 +73,25 @@ const LIST_SELECT = `
   LEFT JOIN sites ds ON ds.id = r.destination_site_id
   LEFT JOIN (${RECEIVED_ROLLUP}) rr ON rr.procurement_request_id = r.id
   LEFT JOIN vendors v ON v.id = r.vendor_id
+  LEFT JOIN tool_units tu ON tu.id = r.tool_unit_id
+  LEFT JOIN contractors rc ON rc.id = r.contractor_id
 `;
 
 const COUNT_FROM = `
   FROM procurement_requests r
   LEFT JOIN projects p ON p.id = r.project_id
   LEFT JOIN sites s ON s.id = r.site_id
-  JOIN materials m ON m.id = r.material_id
+  LEFT JOIN materials m ON m.id = r.material_id
+  LEFT JOIN tools t ON t.id = r.tool_id
 `;
 
-function buildFilters({ search, status, projectId, siteId, materialId, supplier, priority, kind, contractorId, userId }) {
+function buildFilters({ search, status, projectId, siteId, materialId, toolId, itemType, supplier, priority, kind, contractorId, userId, pmProjectIds }) {
   const where = [];
   const params = [];
 
   if (search) {
-    where.push('(r.request_number LIKE ? OR r.po_number LIKE ? OR m.name LIKE ? OR r.supplier LIKE ? OR p.name LIKE ?)');
-    params.push(...Array(5).fill(`%${search}%`));
+    where.push('(r.request_number LIKE ? OR r.po_number LIKE ? OR m.name LIKE ? OR t.name LIKE ? OR r.supplier LIKE ? OR p.name LIKE ?)');
+    params.push(...Array(6).fill(`%${search}%`));
   }
   if (status && status !== 'all') {
     where.push('r.status = ?');
@@ -99,6 +109,14 @@ function buildFilters({ search, status, projectId, siteId, materialId, supplier,
     where.push('r.material_id = ?');
     params.push(Number(materialId));
   }
+  if (toolId) {
+    where.push('r.tool_id = ?');
+    params.push(Number(toolId));
+  }
+  if (itemType && itemType !== 'all') {
+    where.push('r.item_type = ?');
+    params.push(itemType);
+  }
   if (supplier) {
     where.push('r.supplier LIKE ?');
     params.push(`%${supplier}%`);
@@ -114,6 +132,17 @@ function buildFilters({ search, status, projectId, siteId, materialId, supplier,
   if (contractorId) {
     where.push('(r.requested_by = ? OR p.contractor_id = ? OR s.contractor_id = ? OR r.source_contractor_id = ? OR r.destination_contractor_id = ?)');
     params.push(Number(userId), Number(contractorId), Number(contractorId), Number(contractorId), Number(contractorId));
+  }
+
+  // Project Manager: only requests on their assigned projects. An empty
+  // assignment list matches nothing (deny-by-default).
+  if (Array.isArray(pmProjectIds)) {
+    if (pmProjectIds.length === 0) {
+      where.push('1 = 0');
+    } else {
+      where.push(`r.project_id IN (${pmProjectIds.map(() => '?').join(',')})`);
+      params.push(...pmProjectIds.map(Number));
+    }
   }
 
   return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
@@ -136,15 +165,15 @@ async function findAll({ page = 1, pageSize = 10, ...filters }) {
   return { rows, total };
 }
 
-async function findById(id, { contractorId, userId } = {}) {
-  const { whereSql, params } = buildFilters({ contractorId, userId });
+async function findById(id, { contractorId, userId, pmProjectIds } = {}) {
+  const { whereSql, params } = buildFilters({ contractorId, userId, pmProjectIds });
   const ownershipSql = whereSql ? ` AND ${whereSql.slice(6)}` : '';
   const [rows] = await pool.query(`${LIST_SELECT} WHERE r.id = ?${ownershipSql} LIMIT 1`, [id, ...params]);
   return rows[0] || null;
 }
 
-async function findRawById(id, { contractorId, userId } = {}) {
-  const { whereSql, params } = buildFilters({ contractorId, userId });
+async function findRawById(id, { contractorId, userId, pmProjectIds } = {}) {
+  const { whereSql, params } = buildFilters({ contractorId, userId, pmProjectIds });
   const ownershipSql = whereSql ? ` AND ${whereSql.slice(6)}` : '';
   const [rows] = await pool.query(
     `SELECT r.* FROM procurement_requests r
@@ -207,6 +236,9 @@ const WRITABLE = [
   'purchase_rate', 'total_amount', 'purchase_date', 'bill_reference',
   'vendor_id', 'vehicle_number', 'driver_name', 'driver_phone',
   'challan_number', 'challan_date', 'invoice_number', 'invoice_date', 'remarks',
+  'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
+  'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
+  'tool_unit_id', 'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'requester_role', 'contractor_id',
 ];
 
 async function create(payload) {
@@ -225,6 +257,9 @@ const UPDATABLE = [
   'purchase_rate', 'total_amount', 'purchase_date', 'bill_reference',
   'vendor_id', 'vehicle_number', 'driver_name', 'driver_phone',
   'challan_number', 'challan_date', 'invoice_number', 'invoice_date', 'remarks',
+  'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
+  'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
+  'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'tool_unit_id',
 ];
 
 async function update(id, payload) {
@@ -233,6 +268,15 @@ async function update(id, payload) {
   await pool.query(
     `UPDATE procurement_requests SET ${columns.map((c) => `\`${c}\` = ?`).join(', ')} WHERE id = ?`,
     [...columns.map((key) => payload[key]), id]
+  );
+}
+
+async function updatePayment(id, { amountPaid, amountDue, paymentStatus }) {
+  await pool.query(
+    `UPDATE procurement_requests
+     SET amount_paid = ?, amount_due = ?, payment_status = ?
+     WHERE id = ?`,
+    [amountPaid, amountDue, paymentStatus, id]
   );
 }
 
@@ -370,7 +414,7 @@ async function updateBillFile(id, { path = null, name = null, type = null, size 
 
 module.exports = {
   findAll, findById, findRawById, findByRequestNumber, findByPoNumber,
-  nextRequestNumber, nextPoNumber, create, update, updateStatus, markOrdered,
+  nextRequestNumber, nextPoNumber, create, update, updateStatus, updatePayment, markOrdered,
   findReceipts, findReceiptById, totalReceived, createReceipt, updateReceipt,
   findSuppliers, findSummary, updateFulfilment, updateBillFile,
 };

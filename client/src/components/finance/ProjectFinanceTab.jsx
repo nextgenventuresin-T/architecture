@@ -118,10 +118,10 @@ export default function ProjectFinanceTab({ lookups }) {
     },
     {
       key: 'site_phase',
-      header: 'Site & Phase',
+      header: 'Task / Scope',
       render: (row) => (
         <div>
-          <p className="font-medium text-ink">{row.phaseTitle || row.phase_name || 'General'}</p>
+          <p className="font-medium text-ink">{row.taskName || row.task_name || row.phaseTitle || row.phase_name || 'General'}</p>
           <p className="text-xs text-ink-subtle">
             {row.subcategory ? `${row.subcategory} · ` : ''}
             {row.siteName || row.site_name || 'Project Site'}

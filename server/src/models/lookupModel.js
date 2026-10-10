@@ -10,10 +10,30 @@ async function findAll() {
   const [tools] = await pool.query('SELECT id, code, name, type, description FROM tools WHERE status = "active" ORDER BY type, name');
   const [vendors] = await pool.query('SELECT id, name, contact_person, phone, email, gst_number FROM vendors WHERE status = "active" ORDER BY name');
 
+  // Fetch latest actual procurement cost per material (received orders first, then others)
+  const [procRates] = await pool.query(
+    `SELECT material_id, purchase_rate
+     FROM procurement_requests
+     WHERE purchase_rate IS NOT NULL AND purchase_rate > 0
+     ORDER BY (status = 'received') DESC, id DESC`
+  );
+  const procRateMap = {};
+  for (const r of procRates) {
+    if (!procRateMap[r.material_id]) {
+      procRateMap[r.material_id] = Number(r.purchase_rate);
+    }
+  }
+
+  // Attach procurement_rate to each material (0 if never procured)
+  const materialsWithRate = materials.map((m) => ({
+    ...m,
+    procurement_rate: procRateMap[m.id] || 0,
+  }));
+
   return {
     clients,
     contractors,
-    materials,
+    materials: materialsWithRate,
     tools,
     employees,
     vendors,

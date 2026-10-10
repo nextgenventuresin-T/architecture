@@ -22,6 +22,8 @@ import {
   MapPin,
   ClipboardList,
   CreditCard,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card, CardBody, CardHeader } from '../../../components/ui/Card';
@@ -32,9 +34,10 @@ import { hrApi } from '../../../api/hrApi';
 import { projectsApi } from '../../../api/projectsApi';
 import { formatCurrency, formatDate } from '../../../utils/format';
 import QuickAddWorkerModal from '../../../components/tasks/QuickAddWorkerModal';
+import EditWorkerModal from '../../../components/tasks/EditWorkerModal';
 
 export default function LabourDirectoryPage() {
-  // Main Top Tabs: 'daily_wage' | 'company_employee' | 'labour_diary'
+  // Main Top Tabs: 'daily_wage' | 'company_labour' | 'labour_diary'
   const [activeTab, setActiveTab] = useState('daily_wage');
 
   // Lookups (Projects & Contractors)
@@ -57,6 +60,14 @@ export default function LabourDirectoryPage() {
 
   // Quick Add Worker Modal
   const [showQuickAddModal, setShowQuickAddModal] = useState(false);
+
+  // Edit Worker Modal
+  const [selectedWorkerForEdit, setSelectedWorkerForEdit] = useState(null);
+
+  // Delete Worker State
+  const [workerToDelete, setWorkerToDelete] = useState(null);
+  const [isDeletingWorker, setIsDeletingWorker] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   // Work History Modal
   const [selectedWorker, setSelectedWorker] = useState(null);
@@ -118,7 +129,7 @@ export default function LabourDirectoryPage() {
     if (activeTab === 'labour_diary') return;
     setIsLoadingDir(true);
 
-    const workerType = 'labour';
+    const workerType = activeTab === 'company_labour' ? 'company_labour' : (activeTab === 'daily_wage' ? 'daily_wage' : 'all');
 
     hrApi.labourDirectory
       .list({
@@ -229,87 +240,85 @@ export default function LabourDirectoryPage() {
       });
   };
 
+  // Open Edit Worker Modal
+  const handleEditWorker = (worker) => {
+    setSelectedWorkerForEdit(worker);
+  };
+
+  // Prompt Worker Deletion Confirmation
+  const handleDeleteWorkerClick = (worker) => {
+    setWorkerToDelete(worker);
+    setDeleteError(null);
+  };
+
+  // Confirm Worker Deletion
+  const handleConfirmDeleteWorker = async () => {
+    if (!workerToDelete) return;
+    setIsDeletingWorker(true);
+    setDeleteError(null);
+    try {
+      const targetId = workerToDelete.workerId || workerToDelete.id;
+      await hrApi.labourDirectory.delete(targetId);
+      setWorkerToDelete(null);
+      loadDirectory();
+    } catch (err) {
+      console.error('Failed to delete worker:', err);
+      setDeleteError(err.response?.data?.message || err.message || 'Failed to delete worker.');
+    } finally {
+      setIsDeletingWorker(false);
+    }
+  };
+
   // Export Directory to CSV
   const handleExportDirectoryCSV = () => {
     if (!dirData.rows.length) return;
-    const isEmp = activeTab === 'company_employee';
+    const isCompany = activeTab === 'company_labour';
 
-    const headers = isEmp
-      ? [
-          'Employee ID',
-          'Full Name',
-          'Type',
-          'Designation',
-          'Department',
-          'Phone',
-          'Current Project',
-          'Current Site',
-          'Current Task',
-          'Start Date',
-          'End Date',
-          'Working Days',
-          'Status',
-          'Today Status',
-        ]
-      : [
-          'Worker Code',
-          'Full Name',
-          'Aadhaar Number',
-          'Trade / Skill',
-          'Phone',
-          'Contractor / Employer',
-          'Current Project',
-          'Current Site',
-          'Current Task',
-          'Start Date',
-          'End Date',
-          'Expected Days',
-          'Daily Wage (INR)',
-          'Status',
-          'Today Status',
-        ];
+    const headers = [
+      'Worker Code',
+      'Full Name',
+      'Classification',
+      'Aadhaar Number',
+      'Trade / Skill',
+      'Phone',
+      'Contractor / Employer',
+      'Current Project',
+      'Current Site',
+      'Current Task',
+      'Start Date',
+      'End Date',
+      'Expected Days',
+      'Daily Wage (INR)',
+      'Status',
+      'Today Status',
+    ];
 
     const csvRows = [headers.join(',')];
 
     for (const r of dirData.rows) {
-      const values = isEmp
-        ? [
-            `"${r.workerCode || ''}"`,
-            `"${r.fullName || ''}"`,
-            `"Company Employee"`,
-            `"${r.skillCategory || ''}"`,
-            `"${r.department || 'Operations'}"`,
-            `"${r.phone || ''}"`,
-            `"${r.currentProject || ''}"`,
-            `"${r.currentSite || ''}"`,
-            `"${r.currentTask || ''}"`,
-            `"${r.startDate ? formatDate(r.startDate) : ''}"`,
-            `"${r.endDate ? formatDate(r.endDate) : ''}"`,
-            `"${r.expectedDays || ''}"`,
-            `"${r.status || ''}"`,
-            `"${r.todayStatusLabel || ''}"`,
-          ]
-        : [
-            `"${r.workerCode || ''}"`,
-            `"${r.fullName || ''}"`,
-            `"${r.aadhaarNumber || ''}"`,
-            `"${r.skillCategory || ''}"`,
-            `"${r.phone || ''}"`,
-            `"${r.contractorName || ''}"`,
-            `"${r.currentProject || ''}"`,
-            `"${r.currentSite || ''}"`,
-            `"${r.currentTask || ''}"`,
-            `"${r.startDate ? formatDate(r.startDate) : ''}"`,
-            `"${r.endDate ? formatDate(r.endDate) : ''}"`,
-            `"${r.expectedDays || ''}"`,
-            `"${r.dailyRate || 0}"`,
-            `"${r.status || ''}"`,
-            `"${r.todayStatusLabel || ''}"`,
-          ];
+      const isCL = r.workerType === 'company_labour' || isCompany;
+      const values = [
+        `"${r.workerCode || ''}"`,
+        `"${r.fullName || ''}"`,
+        `"${isCL ? 'Company Labour (In-House)' : 'Daily Wage Worker'}"`,
+        `"${r.aadhaarNumber || ''}"`,
+        `"${r.skillCategory || ''}"`,
+        `"${r.phone || ''}"`,
+        `"${isCL ? 'Company Labour (In-House)' : (r.contractorName || '')}"`,
+        `"${r.currentProject || ''}"`,
+        `"${r.currentSite || ''}"`,
+        `"${r.currentTask || ''}"`,
+        `"${r.startDate ? formatDate(r.startDate) : ''}"`,
+        `"${r.endDate ? formatDate(r.endDate) : ''}"`,
+        `"${r.expectedDays || ''}"`,
+        `"${isCL ? '0.00' : (r.dailyRate || 0)}"`,
+        `"${r.status || ''}"`,
+        `"${r.todayStatusLabel || ''}"`,
+      ];
       csvRows.push(values.join(','));
     }
 
-    const filename = `${isEmp ? 'company-employees' : 'daily-wage-labour'}-${new Date().toISOString().slice(0, 10)}.csv`;
+    const filename = `${isCompany ? 'company-labour' : 'daily-wage-labour'}-${new Date().toISOString().slice(0, 10)}.csv`;
     const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -347,15 +356,16 @@ export default function LabourDirectoryPage() {
     for (const r of diaryData.rows) {
       const hours = Number(r.hours_worked || 8);
       const days = Number((hours / 8).toFixed(1));
-      const wage = Number(r.daily_wage || 0);
-      const earned = (hours / 8) * wage;
+      const isCompany = r.worker_type === 'company_labour' || r.is_company_labour;
+      const wage = isCompany ? 0 : Number(r.daily_wage || 0);
+      const earned = isCompany ? 0 : (hours / 8) * wage;
 
       const values = [
         `"${r.work_date ? formatDate(r.work_date) : ''}"`,
         `"${r.worker_code || ''}"`,
         `"${r.worker_name || ''}"`,
         `"${r.aadhaar_number || ''}"`,
-        `"${r.worker_type === 'company_employee' ? 'Company Employee' : 'Labour'}"`,
+        `"${isCompany ? 'Company Labour (In-House)' : 'Daily-Wage Labour'}"`,
         `"${r.labour_type || ''}"`,
         `"${r.project_name || ''}"`,
         `"${r.site_name || ''}"`,
@@ -365,7 +375,7 @@ export default function LabourDirectoryPage() {
         `"${days}"`,
         `"${wage}"`,
         `"${earned.toFixed(2)}"`,
-        `"${r.contractor_name || ''}"`,
+        `"${isCompany ? 'Company In-House' : (r.contractor_name || '')}"`,
         `"${(r.daily_remarks || '').replace(/"/g, '""')}"`,
       ];
       csvRows.push(values.join(','));
@@ -411,14 +421,14 @@ export default function LabourDirectoryPage() {
         description="Manage registered contractor labour, daily-wage workers, trade rates, and inspect the chronological Labour Diary across projects and sites."
         actions={
           <div className="flex items-center gap-2">
-            {activeTab === 'daily_wage' && (
+            {activeTab !== 'labour_diary' && (
               <Button
                 variant="primary"
                 onClick={() => setShowQuickAddModal(true)}
                 className="gap-1.5"
               >
                 <Plus className="h-4 w-4" />
-                Add Labour (New Worker)
+                {activeTab === 'company_labour' ? 'Add Company Labour' : 'Add Daily-Wage Worker'}
               </Button>
             )}
             <Button
@@ -465,6 +475,31 @@ export default function LabourDirectoryPage() {
           <button
             type="button"
             onClick={() => {
+              setActiveTab('company_labour');
+              setDirPage(1);
+            }}
+            className={`flex items-center gap-2 border-b-2 py-3 px-1 text-sm font-semibold transition-colors ${
+              activeTab === 'company_labour'
+                ? 'border-brand-600 text-brand-600'
+                : 'border-transparent text-ink-muted hover:border-line hover:text-ink'
+            }`}
+          >
+            <Users className="h-4 w-4" />
+            Company Labour (In-House)
+            <span
+              className={`ml-1.5 rounded-full px-2 py-0.5 text-xs ${
+                activeTab === 'company_labour'
+                  ? 'bg-brand-50 text-brand-700'
+                  : 'bg-canvas-subtle text-ink-subtle'
+              }`}
+            >
+              {activeTab === 'company_labour' ? dirData.total : '•'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
               setActiveTab('labour_diary');
               setDiaryPage(1);
             }}
@@ -490,7 +525,7 @@ export default function LabourDirectoryPage() {
       </div>
 
       {/* =========================================================================
-          TAB 1 & 2: DIRECTORY LISTINGS (Daily Wage OR Company Employee)
+          TAB 1 & 2: DIRECTORY LISTINGS (Daily Wage OR Company Labour)
           ========================================================================= */}
       {activeTab !== 'labour_diary' && (
         <div className="space-y-4">
@@ -506,21 +541,21 @@ export default function LabourDirectoryPage() {
                     </>
                   ) : (
                     <>
-                      <Briefcase className="h-4 w-4 text-indigo-600" />
-                      Company Internal Staff & Project Assignments
+                      <Users className="h-4 w-4 text-blue-600" />
+                      In-House Company Labour (Direct Workforce)
                     </>
                   )}
                 </h3>
                 <p className="mt-0.5 text-xs text-ink-muted">
                   {activeTab === 'daily_wage'
-                    ? 'Actual daily wage workers selectable for tasks. Daily wages calculate automatically: Days × Daily Wage = Labour Cost.'
-                    : 'Company employees assigned to site tasks. Track working days and activity; no daily wage is charged to project financials.'}
+                    ? 'Actual third-party and contractor daily-wage workers. Actual Labour Cost = Days Worked × Daily Wage in Project & Site Finance.'
+                    : 'Permanent in-house company labour (masons, helpers, bar benders). Track site tasks, days, and activity; ₹0 labour cost added to project budgets & finance.'}
                 </p>
               </div>
 
               <div className="flex items-center gap-3 text-xs">
                 <span className="font-semibold text-ink">
-                  Total {activeTab === 'daily_wage' ? 'Workers' : 'Employees'}: {dirData.total}
+                  Total {activeTab === 'daily_wage' ? 'Workers' : 'Company Labour'}: {dirData.total}
                 </span>
               </div>
             </div>
@@ -539,7 +574,7 @@ export default function LabourDirectoryPage() {
                     placeholder={
                       activeTab === 'daily_wage'
                         ? 'Search worker name, code, phone, Aadhaar, or trade...'
-                        : 'Search employee name, code, phone, department, or designation...'
+                        : 'Search company labour name, code, phone, Aadhaar, or trade...'
                     }
                     className="w-full rounded-lg border border-line pl-9 pr-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-none"
                   />
@@ -679,23 +714,12 @@ export default function LabourDirectoryPage() {
                 <thead className="bg-canvas-subtle border-b border-line text-ink-subtle font-semibold uppercase text-[11px]">
                   <tr>
                     <th className="py-3 px-4">
-                      {activeTab === 'daily_wage' ? 'Worker Name & Code' : 'Employee Name & Code'}
+                      {activeTab === 'daily_wage' ? 'Worker Name & Code' : 'Labour Name & Code'}
                     </th>
-                    {activeTab === 'daily_wage' ? (
-                      <>
-                        <th className="py-3 px-3">Aadhaar Number</th>
-                        <th className="py-3 px-3">Trade / Skill</th>
-                        <th className="py-3 px-3">Contact</th>
-                        <th className="py-3 px-3">Contractor</th>
-                      </>
-                    ) : (
-                      <>
-                        <th className="py-3 px-3">Designation / Role</th>
-                        <th className="py-3 px-3">Department</th>
-                        <th className="py-3 px-3">Contact</th>
-                        <th className="py-3 px-3">Affiliation</th>
-                      </>
-                    )}
+                    <th className="py-3 px-3">Aadhaar Number</th>
+                    <th className="py-3 px-3">Trade / Skill</th>
+                    <th className="py-3 px-3">Contact</th>
+                    <th className="py-3 px-3">{activeTab === 'company_labour' ? 'Employer' : 'Contractor'}</th>
                     <th className="py-3 px-3">Current Task Assignment</th>
                     <th className="py-3 px-3 text-center">Dates (Expected)</th>
                     <th className="py-3 px-3 text-right">Daily Rate</th>
@@ -733,61 +757,35 @@ export default function LabourDirectoryPage() {
                           </span>
                         </td>
 
-                        {activeTab === 'daily_wage' ? (
-                          <>
-                            {/* Aadhaar Number */}
-                            <td className="py-3 px-3 font-mono text-xs text-ink">
-                              {row.aadhaarNumber || <span className="text-ink-subtle font-sans">—</span>}
-                            </td>
+                        {/* Aadhaar Number */}
+                        <td className="py-3 px-3 font-mono text-xs text-ink">
+                          {row.aadhaarNumber || <span className="text-ink-subtle font-sans">—</span>}
+                        </td>
 
-                            {/* Trade / Skill */}
-                            <td className="py-3 px-3">
-                              <span className="font-medium text-ink">
-                                {row.skillCategory || 'General Labour'}
-                              </span>
-                            </td>
+                        {/* Trade / Skill */}
+                        <td className="py-3 px-3">
+                          <span className="font-medium text-ink">
+                            {row.skillCategory || 'General Labour'}
+                          </span>
+                        </td>
 
-                            {/* Contact */}
-                            <td className="py-3 px-3 font-mono text-ink-muted">
-                              {row.phone || <span className="text-ink-subtle font-sans">—</span>}
-                            </td>
+                        {/* Contact */}
+                        <td className="py-3 px-3 font-mono text-ink-muted">
+                          {row.phone || <span className="text-ink-subtle font-sans">—</span>}
+                        </td>
 
-                            {/* Contractor */}
-                            <td className="py-3 px-3">
-                              <span className="text-ink-muted font-medium">
-                                {row.contractorName || '—'}
-                              </span>
-                            </td>
-                          </>
-                        ) : (
-                          <>
-                            {/* Designation */}
-                            <td className="py-3 px-3">
-                              <span className="font-medium text-ink">
-                                {row.skillCategory || 'Staff'}
-                              </span>
-                            </td>
-
-                            {/* Department */}
-                            <td className="py-3 px-3">
-                              <span className="inline-block px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-700 font-medium">
-                                {row.department || 'Operations'}
-                              </span>
-                            </td>
-
-                            {/* Contact */}
-                            <td className="py-3 px-3 font-mono text-ink-muted">
-                              {row.phone || <span className="text-ink-subtle font-sans">—</span>}
-                            </td>
-
-                            {/* Company Internal */}
-                            <td className="py-3 px-3">
-                              <span className="text-indigo-700 font-semibold text-[11px]">
-                                Company Internal
-                              </span>
-                            </td>
-                          </>
-                        )}
+                        {/* Contractor / Employer */}
+                        <td className="py-3 px-3">
+                          {activeTab === 'company_labour' || row.isCompanyLabour || row.workerType === 'company_labour' ? (
+                            <span className="inline-block px-2 py-0.5 rounded text-[11px] bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+                              Company Labour (In-House)
+                            </span>
+                          ) : (
+                            <span className="text-ink-muted font-medium">
+                              {row.contractorName || 'Independent'}
+                            </span>
+                          )}
+                        </td>
 
                         {/* Current Task Assignment */}
                         <td className="py-3 px-3">
@@ -832,8 +830,10 @@ export default function LabourDirectoryPage() {
 
                         {/* Daily Rate */}
                         <td className="py-3 px-3 text-right tabular-nums font-semibold text-ink">
-                          {activeTab === 'company_employee' ? (
-                            <span className="text-xs text-ink-subtle italic font-sans">— (Company Staff)</span>
+                          {activeTab === 'company_labour' || row.isCompanyLabour || row.workerType === 'company_labour' ? (
+                            <span className="text-xs text-blue-700 font-semibold bg-blue-50 border border-blue-200 px-2 py-0.5 rounded font-sans">
+                              ₹0 (In-House)
+                            </span>
                           ) : (
                             formatCurrency(row.dailyRate)
                           )}
@@ -860,15 +860,38 @@ export default function LabourDirectoryPage() {
 
                         {/* Actions */}
                         <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => handleViewHistory(row)}
-                            className="h-7 text-xs px-2 gap-1"
-                          >
-                            <History className="h-3.5 w-3.5" />
-                            Work History
-                          </Button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleViewHistory(row)}
+                              className="h-7 text-xs px-2 gap-1 text-ink-muted hover:text-ink"
+                              title="View Work History"
+                            >
+                              <History className="h-3.5 w-3.5" />
+                              <span className="hidden xl:inline">History</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleEditWorker(row)}
+                              className="h-7 text-xs px-2 gap-1 text-ink-muted hover:text-brand-600 hover:border-brand-300"
+                              title="Edit Worker Details"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              <span className="hidden xl:inline">Edit</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleDeleteWorkerClick(row)}
+                              className="h-7 text-xs px-2 gap-1 text-rose-600 hover:bg-rose-50 hover:border-rose-200"
+                              title="Delete Worker"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span className="hidden xl:inline">Delete</span>
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -1174,8 +1197,9 @@ export default function LabourDirectoryPage() {
                     diaryData.rows.map((row) => {
                       const hours = Number(row.hours_worked || 8);
                       const days = Number((hours / 8).toFixed(1));
-                      const wage = Number(row.daily_wage || 0);
-                      const earned = (hours / 8) * wage;
+                      const isCompany = row.worker_type === 'company_labour' || row.is_company_labour;
+                      const wage = isCompany ? 0 : Number(row.daily_wage || 0);
+                      const earned = isCompany ? 0 : (hours / 8) * wage;
 
                       return (
                         <tr key={row.id} className="hover:bg-canvas-subtle/50 transition-colors">
@@ -1199,13 +1223,13 @@ export default function LabourDirectoryPage() {
 
                           {/* Type */}
                           <td className="py-3 px-3 whitespace-nowrap">
-                            {row.worker_type === 'company_employee' ? (
-                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 border border-indigo-200 text-indigo-700">
-                                Staff
+                            {isCompany ? (
+                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 border border-blue-200 text-blue-700">
+                                Company Labour
                               </span>
                             ) : (
-                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 border border-blue-200 text-blue-700">
-                                Labour
+                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 border border-emerald-200 text-emerald-700">
+                                Daily Wage
                               </span>
                             )}
                           </td>
@@ -1236,8 +1260,8 @@ export default function LabourDirectoryPage() {
 
                           {/* Wage Rate */}
                           <td className="py-3 px-3 text-right tabular-nums font-mono text-ink">
-                            {row.worker_type === 'company_employee' ? (
-                              <span className="text-ink-subtle text-xs">—</span>
+                            {isCompany ? (
+                              <span className="text-blue-700 text-xs font-semibold">₹0 (In-House)</span>
                             ) : (
                               formatCurrency(wage)
                             )}
@@ -1245,8 +1269,8 @@ export default function LabourDirectoryPage() {
 
                           {/* Earned Total */}
                           <td className="py-3 px-3 text-right font-bold tabular-nums text-emerald-700 whitespace-nowrap">
-                            {row.worker_type === 'company_employee' ? (
-                              <span className="text-ink-subtle font-normal text-xs">—</span>
+                            {isCompany ? (
+                              <span className="text-ink-subtle font-normal text-xs">₹0</span>
                             ) : (
                               formatCurrency(earned)
                             )}
@@ -1254,7 +1278,11 @@ export default function LabourDirectoryPage() {
 
                           {/* Contractor */}
                           <td className="py-3 px-3 text-ink-muted whitespace-nowrap">
-                            {row.contractor_name || 'Company Internal'}
+                            {isCompany ? (
+                              <span className="text-blue-700 font-medium text-xs">In-House</span>
+                            ) : (
+                              row.contractor_name || 'Independent'
+                            )}
                           </td>
 
                           {/* Remarks */}
@@ -1315,8 +1343,8 @@ export default function LabourDirectoryPage() {
                 <div>
                   <h3 className="text-base font-bold text-ink flex items-center gap-2">
                     {selectedWorker.fullName}
-                    <Badge tone={selectedWorker.workerType === 'company_employee' ? 'info' : 'brand'}>
-                      {selectedWorker.workerType === 'company_employee' ? 'Company Employee' : 'Daily Wage Labour'}
+                    <Badge tone={selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour ? 'info' : 'brand'}>
+                      {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour ? 'Company Labour (In-House)' : 'Daily Wage Labour'}
                     </Badge>
                   </h3>
                   <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-ink-muted">
@@ -1329,27 +1357,26 @@ export default function LabourDirectoryPage() {
                       </span>
                     )}
                     <span>
-                      Trade / Designation:{' '}
+                      Trade / Skill:{' '}
                       <strong className="text-ink">{selectedWorker.skillCategory || 'General'}</strong>
                     </span>
-                    {selectedWorker.department && (
-                      <span>
-                        Department: <strong className="text-ink">{selectedWorker.department}</strong>
-                      </span>
-                    )}
                     {selectedWorker.phone && (
                       <span className="flex items-center gap-1 font-mono">
                         <Phone className="h-3 w-3" /> {selectedWorker.phone}
                       </span>
                     )}
                     <span>
-                      Employer / Org:{' '}
-                      <strong className="text-ink">{selectedWorker.contractorName || 'Company Internal'}</strong>
+                      Employer / Contractor:{' '}
+                      <strong className="text-ink">
+                        {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour
+                          ? 'Company Labour (In-House)'
+                          : (selectedWorker.contractorName || 'Independent')}
+                      </strong>
                     </span>
                   </div>
                 </div>
 
-                {selectedWorker.workerType !== 'company_employee' && (
+                {!(selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour) && (
                   <div className="text-right">
                     <p className="text-[11px] text-ink-subtle">Base Daily Wage</p>
                     <p className="text-lg font-bold text-emerald-700">
@@ -1383,11 +1410,11 @@ export default function LabourDirectoryPage() {
                 </div>
                 <div className="rounded-lg border border-line bg-white p-2.5">
                   <p className="text-[11px] text-ink-subtle">
-                    {selectedWorker.workerType === 'company_employee' ? 'Labour Cost' : 'Total Wages Earned'}
+                    {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour ? 'Project Labour Cost' : 'Total Wages Earned'}
                   </p>
                   <p className="text-lg font-bold text-emerald-700">
-                    {selectedWorker.workerType === 'company_employee'
-                      ? '₹0 (Staff)'
+                    {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour
+                      ? '₹0 (In-House)'
                       : formatCurrency(historyData.summary?.totalEarned || 0)}
                   </p>
                 </div>
@@ -1435,12 +1462,12 @@ export default function LabourDirectoryPage() {
                             {item.daysWorked} d
                           </td>
                           <td className="p-2.5 text-right font-mono tabular-nums">
-                            {selectedWorker.workerType === 'company_employee'
+                            {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour
                               ? '—'
                               : formatCurrency(item.dailyWage)}
                           </td>
                           <td className="p-2.5 text-right font-bold text-emerald-700 tabular-nums">
-                            {selectedWorker.workerType === 'company_employee'
+                            {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour
                               ? '₹0'
                               : formatCurrency(item.totalCost)}
                           </td>
@@ -1501,12 +1528,12 @@ export default function LabourDirectoryPage() {
                             </span>
                           </td>
                           <td className="p-2.5 text-right font-mono tabular-nums">
-                            {selectedWorker.workerType === 'company_employee'
+                            {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour
                               ? '—'
                               : formatCurrency(log.dailyWage)}
                           </td>
                           <td className="p-2.5 text-right font-bold text-emerald-700 tabular-nums">
-                            {selectedWorker.workerType === 'company_employee'
+                            {selectedWorker.workerType === 'company_labour' || selectedWorker.isCompanyLabour
                               ? '₹0'
                               : formatCurrency(log.earnedAmount)}
                           </td>
@@ -1527,14 +1554,101 @@ export default function LabourDirectoryPage() {
         )}
       </Modal>
 
-      {/* QUICK ADD DAILY WAGE WORKER MODAL */}
+      {/* QUICK ADD WORKER MODAL */}
       <QuickAddWorkerModal
         isOpen={showQuickAddModal}
         onClose={() => setShowQuickAddModal(false)}
+        defaultWorkerType={activeTab === 'company_labour' ? 'company_labour' : 'daily_wage'}
         onCreated={() => {
           loadDirectory();
         }}
       />
+
+      {/* EDIT WORKER MODAL */}
+      <EditWorkerModal
+        isOpen={Boolean(selectedWorkerForEdit)}
+        onClose={() => setSelectedWorkerForEdit(null)}
+        worker={selectedWorkerForEdit}
+        contractors={lookups.contractors}
+        onSaved={() => {
+          loadDirectory();
+        }}
+      />
+
+      {/* DELETE WORKER CONFIRMATION MODAL */}
+      <Modal
+        isOpen={Boolean(workerToDelete)}
+        onClose={() => {
+          if (!isDeletingWorker) setWorkerToDelete(null);
+        }}
+        title="Delete Worker"
+        description="Are you sure you want to delete this worker from the directory?"
+      >
+        {workerToDelete && (
+          <div className="space-y-4">
+            {deleteError && (
+              <div className="rounded-lg bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="rounded-xl border border-line bg-canvas p-3.5 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-ink text-sm">{workerToDelete.fullName}</span>
+                <span className="font-mono text-xs text-ink-subtle">
+                  {workerToDelete.workerCode || `ID: #${workerToDelete.workerId}`}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+                <span>
+                  Trade: <strong className="text-ink">{workerToDelete.skillCategory || 'General Labour'}</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Classification:{' '}
+                  <strong
+                    className={
+                      workerToDelete.workerType === 'company_labour' || workerToDelete.isCompanyLabour
+                        ? 'text-blue-700'
+                        : 'text-emerald-700'
+                    }
+                  >
+                    {workerToDelete.workerType === 'company_labour' || workerToDelete.isCompanyLabour
+                      ? 'Company Labour (In-House)'
+                      : 'Daily-Wage Worker'}
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-ink-muted leading-relaxed">
+              This action will permanently delete this worker from active workforce listings.
+              <span className="block mt-1 text-ink-subtle">
+                Historical work logs and financial journal entries are safely retained with unlinked worker ID to preserve past project costs and audit records.
+              </span>
+            </p>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-line">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setWorkerToDelete(null)}
+                disabled={isDeletingWorker}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleConfirmDeleteWorker}
+                disabled={isDeletingWorker}
+                className="bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                {isDeletingWorker ? 'Deleting…' : 'Yes, Delete Worker'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

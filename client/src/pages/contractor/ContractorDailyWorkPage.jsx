@@ -26,6 +26,7 @@ import {
   FileSpreadsheet,
   DollarSign,
   AlertTriangle,
+  Wrench,
 } from 'lucide-react';
 import PageHeader from '../../components/layout/PageHeader';
 import { Card, CardHeader, CardBody } from '../../components/ui/Card';
@@ -39,6 +40,7 @@ import { dailyWorkApi } from '../../api/dailyWorkApi';
 import { financeApi } from '../../api/financeApi';
 import { tasksApi } from '../../api/tasksApi';
 import { hrApi } from '../../api/hrApi';
+import { toolApi } from '../../api/toolApi';
 import DailyWorkDetailModal from '../../components/dailyWork/DailyWorkDetailModal';
 import { formatDate, formatNumber, formatCurrency } from '../../utils/format';
 
@@ -49,6 +51,7 @@ export default function ContractorDailyWorkPage() {
   const initialProjectId = searchParams.get('projectId');
   const initialSiteId = searchParams.get('siteId');
   const initialTaskId = searchParams.get('taskId');
+  const initialToolId = searchParams.get('toolId');
   const initialTab = searchParams.get('tab') || 'table';
 
   // Active view tab: 'table' or 'form'
@@ -68,8 +71,18 @@ export default function ContractorDailyWorkPage() {
 
   // Material usage state from contractor warehouse
   const [inventory, setInventory] = useState([]);
+  // Task-wise: only material procured for the selected task (and still unused) can be logged.
+  const [taskInventory, setTaskInventory] = useState([]);
   const [selectedMaterialId, setSelectedMaterialId] = useState('');
   const [quantityUsed, setQuantityUsed] = useState('');
+
+  // Machine / Tool usage state
+  const [toolsList, setToolsList] = useState([]);
+  const [selectedToolId, setSelectedToolId] = useState(initialToolId || '');
+  const [toolCost, setToolCost] = useState('');
+  const [toolRemarks, setToolRemarks] = useState('');
+
+  // Miscellaneous expense state
   const [miscDescription, setMiscDescription] = useState('');
   const [miscAmount, setMiscAmount] = useState('');
   const [miscRemarks, setMiscRemarks] = useState('');
@@ -106,6 +119,13 @@ export default function ContractorDailyWorkPage() {
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
 
+  useEffect(() => {
+    setSelectedMaterialId('');
+    setQuantityUsed('');
+    if (!taskId) { setTaskInventory([]); return; }
+    dailyWorkApi.taskMaterials(taskId).then(setTaskInventory).catch(() => setTaskInventory([]));
+  }, [taskId]);
+
   const loadInventory = useCallback(() => {
     financeApi
       .contractorInventory()
@@ -115,6 +135,7 @@ export default function ContractorDailyWorkPage() {
 
   useEffect(() => {
     loadInventory();
+    if (taskId) dailyWorkApi.taskMaterials(taskId).then(setTaskInventory).catch(() => {});
   }, [loadInventory]);
 
   // Load workforce lookup for adding any other available worker
@@ -128,6 +149,17 @@ export default function ContractorDailyWorkPage() {
           setWorkforceLookupList([]);
         });
     }
+  }, []);
+
+  // Load available tools master list
+  useEffect(() => {
+    toolApi
+      .list({ pageSize: 100 })
+      .then((data) => setToolsList(data?.tools || []))
+      .catch((err) => {
+        console.error('Error fetching tools list:', err);
+        setToolsList([]);
+      });
   }, []);
 
   // Load contractor's assigned projects
@@ -227,7 +259,7 @@ export default function ContractorDailyWorkPage() {
             aadhaarNumber: l.aadhaarNumber || l.person_aadhaar || null,
             labourType: l.trade || l.labourType || l.skillTrade || 'General Labour',
             hoursWorked: 8,
-            dailyWage: (l.workerType === 'company_employee' || String(l.labourType).toLowerCase().includes('company')) ? 0 : Number(l.dailyWage || l.daily_wage || 750),
+            dailyWage: (l.workerType === 'company_labour' || l.workerType === 'company_employee' || l.isCompanyLabour || String(l.labourType).toLowerCase().includes('company')) ? 0 : Number(l.dailyWage || l.daily_wage || 750),
             workPerformed: '',
             isPresent: true,
           }));
@@ -275,9 +307,9 @@ export default function ContractorDailyWorkPage() {
         workerType: worker.workerType,
         workerName: worker.name,
         workerCode: worker.code || '',
-        labourType: worker.trade || (worker.workerType === 'company_employee' ? 'Company Employee' : 'Labour'),
+        labourType: worker.trade || (worker.workerType === 'company_labour' ? 'Company Labour' : 'Labour'),
         hoursWorked: 8,
-        dailyWage: Number(worker.wage || 0),
+        dailyWage: (worker.workerType === 'company_labour' || worker.workerType === 'company_employee' || worker.isCompanyLabour || String(worker.trade || '').toLowerCase().includes('company')) ? 0 : Number(worker.wage || 0),
         workPerformed: '',
         isPresent: true,
       },
@@ -291,7 +323,7 @@ export default function ContractorDailyWorkPage() {
       ...prev,
       {
         workerId: null,
-        workerType: 'labour',
+        workerType: 'daily_wage',
         workerName: '',
         workerCode: '',
         labourType: 'Labour',
@@ -351,7 +383,7 @@ export default function ContractorDailyWorkPage() {
   }
 
   // Live calculation of spending for this update
-  const selectedMaterial = inventory.find((m) => String(m.material_id) === String(selectedMaterialId));
+  const selectedMaterial = taskInventory.find((m) => String(m.material_id) === String(selectedMaterialId));
   const liveMaterialCost = useMemo(() => {
     if (!selectedMaterialId || !quantityUsed || Number(quantityUsed) <= 0) return 0;
     const rate = Number(selectedMaterial?.costPerUnit || selectedMaterial?.cost_per_unit || selectedMaterial?.default_rate || selectedMaterial?.defaultRate || 0);
@@ -362,19 +394,23 @@ export default function ContractorDailyWorkPage() {
     return miscAmount && Number(miscAmount) > 0 ? Number(miscAmount) : 0;
   }, [miscAmount]);
 
+  const liveToolCost = useMemo(() => {
+    return toolCost && Number(toolCost) > 0 ? Number(toolCost) : 0;
+  }, [toolCost]);
+
   const liveLabourCost = useMemo(() => {
     return workers
       .filter((w) => w.isPresent !== false && w.workerName && w.workerName.trim())
       .reduce((sum, w) => {
-        const isEmployee = w.workerType === 'company_employee' || String(w.labourType || '').toLowerCase().includes('company');
-        if (isEmployee) return sum;
+        const isCompany = w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour || String(w.labourType || '').toLowerCase().includes('company');
+        if (isCompany) return sum;
         const hours = Number(w.hoursWorked || 8);
         const wage = Number(w.dailyWage || 0);
         return sum + (hours / 8) * wage;
       }, 0);
   }, [workers]);
 
-  const liveUpdateTotal = Number((liveMaterialCost + liveMiscCost + liveLabourCost).toFixed(2));
+  const liveUpdateTotal = Number((liveMaterialCost + liveMiscCost + liveLabourCost + liveToolCost).toFixed(2));
 
   // Current task budget and actuals
   const taskBudgetUtilization = currentTaskDetail?.budgetUtilization;
@@ -443,16 +479,19 @@ export default function ContractorDailyWorkPage() {
         formData.append(
           'workers',
           JSON.stringify(
-            presentWorkers.map((w) => ({
-              worker_id: w.workerId || null,
-              worker_type: w.workerType || 'labour',
-              worker_name: w.workerName.trim(),
-              worker_code: w.workerCode || null,
-              labour_type: w.labourType || 'Labour',
-              hours_worked: Number(w.hoursWorked || 8),
-              daily_wage: Number(w.dailyWage || 0),
-              work_performed: w.workPerformed ? w.workPerformed.trim() : null,
-            }))
+            presentWorkers.map((w) => {
+              const isCompany = w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour || String(w.labourType || '').toLowerCase().includes('company');
+              return {
+                worker_id: w.workerId || null,
+                worker_type: isCompany ? 'company_labour' : (w.workerType || 'daily_wage'),
+                worker_name: w.workerName.trim(),
+                worker_code: w.workerCode || null,
+                labour_type: w.labourType || (isCompany ? 'Company Labour' : 'Labour'),
+                hours_worked: Number(w.hoursWorked || 8),
+                daily_wage: isCompany ? 0 : Number(w.dailyWage || 0),
+                work_performed: w.workPerformed ? w.workPerformed.trim() : null,
+              };
+            })
           )
         );
       }
@@ -467,6 +506,17 @@ export default function ContractorDailyWorkPage() {
         formData.append('photos', photo);
       });
 
+      if (selectedToolId && Number(toolCost) > 0) {
+        const selTool = toolsList.find((t) => String(t.id) === String(selectedToolId));
+        formData.append('tool_id', selectedToolId);
+        formData.append('tool_name', selTool ? selTool.name : '');
+        formData.append('tool_cost', Number(toolCost));
+        if (toolRemarks.trim()) formData.append('tool_remarks', toolRemarks.trim());
+      } else if (Number(toolCost) > 0) {
+        formData.append('tool_cost', Number(toolCost));
+        if (toolRemarks.trim()) formData.append('tool_remarks', toolRemarks.trim());
+      }
+
       if (miscAmount && Number(miscAmount) > 0) {
         formData.append('misc_amount', Number(miscAmount));
         formData.append('misc_description', miscDescription);
@@ -475,12 +525,15 @@ export default function ContractorDailyWorkPage() {
 
       const res = await dailyWorkApi.create(formData);
 
-      setSuccessMsg('Daily work update, worker logs, and material usage recorded successfully!');
+      setSuccessMsg('Daily work update, worker logs, material usage, tool costs, and misc expenses recorded successfully!');
       setWorkDone('');
       setRemarks('');
       setExcessReason('');
       setSelectedMaterialId('');
       setQuantityUsed('');
+      setSelectedToolId('');
+      setToolCost('');
+      setToolRemarks('');
       setMiscDescription('');
       setMiscAmount('');
       setMiscRemarks('');
@@ -489,6 +542,7 @@ export default function ContractorDailyWorkPage() {
       setPreviewUrls([]);
       loadUpdates();
       loadInventory();
+      if (taskId) dailyWorkApi.taskMaterials(taskId).then(setTaskInventory).catch(() => {});
 
       // Switch to table view to see the new record
       setActiveTab('table');
@@ -1109,11 +1163,15 @@ export default function ContractorDailyWorkPage() {
                                 <div>
                                   <div className="font-semibold text-ink">{w.name}</div>
                                   <div className="text-[10px] text-ink-subtle">
-                                    {w.trade || (w.workerType === 'company_employee' ? 'Employee' : 'Labour')}
+                                    {w.trade || (w.workerType === 'company_labour' || w.isCompanyLabour ? 'Company Labour' : 'Labour')}
                                   </div>
                                 </div>
                                 <span className="text-[10px] font-mono text-ink-muted">
-                                  {w.workerType === 'company_employee' ? 'Staff' : formatCurrency(w.wage || 0)}
+                                  {w.workerType === 'company_labour' || w.isCompanyLabour ? (
+                                    <span className="text-blue-700 font-semibold">₹0 (In-House)</span>
+                                  ) : (
+                                    formatCurrency(w.wage || 0)
+                                  )}
                                 </span>
                               </button>
                             ))}
@@ -1123,6 +1181,71 @@ export default function ContractorDailyWorkPage() {
                     </div>
                   </div>
 
+                  {/* Task Labour Budget & Planning Breakdown (Requirement 4) */}
+                  {currentTaskDetail && (
+                    <div className="rounded-xl border border-blue-200/90 bg-blue-50/40 p-3.5 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-blue-200/60 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <Users className="h-4 w-4 text-blue-700" />
+                          <span className="text-xs font-bold text-blue-950">
+                            Task Labour Budget & Tracking (Admin Planned)
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-blue-800">
+                          Formula: Actual Labour Cost = Days Worked × Actual Daily Wage
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-xs">
+                        <div className="rounded-lg bg-white p-2 border border-blue-100">
+                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Planned Labour Budget</span>
+                          <p className="mt-0.5 font-bold text-ink">
+                            {formatCurrency(currentTaskDetail.labourSummary?.plannedLabourCost || currentTaskDetail.labour_budget || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-white p-2 border border-blue-100">
+                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Actual Labour Used</span>
+                          <p className="mt-0.5 font-bold text-ink-muted">
+                            {formatCurrency(currentTaskDetail.labourSummary?.actualLabourCost || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-white p-2 border border-blue-100">
+                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Remaining Labour Budget</span>
+                          <p className="mt-0.5 font-bold text-emerald-700">
+                            {formatCurrency(currentTaskDetail.labourSummary?.remainingLabourBudget || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-white p-2 border border-blue-100">
+                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Days & Workers</span>
+                          <p className="mt-0.5 font-semibold text-ink text-[11px]">
+                            {currentTaskDetail.labourSummary?.daysWorked || 0} / {currentTaskDetail.labourSummary?.daysPlanned || currentTaskDetail.duration_days || 0} days worked
+                          </p>
+                          <p className="text-[10px] text-ink-subtle">
+                            {currentTaskDetail.labourSummary?.workersWorked || 0} / {currentTaskDetail.labourSummary?.workersPlanned || (currentTaskDetail.labour?.length || 0)} workers active
+                          </p>
+                        </div>
+                      </div>
+
+                      {currentTaskDetail.labour && currentTaskDetail.labour.length > 0 && (
+                        <div className="rounded-lg bg-white/80 p-2 border border-blue-100 text-[11px]">
+                          <span className="font-semibold text-blue-900 mr-2">Admin Planned Labour:</span>
+                          <div className="inline-flex flex-wrap gap-2 mt-1">
+                            {currentTaskDetail.labour.map((pl, plIdx) => (
+                              <span key={plIdx} className="rounded bg-blue-100/60 px-2 py-0.5 text-blue-900 border border-blue-200">
+                                <strong>{pl.labourType || 'Labour'}</strong>: {pl.workerCount || 1} worker{pl.workerCount > 1 ? 's' : ''} × {pl.workingDays || 0} days @ {formatCurrency(pl.dailyWage || 0)}/day ({formatCurrency(pl.totalCost || 0)})
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-1 text-[11px] text-blue-900">
+                        <span>Today&apos;s Wages: <strong>+{formatCurrency(liveLabourCost)}</strong></span>
+                        <span>Projected Remaining Budget after today: <strong className="text-emerald-700 font-bold">{formatCurrency(Math.max(0, (currentTaskDetail.labourSummary?.remainingLabourBudget || 0) - liveLabourCost))}</strong></span>
+                      </div>
+                    </div>
+                  )}
+
                   {workers.length === 0 ? (
                     <div className="p-4 rounded-lg border border-dashed border-line bg-white text-center text-xs text-ink-subtle">
                       No workers added yet. Use the buttons above to record workers who worked today.
@@ -1131,8 +1254,10 @@ export default function ContractorDailyWorkPage() {
                     <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
                       {workers.map((worker, idx) => {
                         const isPresent = worker.isPresent !== false;
-                        const isEmployee =
+                        const isCompanyLabour =
+                          worker.workerType === 'company_labour' ||
                           worker.workerType === 'company_employee' ||
+                          worker.isCompanyLabour ||
                           (worker.labourType || '').toLowerCase().includes('company');
 
                         return (
@@ -1161,8 +1286,8 @@ export default function ContractorDailyWorkPage() {
                                 <span className="text-xs font-bold text-ink">
                                   {worker.workerName || 'Worker #' + (idx + 1)}
                                 </span>
-                                <Badge tone={isEmployee ? 'info' : 'neutral'}>
-                                  {isEmployee ? 'Company Employee' : 'Labour'}
+                                <Badge tone={isCompanyLabour ? 'info' : 'neutral'}>
+                                  {isCompanyLabour ? 'Company Labour' : 'Labour'}
                                 </Badge>
                                 {!isPresent && (
                                   <span className="text-[10px] font-semibold text-rose-600">
@@ -1230,12 +1355,15 @@ export default function ContractorDailyWorkPage() {
                                   <input
                                     type="number"
                                     min="0"
-                                    value={worker.dailyWage}
-                                    disabled={isEmployee}
+                                    value={isCompanyLabour ? 0 : worker.dailyWage}
+                                    disabled={isCompanyLabour}
                                     onChange={(e) => handleUpdateWorker(idx, 'dailyWage', Number(e.target.value))}
-                                    placeholder={isEmployee ? '—' : '600'}
-                                    className="w-full rounded border border-line px-2 py-1 text-xs text-ink disabled:bg-canvas"
+                                    placeholder={isCompanyLabour ? '0' : '600'}
+                                    className="w-full rounded border border-line px-2 py-1 text-xs text-ink disabled:bg-canvas disabled:text-ink-muted"
                                   />
+                                  {isCompanyLabour && (
+                                    <span className="text-[10px] text-blue-700 font-medium">₹0 (Company Labour - No Project Cost)</span>
+                                  )}
                                 </div>
 
                                 <div className="sm:col-span-4">
@@ -1273,12 +1401,12 @@ export default function ContractorDailyWorkPage() {
                   )}
                 </div>
 
-                {/* Material / Tool Usage from Warehouse Inventory */}
+                {/* Material Usage from Warehouse Inventory */}
                 <div className="rounded-xl border border-amber-200/90 bg-amber-50/40 p-3.5 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <Package className="h-4 w-4 text-amber-700" />
-                      <span className="text-xs font-semibold text-ink">Material / Tool Used Today</span>
+                      <span className="text-xs font-semibold text-ink">Material Used Today</span>
                     </div>
                     <span className="text-[11px] text-ink-subtle">Deducted from your warehouse stock</span>
                   </div>
@@ -1286,7 +1414,7 @@ export default function ContractorDailyWorkPage() {
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <label className="block text-xs font-medium text-ink mb-1">
-                        Select Material / Tool
+                        Select Material
                       </label>
                       <select
                         value={selectedMaterialId}
@@ -1297,21 +1425,21 @@ export default function ContractorDailyWorkPage() {
                         className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
                       >
                         <option value="">-- No material used today --</option>
-                        {inventory.map((item) => (
+                        {taskInventory.map((item) => (
                           <option key={item.material_id} value={item.material_id}>
                             {item.name} ({item.code}) — {formatNumber(item.availableStock)} {item.unit} available
                           </option>
                         ))}
                       </select>
-                      {inventory.length === 0 && (
+                      {taskInventory.length === 0 && (
                         <p className="mt-1 text-[10px] text-ink-subtle">
-                          No materials currently available in your warehouse.
+                          {taskId ? 'No material has been procured and received for this task. Raise a procurement request for this task first.' : 'Select the task first - material is used task-wise.'}
                         </p>
                       )}
                     </div>
 
                     {selectedMaterialId && (() => {
-                      const sel = inventory.find((m) => String(m.material_id) === String(selectedMaterialId));
+                      const sel = taskInventory.find((m) => String(m.material_id) === String(selectedMaterialId));
                       if (!sel) return null;
                       const isOver = Number(quantityUsed) > sel.availableStock;
                       return (
@@ -1350,6 +1478,119 @@ export default function ContractorDailyWorkPage() {
                         </div>
                       );
                     })()}
+                  </div>
+                </div>
+
+                {/* Machines / Tools Used Today (Requirement 2 & 3) */}
+                <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/40 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Wrench className="h-4 w-4 text-indigo-700" />
+                      <span className="text-xs font-semibold text-ink">Machines / Tools Used Today</span>
+                    </div>
+                    <span className="text-[11px] text-ink-subtle">Equipment allocated to this task</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1">
+                        Select Machine / Tool
+                      </label>
+                      <select
+                        value={selectedToolId}
+                        onChange={(e) => setSelectedToolId(e.target.value)}
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      >
+                        <option value="">-- No machine/tool used --</option>
+                        {toolsList.map((tool) => (
+                          <option key={tool.id} value={tool.id}>
+                            {tool.name} ({tool.code}) — {tool.type}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1">
+                        Machine / Tool Cost (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={toolCost}
+                        onChange={(e) => setToolCost(e.target.value)}
+                        placeholder="e.g. 1500 (rental/fuel/operational)"
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1">
+                        Equipment Remarks / Hours
+                      </label>
+                      <input
+                        type="text"
+                        value={toolRemarks}
+                        onChange={(e) => setToolRemarks(e.target.value)}
+                        placeholder="e.g. 6 hrs excavator operation, fuel refilled"
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Miscellaneous Expenses Today (Requirement 3) */}
+                <div className="rounded-xl border border-emerald-200/90 bg-emerald-50/40 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <DollarSign className="h-4 w-4 text-emerald-700" />
+                      <span className="text-xs font-semibold text-ink">Miscellaneous Expenses Today</span>
+                    </div>
+                    <span className="text-[11px] text-ink-subtle">Incidental site expenses</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1">
+                        Expense Description
+                      </label>
+                      <input
+                        type="text"
+                        value={miscDescription}
+                        onChange={(e) => setMiscDescription(e.target.value)}
+                        placeholder="e.g. Local transport, courier, tea/water..."
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1">
+                        Amount (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={miscAmount}
+                        onChange={(e) => setMiscAmount(e.target.value)}
+                        placeholder="e.g. 500"
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1">
+                        Receipt / Reference Notes
+                      </label>
+                      <input
+                        type="text"
+                        value={miscRemarks}
+                        onChange={(e) => setMiscRemarks(e.target.value)}
+                        placeholder="e.g. Cash paid with voucher/bill"
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -1453,7 +1694,7 @@ export default function ContractorDailyWorkPage() {
                         <span className="text-[10px] uppercase font-medium text-brand-700">Today's New Cost</span>
                         <p className="mt-0.5 font-bold text-brand-700 tabular-nums">+{formatCurrency(liveUpdateTotal)}</p>
                         <div className="text-[10px] text-ink-subtle mt-0.5 truncate">
-                          Mat: {formatCurrency(liveMaterialCost)} | Lab: {formatCurrency(liveLabourCost)}
+                          Mat: {formatCurrency(liveMaterialCost)} | Lab: {formatCurrency(liveLabourCost)} | Tools: {formatCurrency(liveToolCost)} | Misc: {formatCurrency(liveMiscCost)}
                         </div>
                       </div>
                       <div className={`rounded-lg border p-2.5 ${isOverBudget ? 'border-rose-300 bg-rose-50/60' : 'border-line bg-white'}`}>

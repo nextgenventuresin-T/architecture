@@ -35,7 +35,23 @@ function calcWorkingDays(start, end) {
   return Math.max(1, count);
 }
 
-const LABOUR_TYPE_OPTIONS = ['Labour', 'Company Employee'];
+// Machines are charged for every calendar day they are on site (start and end inclusive).
+function calcMachineDays(start, end) {
+  if (!start || !end) return 1;
+  const s = new Date(start);
+  const e = new Date(end);
+  if (isNaN(s) || isNaN(e) || e < s) return 1;
+  return Math.round((e - s) / 86400000) + 1;
+}
+
+function toolRowTotal(row) {
+  const qty = Number(row.quantity || 0);
+  const cost = Number(row.cost || 0);
+  const days = row.rental_type === 'Purchase' ? 1 : Number(row.working_days || 0);
+  return Number((qty * cost * days).toFixed(2));
+}
+
+const LABOUR_TYPE_OPTIONS = ['Labour', 'Company Labour'];
 
 export default function TaskFormModal({
   isOpen,
@@ -126,6 +142,9 @@ export default function TaskFormModal({
           rental_type: t.rentalType || t.rental_type || 'Rent',
           quantity: Number(t.quantity || 1),
           cost: Number(t.cost || 0),
+          start_date: (t.startDate || t.start_date || '').slice(0, 10) || tStart,
+          end_date: (t.endDate || t.end_date || '').slice(0, 10) || tEnd,
+          working_days: Number(t.workingDays || t.working_days || 1),
           total_cost: Number(t.totalCost || t.total_cost || 0),
         }))
       );
@@ -139,9 +158,9 @@ export default function TaskFormModal({
           const wage = isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0);
           return {
             worker_id: l.worker_id || l.workerId || null,
-            worker_type: l.worker_type || l.workerType || (isCompany ? 'company_employee' : 'labour'),
+            worker_type: l.worker_type || l.workerType || (isCompany ? 'company_labour' : 'labour'),
             labour_name: l.person_name || l.labourName || l.labour_name || '',
-            labour_type: isCompany ? 'Company Employee' : 'Labour',
+            labour_type: isCompany ? 'Company Labour' : 'Labour',
             skill_trade: l.person_trade || l.skill_trade || l.skillTrade || '',
             start_date: lStart,
             end_date: lEnd,
@@ -206,9 +225,9 @@ export default function TaskFormModal({
         material_id: first ? first.id : '',
         material_name: first ? first.name : '',
         unit: first ? first.unit : 'unit',
-        quantity: 10,
-        cost_per_unit: first ? Number(first.default_rate || 0) : 0,
-        total_cost: first ? 10 * Number(first.default_rate || 0) : 0,
+        quantity: '',
+        cost_per_unit: '',
+        total_cost: 0,
       },
     ]);
   };
@@ -223,7 +242,7 @@ export default function TaskFormModal({
         if (found) {
           row.material_name = found.name;
           row.unit = found.unit;
-          row.cost_per_unit = Number(found.default_rate || 0);
+          row.cost_per_unit = Number(found.procurement_rate) > 0 ? Number(found.procurement_rate) : '';
         }
       }
 
@@ -241,6 +260,8 @@ export default function TaskFormModal({
 
   // Tools Helpers
   const addToolRow = () => {
+    const sDate = startDate || new Date().toISOString().slice(0, 10);
+    const eDate = endDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
     setTools((prev) => [
       ...prev,
       {
@@ -249,6 +270,9 @@ export default function TaskFormModal({
         rental_type: 'Rent',
         quantity: 1,
         cost: 0,
+        start_date: sDate,
+        end_date: eDate,
+        working_days: calcMachineDays(sDate, eDate),
         total_cost: 0,
       },
     ]);
@@ -258,9 +282,10 @@ export default function TaskFormModal({
     setTools((prev) => {
       const updated = [...prev];
       const row = { ...updated[idx], [field]: value };
-      const qty = Number(row.quantity || 1);
-      const cost = Number(row.cost || 0);
-      row.total_cost = Number((qty * cost).toFixed(2));
+      if (field === 'start_date' || field === 'end_date') {
+        row.working_days = calcMachineDays(row.start_date, row.end_date);
+      }
+      row.total_cost = toolRowTotal(row);
       updated[idx] = row;
       return updated;
     });
@@ -299,9 +324,33 @@ export default function TaskFormModal({
       const updated = [...prev];
       const row = { ...updated[idx], [field]: value };
 
+      if (field === 'worker_selection') {
+        const found = (workforceMaster || []).find((w) => String(w.id) === String(value));
+        if (found) {
+          row.worker_id = found.id;
+          row.worker_type = found.workerType;
+          row.labour_name = found.name;
+          row.skill_trade = found.trade || '';
+          const isComp = found.workerType === 'company_labour' || found.workerType === 'company_employee' || found.isCompanyLabour;
+          row.labour_type = isComp ? 'Company Labour' : 'Labour';
+          row.daily_wage = isComp ? 0 : Number(found.wage || 750);
+        } else {
+          row.worker_id = null;
+          row.labour_name = '';
+        }
+      }
+
+      if (field === 'labour_type') {
+        if (value === 'Company Labour' || value === 'Company Employee') {
+          row.daily_wage = 0;
+          row.worker_type = 'company_labour';
+        }
+      }
+
       const wc = Number(row.worker_count || 1);
       const days = Number(row.working_days || 0);
-      const wage = Number(row.daily_wage || 0);
+      const isComp = row.labour_type === 'Company Labour' || row.worker_type === 'company_labour';
+      const wage = isComp ? 0 : Number(row.daily_wage || 0);
       row.total_cost = Number((wc * days * wage).toFixed(2));
 
       updated[idx] = row;
@@ -376,7 +425,10 @@ export default function TaskFormModal({
         rental_type: t.rental_type,
         quantity: Number(t.quantity || 1),
         cost: Number(t.cost || 0),
-        total_cost: Number(t.total_cost || 0),
+        start_date: t.rental_type === 'Purchase' ? null : t.start_date || null,
+        end_date: t.rental_type === 'Purchase' ? null : t.end_date || null,
+        working_days: t.rental_type === 'Purchase' ? 1 : Number(t.working_days || 1),
+        total_cost: toolRowTotal(t),
       })),
       labour: labour.map((l) => ({
         labour_name: (l.labour_name || '').trim() || null,
@@ -601,7 +653,7 @@ export default function TaskFormModal({
               ) : (
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {materials.map((m, idx) => (
-                    <div key={idx} className="flex items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
+                    <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
                       <div className="flex-1 min-w-[140px]">
                         <select
                           value={m.material_id}
@@ -665,7 +717,7 @@ export default function TaskFormModal({
           {activeBudgetTab === 'tools' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-ink-muted">Specify tools, plant, and machinery for this task</span>
+                <span className="text-xs text-ink-muted">Rent: Qty × Rate/Day × Days. Purchase: Qty × Cost.</span>
                 <Button type="button" size="sm" variant="secondary" onClick={addToolRow}>
                   <Plus className="h-3.5 w-3.5" />
                   Add Tool / Machine
@@ -679,7 +731,7 @@ export default function TaskFormModal({
               ) : (
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {tools.map((t, idx) => (
-                    <div key={idx} className="flex items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
+                    <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
                       <div className="flex-1 min-w-[140px]">
                         <input
                           type="text"
@@ -719,10 +771,42 @@ export default function TaskFormModal({
                           step="any"
                           value={t.cost}
                           onChange={(e) => updateToolRow(idx, 'cost', e.target.value)}
-                          placeholder="Cost"
+                          placeholder={t.rental_type === 'Purchase' ? 'Cost' : 'Rate/Day'}
+                          title={t.rental_type === 'Purchase' ? 'Purchase cost per unit' : 'Rent per day per unit'}
                           className="w-full rounded border border-line px-2 py-1 text-xs text-right"
                         />
                       </div>
+
+                      {t.rental_type !== 'Purchase' && (
+                        <>
+                          <input
+                            type="date"
+                            value={t.start_date || ''}
+                            onChange={(e) => updateToolRow(idx, 'start_date', e.target.value)}
+                            title="On site from"
+                            className="w-32 rounded border border-line px-2 py-1 text-xs"
+                          />
+                          <input
+                            type="date"
+                            value={t.end_date || ''}
+                            min={t.start_date || undefined}
+                            onChange={(e) => updateToolRow(idx, 'end_date', e.target.value)}
+                            title="On site until"
+                            className="w-32 rounded border border-line px-2 py-1 text-xs"
+                          />
+                          <div className="w-16">
+                            <input
+                              type="number"
+                              min="1"
+                              value={t.working_days}
+                              onChange={(e) => updateToolRow(idx, 'working_days', e.target.value)}
+                              title="Days"
+                              placeholder="Days"
+                              className="w-full rounded border border-line px-2 py-1 text-xs text-right"
+                            />
+                          </div>
+                        </>
+                      )}
 
                       <div className="w-24 font-semibold text-ink text-right tabular-nums">
                         {formatCurrency(t.total_cost)}
@@ -781,8 +865,8 @@ export default function TaskFormModal({
                     </thead>
                     <tbody className="divide-y divide-line">
                       {labour.map((l, idx) => {
-                        const compoundValue = l.worker_id && l.worker_type ? `${l.worker_type}-${l.worker_id}` : '';
-                        const isCompany = l.labour_type === 'Company Employee';
+                        const compoundValue = l.worker_id ? String(l.worker_id) : '';
+                        const isCompany = l.labour_type === 'Company Labour' || l.labour_type === 'Company Employee' || l.worker_type === 'company_labour';
                         return (
                           <tr key={idx} className="hover:bg-canvas-subtle/40 transition-colors">
                             <td className="p-2">
@@ -791,10 +875,10 @@ export default function TaskFormModal({
                                 onChange={(e) => updateLabourRow(idx, 'worker_selection', e.target.value)}
                                 className="w-full rounded border border-line bg-white px-2 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
                               >
-                                <option value="">-- Choose Labour / Employee --</option>
+                                <option value="">-- Choose Labour --</option>
                                 {(Array.isArray(workforceMaster) ? workforceMaster : []).map((w) => (
                                   <option key={w.id} value={w.id}>
-                                    {w.name} ({w.trade}) — {w.workerType === 'company_employee' ? 'Company Employee' : w.contractorName}
+                                    {w.name} ({w.trade}) — {w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour ? 'Company Labour (In-House)' : (w.contractorName || 'Daily Wage')}
                                   </option>
                                 ))}
                               </select>
@@ -845,7 +929,7 @@ export default function TaskFormModal({
 
                             <td className="p-2">
                               {isCompany ? (
-                                <span className="block text-center text-xs text-ink-subtle font-mono">—</span>
+                                <span className="block text-center text-xs text-blue-700 font-semibold font-mono">₹0</span>
                               ) : (
                                 <input
                                   type="number"
@@ -860,7 +944,7 @@ export default function TaskFormModal({
                             </td>
 
                             <td className="p-2 text-right font-semibold text-ink tabular-nums">
-                              {isCompany ? <span className="text-ink-subtle">—</span> : formatCurrency(l.total_cost)}
+                              {isCompany ? <span className="text-blue-700 font-semibold font-mono">₹0</span> : formatCurrency(l.total_cost)}
                             </td>
 
                             <td className="p-2">
@@ -911,7 +995,7 @@ export default function TaskFormModal({
               ) : (
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {misc.map((mc, idx) => (
-                    <div key={idx} className="flex items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
+                    <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
                       <div className="flex-1">
                         <input
                           type="text"

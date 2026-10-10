@@ -35,4 +35,9 @@ const getPhoto = asyncHandler(async (req, res) => {
   res.sendFile(photo.file_path);
 });
 
-module.exports = { list, detail, create, getPhoto };
+const taskMaterials = asyncHandler(async (req, res) => {
+  const cId = req.hrScope?.role === 'contractor' ? req.hrScope.contractorId : Number(req.query.contractorId);
+  res.json({ success: true, data: { materials: await dailyWorkService.getTaskMaterials(Number(req.query.taskId), cId) } });
+});
+
+module.exports = { list, detail, create, getPhoto, taskMaterials };

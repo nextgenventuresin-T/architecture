@@ -10,6 +10,7 @@ import Alert from '../../../components/ui/Alert';
 import MaterialFilters from '../../../components/materials/MaterialFilters';
 import Pagination from '../../../components/projects/Pagination';
 import ToolModal from '../../../components/tools/ToolModal';
+import ToolUnitsPanel from '../../../components/tools/ToolUnitsPanel';
 import useAsync from '../../../hooks/useAsync';
 import { materialsApi } from '../../../api/materialsApi';
 import { toolApi } from '../../../api/toolApi';
@@ -36,6 +37,7 @@ export default function MaterialListPage() {
   const [toolSearch, setToolSearch] = useState('');
   const [selectedTool, setSelectedTool] = useState(null);
   const [isToolModalOpen, setIsToolModalOpen] = useState(false);
+  const [registerSignal, setRegisterSignal] = useState(0);
 
   const loadLookups = useCallback(() => {
     materialsApi
@@ -136,16 +138,23 @@ export default function MaterialListPage() {
               </Button>
             </Link>
           ) : (
-            <Button
-              className="gap-2"
-              onClick={() => {
-                setSelectedTool(null);
-                setIsToolModalOpen(true);
-              }}
-            >
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              Add Machine / Tool
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button className="gap-2" onClick={() => setRegisterSignal((n) => n + 1)}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Add machine with serial no.
+              </Button>
+              <Button
+                variant="secondary"
+                className="gap-2"
+                onClick={() => {
+                  setSelectedTool(null);
+                  setIsToolModalOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Add machine type
+              </Button>
+            </div>
           )
         }
       />
@@ -247,7 +256,7 @@ export default function MaterialListPage() {
                 type="text"
                 value={toolSearch}
                 onChange={(e) => setToolSearch(e.target.value)}
-                placeholder="Search tools by name, code, type..."
+                placeholder="Search machine types by name or type..."
                 className="w-full rounded-xl border border-line bg-white px-4 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none"
               />
             </div>
@@ -259,9 +268,9 @@ export default function MaterialListPage() {
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-line bg-canvas-subtle text-xs font-semibold uppercase text-ink-subtle">
                   <tr>
-                    <th className="px-6 py-3">Code</th>
-                    <th className="px-6 py-3">Tool / Machine</th>
+                    <th className="px-6 py-3">Tool / Machine type</th>
                     <th className="px-6 py-3">Type</th>
+                    <th className="px-6 py-3">Serial units</th>
                     <th className="px-6 py-3">Description</th>
                     <th className="px-6 py-3">Status</th>
                     <th className="px-6 py-3 text-right">Actions</th>
@@ -270,9 +279,11 @@ export default function MaterialListPage() {
                 <tbody className="divide-y divide-line">
                   {tools.map((t) => (
                     <tr key={t.id} className="hover:bg-canvas">
-                      <td className="px-6 py-4 font-mono text-xs font-semibold text-ink-muted">{t.code}</td>
                       <td className="px-6 py-4 font-medium text-ink">{t.name}</td>
                       <td className="px-6 py-4 text-ink-muted">{t.type}</td>
+                      <td className="px-6 py-4 text-ink-muted">
+                        <span className="font-semibold text-ink">{t.availableQuantity ?? 0}</span> available · {t.allocatedQuantity ?? 0} out · {t.totalQuantity ?? 0} total
+                      </td>
                       <td className="px-6 py-4 text-ink-muted truncate max-w-xs">{t.description || '—'}</td>
                       <td className="px-6 py-4">
                         <Badge tone={t.status === 'active' ? 'success' : 'neutral'}>
@@ -314,6 +325,8 @@ export default function MaterialListPage() {
               </table>
             </div>
           </Card>
+
+          <ToolUnitsPanel tools={tools} mode="admin" onChanged={loadTools} registerSignal={registerSignal} />
 
           <ToolModal
             isOpen={isToolModalOpen}

@@ -9,7 +9,8 @@
     "server": "npm --prefix server start",
     "client": "npm --prefix client run dev",
     "migrate": "npm --prefix server run db:migrate",
-    "seed": "npm --prefix server run db:seed"
+    "seed": "npm --prefix server run db:seed",
+    "clear:data": "npm --prefix server run db:clear:data"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -7,48 +7,57 @@ import { materialMovementApi } from '../../api/materialMovementApi';
 import { toApiError } from '../../api/axiosClient';
 import { formatNumber, formatDate } from '../../utils/format';
 
-const norm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
-
 /**
- * Receive an IN-TRANSIT shipment. The receiver first enters the vehicle number.
- * If it matches the vehicle number the sender entered on dispatch, the full
- * dispatch details are fetched/shown and a Confirm Receipt button appears.
- * Confirming increases the destination warehouse stock and marks the movement
- * and its procurement request Received (duplicate receipts are prevented server-side).
+ * Receive an IN-TRANSIT shipment.
+ *
+ *  1. The receiver enters the arriving VEHICLE NUMBER (required).
+ *  2. The dispatch the sender already recorded is FETCHED by that number from the
+ *     server and shown - driver, material, quantity, source, destination, project,
+ *     site, dispatch date - for the receiver to check against what arrived.
+ *  3. Only "Confirm receipt" adds the stock. The server re-verifies the vehicle
+ *     number and refuses a second receipt of the same shipment.
  */
 export default function ReceiveMovementDialog({ movement, onClose, onReceived, onError }) {
   const [vehicle, setVehicle] = useState('');
-  const [verified, setVerified] = useState(false);
+  const [details, setDetails] = useState(null);
   const [fieldError, setFieldError] = useState(null);
   const [error, setError] = useState(null);
+  const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setVehicle('');
-    setVerified(false);
+    setDetails(null);
     setFieldError(null);
     setError(null);
   }, [movement]);
 
   if (!movement) return null;
 
-  const expectedVehicle = movement.vehicleNumber;
   const receivingDate = new Date().toISOString().slice(0, 10);
 
-  function verify() {
+  async function fetchDetails() {
     setError(null);
     if (!vehicle.trim()) {
-      setFieldError('Enter the vehicle number to confirm receipt.');
+      setFieldError('Enter the vehicle number to fetch the dispatch details.');
       return;
     }
-    // If the sender recorded a vehicle number, it must match. If they didn't,
-    // accept the entered number as the receiving vehicle.
-    if (expectedVehicle && norm(vehicle) !== norm(expectedVehicle)) {
-      setFieldError('Vehicle number does not match the dispatch. Check with the sender.');
-      return;
+    setFetching(true);
+    try {
+      const result = await materialMovementApi.lookup(vehicle.trim());
+      const match = (result.shipments || []).find((s) => s.kind === 'movement' && Number(s.id) === Number(movement.id));
+      if (!match) {
+        setDetails(null);
+        setFieldError('No dispatch for this shipment matches that vehicle number. Check the number with the driver.');
+        return;
+      }
+      setFieldError(null);
+      setDetails(match);
+    } catch (caught) {
+      setFieldError(toApiError(caught).message);
+    } finally {
+      setFetching(false);
     }
-    setFieldError(null);
-    setVerified(true);
   }
 
   async function confirm() {
@@ -56,16 +65,15 @@ export default function ReceiveMovementDialog({ movement, onClose, onReceived, o
     setSaving(true);
     try {
       await materialMovementApi.receive(movement.id, {
-        received_quantity: movement.sentQuantity,
+        received_quantity: details?.quantity ?? movement.sentQuantity,
         vehicle_number: vehicle.trim(),
         receiving_date: receivingDate,
         remarks: `Received; vehicle ${vehicle.trim()}`,
       });
-      onReceived('Material received — added to your warehouse.');
+      onReceived('Material received — added to the destination warehouse.');
     } catch (caught) {
       const apiErr = toApiError(caught);
-      const details = apiErr.details || {};
-      const detailMsg = Object.values(details)[0];
+      const detailMsg = Object.values(apiErr.details || {})[0];
       const shown = apiErr.message === 'Check the highlighted fields.' && detailMsg ? detailMsg : apiErr.message;
       setError({ ...apiErr, message: shown });
       if (onError) onError({ ...apiErr, message: shown });
@@ -98,39 +106,43 @@ export default function ReceiveMovementDialog({ movement, onClose, onReceived, o
             label="Vehicle number"
             required
             value={vehicle}
-            onChange={(e) => { setVehicle(e.target.value); setFieldError(null); setVerified(false); }}
+            onChange={(e) => { setVehicle(e.target.value); setFieldError(null); setDetails(null); }}
             error={fieldError}
             placeholder="PB 11 AB 1234"
-            hint="Enter the arriving vehicle number. It must match the number entered on dispatch."
-            disabled={verified}
+            hint="Enter the number of the vehicle that has arrived. The dispatch details are fetched from it."
+            disabled={Boolean(details)}
           />
 
-          {!verified ? (
-            <Button type="button" variant="primary" onClick={verify}>
+          {!details ? (
+            <Button type="button" variant="primary" isLoading={fetching} loadingText="Fetching…" onClick={fetchDetails}>
               <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-              Verify vehicle & fetch details
+              Fetch dispatch details
             </Button>
           ) : (
             <div className="rounded-lg border border-line bg-canvas px-4 py-3 text-sm">
-              <p className="mb-2 font-medium text-ink">Dispatch details — {movement.movementNumber}</p>
-              {row('Material', movement.material?.name)}
-              {row('Quantity', `${formatNumber(movement.sentQuantity)} ${movement.unit}`)}
-              {row('Vehicle number', movement.vehicleNumber || vehicle.trim())}
-              {row('Driver name', movement.driverName)}
-              {row('Driver phone', movement.driverPhone)}
-              {row('Source', movement.source?.contractorName || movement.source?.warehouseName)}
-              {row('Destination', movement.destination?.contractorName || movement.destination?.warehouseName)}
-              {row('Project', movement.project?.name)}
-              {row('Site', movement.site?.name)}
-              {row('Dispatch date', formatDate(movement.sentAt))}
+              <p className="mb-2 font-medium text-ink">Dispatch details — {details.reference}</p>
+              {row('Material', details.material)}
+              {row('Quantity', `${formatNumber(details.quantity)} ${details.unit}`)}
+              {row('Vehicle number', details.vehicleNumber)}
+              {row('Driver name', details.driverName)}
+              {row('Driver phone', details.driverPhone)}
+              {row('Source', details.source)}
+              {row('Destination', details.destination)}
+              {row('Project', details.project)}
+              {row('Site', details.site)}
+              {row('Task', details.task)}
+              {row('Dispatch date', formatDate(details.dispatchDate))}
               {row('Receiving date', formatDate(receivingDate))}
+              <button type="button" className="mt-2 text-xs text-brand-700 underline" onClick={() => setDetails(null)}>
+                Not this shipment? Change the vehicle number
+              </button>
             </div>
           )}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="button" variant="primary" isLoading={saving} loadingText="Receiving…" onClick={confirm} disabled={!verified}>
+          <Button type="button" variant="primary" isLoading={saving} loadingText="Receiving…" onClick={confirm} disabled={!details}>
             <PackageCheck className="h-4 w-4" aria-hidden="true" />
             Confirm receipt
           </Button>

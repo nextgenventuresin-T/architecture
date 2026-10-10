@@ -9,7 +9,6 @@ export default function DailyWorkTab({ detail }) {
   const { dailyWorkUpdates = [], sites = [], tasks = [] } = detail;
   const [siteFilter, setSiteFilter] = useState('all');
   const [taskFilter, setTaskFilter] = useState('all');
-  const [phaseFilter, setPhaseFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('');
   const [activePhoto, setActivePhoto] = useState(null);
 
@@ -17,14 +16,13 @@ export default function DailyWorkTab({ detail }) {
     return dailyWorkUpdates.filter((up) => {
       if (siteFilter !== 'all' && Number(up.siteId || up.site_id) !== Number(siteFilter)) return false;
       if (taskFilter !== 'all' && Number(up.taskId || up.task_id) !== Number(taskFilter)) return false;
-      if (phaseFilter !== 'all' && Number(up.phaseNumber || up.phase_number) !== Number(phaseFilter)) return false;
       if (dateFilter) {
         const itemDate = (up.workDate || up.work_date || '').slice(0, 10);
         if (itemDate !== dateFilter) return false;
       }
       return true;
     });
-  }, [dailyWorkUpdates, siteFilter, taskFilter, phaseFilter, dateFilter]);
+  }, [dailyWorkUpdates, siteFilter, taskFilter, dateFilter]);
 
   if (dailyWorkUpdates.length === 0) {
     return (
@@ -75,19 +73,6 @@ export default function DailyWorkTab({ detail }) {
               </select>
             )}
 
-            <select
-              value={phaseFilter}
-              onChange={(e) => setPhaseFilter(e.target.value)}
-              className="rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
-            >
-              <option value="all">All Phases (1-8)</option>
-              {Array.from({ length: 8 }, (_, i) => i + 1).map((p) => (
-                <option key={p} value={p}>
-                  Phase {p}
-                </option>
-              ))}
-            </select>
-
             <input
               type="date"
               value={dateFilter}
@@ -95,13 +80,12 @@ export default function DailyWorkTab({ detail }) {
               className="rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
             />
 
-            {(siteFilter !== 'all' || taskFilter !== 'all' || phaseFilter !== 'all' || dateFilter) && (
+            {(siteFilter !== 'all' || taskFilter !== 'all' || dateFilter) && (
               <button
                 type="button"
                 onClick={() => {
                   setSiteFilter('all');
                   setTaskFilter('all');
-                  setPhaseFilter('all');
                   setDateFilter('');
                 }}
                 className="text-xs text-brand-700 hover:text-brand-900 font-medium ml-auto"

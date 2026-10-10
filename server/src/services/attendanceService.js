@@ -6,6 +6,8 @@ const employeeModel = require('../models/employeeModel');
 const contractorWorkerModel = require('../models/contractorWorkerModel');
 const projectModel = require('../models/projectModel');
 const siteModel = require('../models/siteModel');
+const pmScope = require('./pmScopeService');
+const { pool } = require('../config/db');
 
 const LABOUR_TYPES = ['company', 'contractor'];
 const STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE'];
@@ -26,7 +28,9 @@ function toAttendance(row) {
     checkIn: row.check_in,
     checkOut: row.check_out,
     remarks: row.remarks,
+    task: row.task_id ? { id: row.task_id, name: row.task_name } : null,
     recordedBy: row.recorded_by,
+    recordedByName: row.recorded_by_name || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -51,7 +55,14 @@ async function list(query, hrScope) {
     employeeId = hrScope.employeeId;
   }
 
-  const { rows, total } = await attendanceModel.findAll({ ...query, contractorId, employeeId, page, pageSize });
+  const { rows, total } = await attendanceModel.findAll({
+    ...query,
+    contractorId,
+    employeeId,
+    pmProjectIds: pmScope.isPm(hrScope) ? (hrScope.pmProjectIds || []) : undefined,
+    page,
+    pageSize,
+  });
 
   return {
     records: rows.map(toAttendance),
@@ -64,6 +75,9 @@ async function getById(id, hrScope) {
   const row = await attendanceModel.findById(id, contractorId);
   if (!row) throw ApiError.notFound('That attendance record does not exist.');
   if (hrScope.role === 'employee' && row.employee_id !== hrScope.employeeId) {
+    throw ApiError.notFound('That attendance record does not exist.');
+  }
+  if (pmScope.isPm(hrScope) && !(hrScope.pmProjectIds || []).includes(Number(row.project_id))) {
     throw ApiError.notFound('That attendance record does not exist.');
   }
   return toAttendance(row);
@@ -99,6 +113,21 @@ async function mark(payload, hrScope, actorUserId) {
   let contractorWorkerId = null;
   let contractorId = null;
 
+  // A Project Manager records labour only at an assigned project AND site, and
+  // only for the workers of the contractor responsible for that site.
+  const isPm = pmScope.isPm(hrScope);
+  if (isPm) {
+    const pmProject = Number(payload.projectId ?? payload.project_id);
+    const pmSite = Number(payload.siteId ?? payload.site_id);
+    if (!pmProject || !pmSite) {
+      throw ApiError.badRequest('Check the highlighted fields.', { siteId: 'Select the assigned project and site the labour worked at.' });
+    }
+    pmScope.assertPmAssigned(hrScope, pmProject, pmSite);
+    if (labourType !== 'contractor') {
+      throw ApiError.forbidden('Project Managers record attendance for contractor labour at their sites.');
+    }
+  }
+
   if (labourType === 'company') {
     if (hrScope.role === 'contractor') {
       throw ApiError.forbidden('Contractors can only record attendance for their own workers.');
@@ -114,6 +143,12 @@ async function mark(payload, hrScope, actorUserId) {
     );
     if (!worker) throw ApiError.notFound('That worker does not exist.');
     contractorId = worker.contractor_id;
+    if (isPm) {
+      const owner = await pmScope.responsibleContractorId(Number(payload.projectId ?? payload.project_id), Number(payload.siteId ?? payload.site_id));
+      if (!owner || Number(owner) !== Number(contractorId)) {
+        throw ApiError.forbidden('That worker does not belong to the contractor responsible for this site.');
+      }
+    }
   }
 
   const rawProjectId = payload.projectId ?? payload.project_id;
@@ -132,7 +167,20 @@ async function mark(payload, hrScope, actorUserId) {
     }
   }
 
+  const rawTaskId = payload.taskId ?? payload.task_id;
+  const taskId = rawTaskId ? Number(rawTaskId) : null;
+  if (taskId) {
+    const [[task]] = await pool.query('SELECT id, project_id, site_id FROM project_tasks WHERE id = ?', [taskId]);
+    if (!task || (projectId && Number(task.project_id) !== projectId) || (siteId && task.site_id && Number(task.site_id) !== siteId)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { taskId: 'That task does not belong to the selected project/site.' });
+    }
+  }
+
   const existing = await attendanceModel.findExisting({ attendanceDate, employeeId, contractorWorkerId });
+  // A PM must not overwrite a record that belongs to a project outside their scope.
+  if (isPm && existing && !(hrScope.pmProjectIds || []).includes(Number(existing.project_id))) {
+    throw ApiError.badRequest('This worker already has attendance recorded elsewhere for that day.');
+  }
 
   const record = {
     attendance_date: attendanceDate,
@@ -142,6 +190,7 @@ async function mark(payload, hrScope, actorUserId) {
     contractor_id: contractorId,
     project_id: projectId,
     site_id: siteId,
+    task_id: taskId,
     status,
     check_in: payload.checkIn ?? payload.check_in ?? null,
     check_out: payload.checkOut ?? payload.check_out ?? null,

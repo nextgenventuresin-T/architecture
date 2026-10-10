@@ -43,11 +43,26 @@ const ROLE_MODULES = {
     { label: 'PO & Contracts', path: '/contractor/contracts', permission: 'dashboard:view' },
     { label: 'Daily Work Updates', path: '/contractor/daily-work', permission: 'projects:view' },
     { label: 'Site Warehouse', path: '/contractor/site-warehouse', permission: 'dashboard:view' },
+    { label: 'Tools & Machines', path: '/contractor/tools', permission: 'dashboard:view' },
     { label: 'Material Requests', path: '/contractor/procurement', permission: 'procurement:view' },
     { label: 'Material Movements', path: '/contractor/material-movements', permission: 'procurement:view' },
     { label: 'Purchase Orders', path: '/contractor/purchase-orders', permission: 'procurement:view' },
     approvalsFor('/contractor'),
     reportsFor('/contractor'),
+  ],
+  [ROLES.PROJECT_MANAGER]: [
+    { label: 'Dashboard', path: '/pm', permission: 'dashboard:view' },
+    { label: 'Projects & Sites', path: '/pm/projects', permission: 'projects:view' },
+    { label: 'Contractors', path: '/pm/contractors', permission: 'projects:view' },
+    { label: 'Daily Work Updates', path: '/pm/daily-work', permission: 'projects:view' },
+    { label: 'Site Inventory / Stock', path: '/pm/site-warehouse', permission: 'warehouse:view' },
+    { label: 'Labour Attendance', path: '/pm/attendance', permission: 'projects:view' },
+    { label: 'Contractor Procurement', path: '/pm/procurement', permission: 'procurement:view' },
+    { label: 'Machines & Tools', path: '/pm/machines', permission: 'procurement:view' },
+    { label: 'Material Movements', path: '/pm/material-movements', permission: 'procurement:view' },
+    { label: 'Project Expenses', path: '/pm/expenses', permission: 'projects:view' },
+    approvalsFor('/pm'),
+    reportsFor('/pm'),
   ],
   [ROLES.EMPLOYEE]: [
     { label: 'Employees', path: '/employee', permission: 'employees:view' },
@@ -83,12 +98,12 @@ export default function RoleWorkspaceLayout() {
           {ROLE_LABELS[user?.role] || user?.role}
         </span>
 
-        <nav className="flex flex-1 gap-1.5 overflow-x-auto lg:flex-col lg:overflow-visible" aria-label="Workspace navigation">
+        <nav className="flex flex-1 gap-1.5 overflow-x-auto no-scrollbar lg:flex-col lg:overflow-visible" aria-label="Workspace navigation">
           {modules.map((module) => (
             <NavLink
               key={module.path}
               to={module.path}
-              end={module.path === `/${user?.role}` || module.path === '/finance' || module.path === '/procurement' || module.path === '/warehouse'}
+              end={module.path === `/${user?.role}` || module.path === '/pm' || module.path === '/finance' || module.path === '/procurement' || module.path === '/warehouse'}
               className={({ isActive }) => `sidebar-link whitespace-nowrap ${isActive ? 'sidebar-link-active' : ''}`}
             >
               {module.label}

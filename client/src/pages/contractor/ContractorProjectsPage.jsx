@@ -82,12 +82,6 @@ export default function ContractorProjectsPage() {
       .detail(selectedProjectId)
       .then((data) => {
         setProjectDetail(data);
-        // Expand active or in-progress phases by default
-        const initExpanded = {};
-        (data.phases || []).forEach((p) => {
-          if (p.status === 'in-progress') initExpanded[p.phaseNumber] = true;
-        });
-        setExpandedPhases(initExpanded);
       })
       .catch((err) => {
         console.error('Failed to load project detail:', err);
@@ -95,18 +89,11 @@ export default function ContractorProjectsPage() {
       .finally(() => setDetailLoading(false));
   }, [selectedProjectId]);
 
-  const togglePhase = (phaseNumber) => {
-    setExpandedPhases((prev) => ({
-      ...prev,
-      [phaseNumber]: !prev[phaseNumber],
-    }));
-  };
-
   return (
     <>
       <PageHeader
-        title="Assigned Projects & Phase Scopes"
-        description="View project timelines, assigned sites, and 8-phase execution scopes."
+        title="Assigned Projects & Tasks"
+        description="View project timelines, assigned sites, and task execution scopes."
         actions={
           <button
             type="button"

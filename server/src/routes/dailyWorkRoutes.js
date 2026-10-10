@@ -3,7 +3,8 @@
 const express = require('express');
 const { body, param, query } = require('express-validator');
 const validate = require('../middleware/validate');
-const { requireAuth } = require('../middleware/authMiddleware');
+const { requireAuth, requireRole } = require('../middleware/authMiddleware');
+const { ROLES } = require('../config/roles');
 const { attachHrScope } = require('../middleware/hrScope');
 const { uploadWorkPhotos } = require('../middleware/upload');
 const controller = require('../controllers/dailyWorkController');
@@ -26,12 +27,17 @@ router.get(
   controller.list
 );
 
+router.get('/task-materials', [query('taskId').isInt({ min: 1 })], validate, controller.taskMaterials);
+
 router.get('/photos/:photoId', [param('photoId').isInt({ min: 1 })], validate, controller.getPhoto);
 
 router.get('/:id', [param('id').isInt({ min: 1 })], validate, controller.detail);
 
+// Recording site work: the contractor on their own sites, a Project Manager on
+// their assigned sites (checked in the service), or Admin.
 router.post(
   '/',
+  requireRole(ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.ADMIN),
   uploadWorkPhotos,
   [
     body('project_id').isInt({ min: 1 }).withMessage('Project is required.'),
@@ -45,6 +51,7 @@ router.post(
     body('work_status').optional().isIn(['in-progress', 'completed']),
     body('remarks').optional({ nullable: true }).trim(),
     body('workers').optional(),
+    body('contractor_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
   ],
   validate,
   controller.create

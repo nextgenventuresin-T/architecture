@@ -22,7 +22,6 @@ import { projectsApi } from '../../api/projectsApi';
 import { financeApi } from '../../api/financeApi';
 import { toApiError } from '../../api/axiosClient';
 import { CONTRACTOR_EXPENSE_CATEGORY_OPTIONS } from '../../utils/financeOptions';
-import { PROJECT_PHASES_DEF } from '../../config/projectPhases';
 import { formatCurrency, formatNumber } from '../../utils/format';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -38,6 +37,7 @@ export default function ContractorExpenseFormPage() {
 
   const [projects, setProjects] = useState([]);
   const [sites, setSites] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingSites, setLoadingSites] = useState(false);
 
@@ -51,6 +51,7 @@ export default function ContractorExpenseFormPage() {
     expense_date: todayISO(),
     project_id: '',
     site_id: '',
+    task_id: '',
     phase_number: '1',
     subcategory: '',
     material_id: '',
@@ -107,11 +108,12 @@ export default function ContractorExpenseFormPage() {
   const activeProjectId =
     mode === 'material' ? materialValues.project_id : expenseValues.project_id;
 
-  // When active project changes, load sites under that project
+  // When active project changes, load sites and tasks under that project
   useEffect(() => {
     if (!activeProjectId) {
       setSites([]);
-      setMaterialValues((v) => ({ ...v, site_id: '' }));
+      setTasks([]);
+      setMaterialValues((v) => ({ ...v, site_id: '', task_id: '' }));
       setExpenseValues((v) => ({ ...v, site_id: '' }));
       return;
     }
@@ -120,8 +122,12 @@ export default function ContractorExpenseFormPage() {
       .detail(activeProjectId)
       .then((res) => {
         setSites(res.sites ?? []);
+        setTasks(res.tasks ?? []);
       })
-      .catch(() => setSites([]))
+      .catch(() => {
+        setSites([]);
+        setTasks([]);
+      })
       .finally(() => setLoadingSites(false));
   }, [activeProjectId]);
 
@@ -133,25 +139,7 @@ export default function ContractorExpenseFormPage() {
     );
   }, [inventory, materialValues.material_id]);
 
-  // Phase subcategories
-  const currentPhaseDef = useMemo(() => {
-    return PROJECT_PHASES_DEF.find(
-      (p) => String(p.phaseNumber) === String(materialValues.phase_number)
-    );
-  }, [materialValues.phase_number]);
 
-  const availableSubcategories = currentPhaseDef?.subcategories || [];
-
-  // When phase changes, set default subcategory if not already set or invalid
-  useEffect(() => {
-    if (availableSubcategories.length > 0) {
-      if (!availableSubcategories.includes(materialValues.subcategory)) {
-        setMaterialValues((v) => ({ ...v, subcategory: availableSubcategories[0] }));
-      }
-    } else {
-      setMaterialValues((v) => ({ ...v, subcategory: '' }));
-    }
-  }, [materialValues.phase_number, availableSubcategories]);
 
   // Handle Mode Switch
   const switchMode = (newMode) => {
@@ -201,8 +189,7 @@ export default function ContractorExpenseFormPage() {
 
     if (!materialValues.project_id) errors.project_id = 'Select an assigned project.';
     if (!materialValues.material_id) errors.material_id = 'Select a material or tool.';
-    if (!materialValues.phase_number) errors.phase_number = 'Select a phase.';
-    if (!materialValues.subcategory) errors.subcategory = 'Select a subcategory.';
+    if (tasks.length > 0 && !materialValues.task_id) errors.task_id = 'Select a task.';
 
     const qty = Number(materialValues.quantity_used);
     if (!materialValues.quantity_used || isNaN(qty) || qty <= 0) {
@@ -223,8 +210,9 @@ export default function ContractorExpenseFormPage() {
       await financeApi.recordConsumption({
         project_id: materialValues.project_id,
         site_id: materialValues.site_id ? materialValues.site_id : null,
-        phase_number: Number(materialValues.phase_number),
-        subcategory: materialValues.subcategory,
+        task_id: materialValues.task_id ? Number(materialValues.task_id) : undefined,
+        phase_number: Number(materialValues.phase_number || 1),
+        subcategory: materialValues.subcategory || 'General Work',
         material_id: Number(materialValues.material_id),
         quantity_used: qty,
         expense_date: materialValues.expense_date,
@@ -517,32 +505,34 @@ export default function ContractorExpenseFormPage() {
                 />
               </div>
 
-              {/* Phase & Subcategory */}
+              {/* Task Scope */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <SelectField
-                  label="Construction Phase *"
-                  required
-                  value={materialValues.phase_number}
-                  onChange={handleMaterialChange('phase_number')}
-                  error={fieldErrors.phase_number}
-                  options={PROJECT_PHASES_DEF.map((phase) => ({
-                    value: String(phase.phaseNumber),
-                    label: `Phase ${phase.phaseNumber}: ${phase.title}`,
+                  label="Task / Work Scope *"
+                  required={tasks.length > 0}
+                  value={materialValues.task_id}
+                  onChange={(e) => {
+                    const tId = e.target.value;
+                    const selectedTask = tasks.find((t) => String(t.id) === String(tId));
+                    setMaterialValues((v) => ({
+                      ...v,
+                      task_id: tId,
+                      subcategory: selectedTask ? selectedTask.name : v.subcategory,
+                    }));
+                  }}
+                  error={fieldErrors.task_id}
+                  placeholder={tasks.length === 0 ? 'General Project Work' : 'Select task'}
+                  options={tasks.map((t) => ({
+                    value: String(t.id),
+                    label: t.name,
                   }))}
                 />
 
-                <SelectField
-                  label="Subcategory *"
-                  required
+                <InputField
+                  label="Work Details / Scope"
                   value={materialValues.subcategory}
                   onChange={handleMaterialChange('subcategory')}
-                  error={fieldErrors.subcategory}
-                  disabled={availableSubcategories.length === 0}
-                  placeholder="Select subcategory"
-                  options={availableSubcategories.map((sub) => ({
-                    value: sub,
-                    label: sub,
-                  }))}
+                  placeholder="e.g. Column footing, plastering, floor work..."
                 />
               </div>
 

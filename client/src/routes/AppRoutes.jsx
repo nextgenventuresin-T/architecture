@@ -32,9 +32,19 @@ import ContractorDashboardPage from '../pages/contractor/ContractorDashboardPage
 import ContractorProjectsPage from '../pages/contractor/ContractorProjectsPage';
 import ContractorDailyWorkPage from '../pages/contractor/ContractorDailyWorkPage';
 import ContractorSiteWarehousePage from '../pages/contractor/ContractorSiteWarehousePage';
+import ContractorToolsPage from '../pages/contractor/ContractorToolsPage';
 import ContractorExpensesPage from '../pages/contractor/ContractorExpensesPage';
 import ContractorExpenseFormPage from '../pages/contractor/ContractorExpenseFormPage';
 import ContractorContractsPage from '../pages/contractor/ContractorContractsPage';
+import PmDashboardPage from '../pages/pm/PmDashboardPage';
+import PmProjectsPage from '../pages/pm/PmProjectsPage';
+import PmContractorsPage from '../pages/pm/PmContractorsPage';
+import PmDailyWorkPage from '../pages/pm/PmDailyWorkPage';
+import PmSiteWarehousePage from '../pages/pm/PmSiteWarehousePage';
+import PmProcurementPage from '../pages/pm/PmProcurementPage';
+import PmAttendancePage from '../pages/pm/PmAttendancePage';
+import PmMachinesPage from '../pages/pm/PmMachinesPage';
+import PmExpensesPage from '../pages/pm/PmExpensesPage';
 import ClientListPage from '../pages/admin/clients/ClientListPage';
 import FinanceDashboardPage from '../pages/admin/finance/FinanceDashboardPage';
 import ExpenseFormPage from '../pages/admin/finance/ExpenseFormPage';
@@ -228,6 +238,28 @@ export default function AppRoutes() {
         <Route path="reports" element={<ReportsDashboardPage basePath="/warehouse" />} />
       </Route>
 
+      {/* Project Manager Workspace */}
+      <Route
+        path="/pm"
+        element={<ProtectedRoute allowedRoles={[ROLES.PROJECT_MANAGER, ROLES.ADMIN]}><RoleWorkspaceLayout /></ProtectedRoute>}
+      >
+        <Route index element={<PmDashboardPage />} />
+        <Route path="projects" element={<PmProjectsPage />} />
+        <Route path="contractors" element={<PmContractorsPage />} />
+        <Route path="daily-work" element={<PmDailyWorkPage />} />
+        <Route path="site-warehouse" element={<PmSiteWarehousePage />} />
+        <Route path="procurement" element={<PmProcurementPage />} />
+        <Route path="procurement/new" element={<ProcurementFormPage mode="create" basePath="/pm/procurement" />} />
+        <Route path="procurement/:id" element={<ProcurementDetailPage basePath="/pm/procurement" />} />
+        <Route path="procurement/:id/edit" element={<ProcurementFormPage mode="edit" basePath="/pm/procurement" />} />
+        <Route path="attendance" element={<PmAttendancePage />} />
+        <Route path="machines" element={<PmMachinesPage />} />
+        <Route path="expenses" element={<PmExpensesPage />} />
+        <Route path="material-movements" element={<MaterialMovementsPage />} />
+        <Route path="approvals" element={<ApprovalsPage basePath="/pm" />} />
+        <Route path="reports" element={<ReportsDashboardPage basePath="/pm" />} />
+      </Route>
+
       {[
         [ROLES.HR, '/hr', HrDashboardPage],
         [ROLES.CONTRACTOR, '/contractor', ContractorDashboardPage],
@@ -244,6 +276,7 @@ export default function AppRoutes() {
               <Route path="projects" element={<ContractorProjectsPage />} />
               <Route path="daily-work" element={<ContractorDailyWorkPage />} />
               <Route path="site-warehouse" element={<ContractorSiteWarehousePage />} />
+              <Route path="tools" element={<ContractorToolsPage />} />
               <Route path="procurement" element={<ProcurementListPage basePath="/contractor/procurement" />} />
               <Route path="procurement/new" element={<ProcurementFormPage mode="create" basePath="/contractor/procurement" />} />
               <Route path="procurement/:id" element={<ProcurementDetailPage basePath="/contractor/procurement" />} />

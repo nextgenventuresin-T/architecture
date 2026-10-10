@@ -23,7 +23,7 @@ router.use(attachHrScope);
 const { uploadBill } = require('../middleware/upload');
 router.post(
   '/:id/bill',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
   [param('id').isInt({ min: 1 })],
   validate,
   uploadBill,
@@ -31,7 +31,7 @@ router.post(
 );
 router.get(
   '/:id/bill',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.FINANCE, ROLES.CONTRACTOR),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.FINANCE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
   [param('id').isInt({ min: 1 })],
   validate,
   controller.downloadBill
@@ -46,7 +46,9 @@ const STATUSES = [
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
 // Raising and progressing requests is a Procurement/Admin job throughout.
-const canManage = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR);
+// Project Managers raise and progress requests for their assigned projects; the
+// service enforces the assignment (and that approve/reject stay with Admin).
+const canManage = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER);
 const canManageOrders = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT);
 // Receiving deliveries is also something Warehouse staff do day to day.
 const canReceive = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE);
@@ -62,7 +64,24 @@ const requestRules = (isCreate) => {
     body('project_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid project.').toInt(),
     body('site_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid site.').toInt(),
     body('task_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid task.').toInt(),
-    required(body('material_id').isInt({ min: 1 }).withMessage('Select a material.'), 'Select a material.').toInt(),
+    body('item_type').optional({ nullable: true }).isIn(['material', 'tool']).withMessage('Invalid item type.'),
+    body('material_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid material.').toInt(),
+    body('tool_id').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid tool/machinery.').toInt(),
+    body().custom((value) => {
+      const isTool = value.item_type === 'tool' || (!value.material_id && value.tool_id);
+      if (isCreate) {
+        if (isTool) {
+          if (!value.tool_id || Number(value.tool_id) <= 0) {
+            throw new Error('Select a tool or machinery.');
+          }
+        } else {
+          if (!value.material_id || Number(value.material_id) <= 0) {
+            throw new Error('Select a material.');
+          }
+        }
+      }
+      return true;
+    }),
     body('supplier').optional({ nullable: true }).trim().isLength({ max: 150 }),
     body('supplier_contact').optional({ nullable: true }).trim().isLength({ max: 150 }),
     required(body('quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.'), 'Enter a quantity.').toFloat(),
@@ -88,6 +107,18 @@ const requestRules = (isCreate) => {
     body('total_amount').optional({ nullable: true }).isFloat({ min: 0 }).toFloat(),
     body('purchase_date').optional({ nullable: true }).isISO8601().withMessage('Enter a valid purchase date.'),
     body('bill_reference').optional({ nullable: true }).trim().isLength({ max: 255 }),
+    // Tool procurement categorization
+    body('tool_procurement_type').optional({ nullable: true }).isIn(['purchased_owned', 'to_be_purchased', 'rented']).withMessage('Choose a valid tool procurement category.'),
+    body('rental_cost').optional({ nullable: true }).isFloat({ min: 0 }).toFloat(),
+    body('usage_charge_rate').optional({ nullable: true }).isFloat({ min: 0 }).toFloat(),
+    body('rental_days').optional({ nullable: true }).isFloat({ min: 0 }).toFloat(),
+    body('rental_start_date').optional({ nullable: true }).isISO8601(),
+    body('rental_end_date').optional({ nullable: true }).isISO8601(),
+    body('tool_unit_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('usage_charge_total').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
+    body('usage_charge_days').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
+    body('usage_charge_policy').optional({ nullable: true, checkFalsy: true }).isIn(['none', 'per_day_rate', 'fixed_total']),
+    body('vendor_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).toInt(),
   ];
 };
 
@@ -104,6 +135,8 @@ router.get(
     query('projectId').optional().isInt({ min: 1 }).toInt(),
     query('siteId').optional().isInt({ min: 1 }).toInt(),
     query('materialId').optional().isInt({ min: 1 }).toInt(),
+    query('toolId').optional().isInt({ min: 1 }).toInt(),
+    query('itemType').optional().isIn(['material', 'tool', 'all']).withMessage('Choose a valid item type filter.'),
     query('supplier').optional().trim(),
     query('priority').optional().isIn([...PRIORITIES, 'all']).withMessage('Choose a valid priority filter.'),
     query('kind').optional().isIn([...KINDS, 'all']).withMessage('Choose a valid type filter.'),
@@ -160,6 +193,7 @@ router.post(
     param('id').isInt({ min: 1 }),
     body('received_quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
     body('receiving_date').isISO8601().withMessage('Enter a valid receiving date.'),
+    body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
     body('notes').optional({ nullable: true }).trim().isLength({ max: 255 }),
   ],
   validate,
@@ -193,9 +227,39 @@ router.post(
     body('total_amount').optional({ nullable: true }).isFloat({ min: 0 }).toFloat(),
     body('purchase_rate').optional({ nullable: true }).isFloat({ min: 0 }).toFloat(),
     body('purchase_date').optional({ nullable: true }).isISO8601(),
+    // The receiving person's vehicle number: fetches and verifies the dispatch.
+    body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('receiving_date').optional({ nullable: true }).isISO8601(),
+    body('notes').optional({ nullable: true }).trim().isLength({ max: 255 }),
   ],
   validate,
   controller.fulfil
+);
+
+// Complete an APPROVED machine request: allocate a chosen serial (owned),
+// register + allocate a newly bought machine, or register a rental.
+router.post(
+  '/:id/tool-fulfil',
+  canManageOrders,
+  [
+    param('id').isInt({ min: 1 }),
+    body('unit_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('serial_number').optional({ nullable: true }).trim().isLength({ max: 80 }),
+    body('vendor_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).toInt(),
+    body('purchase_cost').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
+    body('rate_per_day').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
+    body('health').optional().isIn(['excellent', 'good', 'average', 'poor']),
+    body('reassign').optional().isBoolean().toBoolean(),
+    body('charge_policy').optional().isIn(['none', 'per_day_rate', 'fixed_total']),
+    body('start_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('return_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('rental_start_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('expected_return_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('purchase_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('expiry_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+  ],
+  validate,
+  controller.toolFulfil
 );
 
 // SEND MATERIAL — Admin/Procurement/Warehouse for a Central -> Contractor

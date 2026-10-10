@@ -31,6 +31,16 @@ const canMove = requireRole(ROLES.ADMIN, ROLES.WAREHOUSE, ROLES.CONTRACTOR);
 router.get('/incoming', controller.incoming);
 router.get('/stock', controller.stock);
 
+// Fetch the dispatch the sender recorded, by the arriving vehicle number. The
+// receiver verifies these details before confirming receipt.
+router.get(
+  '/lookup',
+  requireRole(ROLES.ADMIN, ROLES.WAREHOUSE, ROLES.PROCUREMENT, ROLES.CONTRACTOR),
+  [query('vehicle_number').trim().notEmpty().withMessage('Enter the vehicle number.').isLength({ max: 40 })],
+  validate,
+  controller.lookup
+);
+
 router.get(
   '/',
   [
@@ -77,7 +87,8 @@ router.post(
     param('id').isInt({ min: 1 }),
     body('received_quantity').optional({ nullable: true }).isFloat({ gt: 0 }).toFloat(),
     body('receiving_date').optional({ nullable: true }).isISO8601(),
-    body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    // The receiver MUST enter the vehicle number: it is what fetches and verifies the dispatch.
+    body('vehicle_number').trim().notEmpty().withMessage('Enter the vehicle number to verify the dispatch.').isLength({ max: 40 }),
     body('remarks').optional({ nullable: true }).trim().isLength({ max: 255 }),
   ],
   validate,

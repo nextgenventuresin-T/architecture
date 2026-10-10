@@ -106,6 +106,9 @@ function toTransaction(row) {
           receiptId: row.procurement_receipt_id,
         }
       : null,
+    unitCost: row.unit_cost != null ? Number(row.unit_cost) : null,
+    totalCost: row.total_cost != null ? Number(row.total_cost) : null,
+    vehicleNumber: row.vehicle_number || null,
     date: row.transaction_date,
     performedBy: row.performed_by ? { id: row.performed_by, name: row.performed_by_name } : null,
     notes: row.notes,
@@ -374,7 +377,11 @@ async function generateTransactionNumber(type, conn) {
  * Runs `work` inside a database transaction, rolling back on any failure so a
  * half-applied movement can never be left behind.
  */
-async function withTransaction(work) {
+async function withTransaction(work, sharedConn = null) {
+  // A caller that already owns a transaction (e.g. procurement receiving, which
+  // must also write the receipt and request status atomically) passes its
+  // connection in; commit/rollback then belong to that caller.
+  if (sharedConn) return work(sharedConn);
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -402,10 +409,20 @@ async function withTransaction(work) {
  * summing that table. Writing there too would double-count. See the header of
  * schema_warehouse.sql for the full reasoning.
  */
-async function receiveStock(payload, userId) {
+async function receiveStock(payload, userId, opts = {}) {
   const material = await assertMovementRelationships(payload);
   const quantity = assertPositiveQuantity(payload.quantity);
-  await assertWarehouse(payload.warehouse_id, 'warehouse_id');
+  const warehouse = await assertWarehouse(payload.warehouse_id, 'warehouse_id');
+
+  const isCentral = warehouse.type === 'central' || warehouse.name?.toLowerCase().includes('central');
+  if (isCentral) {
+    const vNum = payload.vehicle_number || (payload.notes && payload.notes.match(/Vehicle:\s*([^|]+)/i)?.[1]);
+    if (!vNum || !String(vNum).trim()) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'Vehicle number is mandatory for Central Warehouse movements.',
+      });
+    }
+  }
 
   let procurementRequestId = payload.procurement_request_id ?? null;
 
@@ -425,6 +442,13 @@ async function receiveStock(payload, userId) {
     }
     procurementRequestId = receipt.procurement_request_id;
   }
+
+  // Actual acquisition cost travels with the receipt so later consumption can
+  // be valued from what this stock really cost.
+  const receiptUnitCost = payload.unit_cost != null && Number(payload.unit_cost) > 0 ? Number(payload.unit_cost) : null;
+  const receiptTotalCost = payload.total_cost != null && Number(payload.total_cost) > 0
+    ? Number(payload.total_cost)
+    : (receiptUnitCost != null ? Number((receiptUnitCost * quantity).toFixed(2)) : null);
 
   return withTransaction(async (conn) => {
     await warehouseModel.lockWarehouse(payload.warehouse_id, conn);
@@ -459,12 +483,15 @@ async function receiveStock(payload, userId) {
         transaction_date: payload.transaction_date || today(),
         performed_by: payload.received_by ?? userId ?? null,
         notes: payload.notes ?? null,
+        unit_cost: receiptUnitCost,
+        total_cost: receiptTotalCost,
+        vehicle_number: payload.vehicle_number ? String(payload.vehicle_number).trim() : null,
       },
       conn
     );
 
     return id;
-  }).then((id) => warehouseModel.findTransactionById(id)).then(toTransaction);
+  }, opts.conn).then((id) => warehouseModel.findTransactionById(id, opts.conn)).then(toTransaction);
 }
 
 /**
@@ -474,10 +501,20 @@ async function receiveStock(payload, userId) {
  * locked. Checking before the lock would let two concurrent issues both see
  * enough stock and drive the balance negative.
  */
-async function issueStock(payload, userId) {
+async function issueStock(payload, userId, opts = {}) {
   const material = await assertMovementRelationships(payload);
   const quantity = assertPositiveQuantity(payload.quantity);
-  await assertWarehouse(payload.warehouse_id, 'warehouse_id');
+  const warehouse = await assertWarehouse(payload.warehouse_id, 'warehouse_id');
+
+  const isCentral = warehouse.type === 'central' || warehouse.name?.toLowerCase().includes('central');
+  if (isCentral) {
+    const vNum = payload.vehicle_number || (payload.notes && payload.notes.match(/Vehicle:\s*([^|]+)/i)?.[1]);
+    if (!vNum || !String(vNum).trim()) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'Vehicle number is mandatory for Central Warehouse movements.',
+      });
+    }
+  }
 
   return withTransaction(async (conn) => {
     await warehouseModel.lockWarehouse(payload.warehouse_id, conn);
@@ -538,6 +575,9 @@ async function issueStock(payload, userId) {
       throw ApiError.badRequest('Check the highlighted fields.', { quantity: detail });
     }
 
+    // Cost of what leaves = this warehouse's weighted-average acquisition cost.
+    const issueCost = await warehouseModel.averageUnitCost(payload.warehouse_id, payload.material_id, conn);
+
     await warehouseModel.adjustStockSlot(
       {
         warehouseId: payload.warehouse_id,
@@ -568,10 +608,13 @@ async function issueStock(payload, userId) {
         transaction_date: payload.transaction_date || today(),
         performed_by: payload.issued_by ?? userId ?? null,
         notes: payload.notes ?? null,
+        unit_cost: issueCost,
+        total_cost: issueCost != null ? Number((issueCost * quantity).toFixed(2)) : null,
+        vehicle_number: payload.vehicle_number ? String(payload.vehicle_number).trim() : null,
       },
       conn
     );
-  }).then((id) => warehouseModel.findTransactionById(id)).then(toTransaction);
+  }, opts.conn).then((id) => warehouseModel.findTransactionById(id, opts.conn)).then(toTransaction);
 }
 
 /**
@@ -579,7 +622,7 @@ async function issueStock(payload, userId) {
  * share one transaction, so the source can never be debited without the
  * destination being credited.
  */
-async function transferStock(payload, userId) {
+async function transferStock(payload, userId, opts = {}) {
   const material = await assertMovementRelationships(payload);
   const quantity = assertPositiveQuantity(payload.quantity);
 
@@ -589,8 +632,19 @@ async function transferStock(payload, userId) {
     });
   }
 
-  await assertWarehouse(payload.warehouse_id, 'warehouse_id');
-  await assertWarehouse(payload.destination_warehouse_id, 'destination_warehouse_id');
+  const sourceWh = await assertWarehouse(payload.warehouse_id, 'warehouse_id');
+  const destWh = await assertWarehouse(payload.destination_warehouse_id, 'destination_warehouse_id');
+
+  const isCentralTransfer = sourceWh.type === 'central' || sourceWh.name?.toLowerCase().includes('central') ||
+                            destWh.type === 'central' || destWh.name?.toLowerCase().includes('central');
+  if (isCentralTransfer) {
+    const vNum = payload.vehicle_number || (payload.notes && payload.notes.match(/Vehicle:\s*([^|]+)/i)?.[1]);
+    if (!vNum || !String(vNum).trim()) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'Vehicle number is mandatory for Central Warehouse movements.',
+      });
+    }
+  }
 
   return withTransaction(async (conn) => {
     // Lock both warehouses in a consistent (ascending id) order. Locking in
@@ -613,9 +667,11 @@ async function transferStock(payload, userId) {
     const available = Number(slot?.quantity || 0);
     if (quantity > available) {
       throw ApiError.badRequest('Check the highlighted fields.', {
-        quantity: `Only ${available} ${material.unit} available in ${sourceWarehouse.name} (${sourceWarehouse.code}).`,
+        quantity: `Only ${available} ${material.unit} available in ${sourceWh.name} (${sourceWh.code}).`,
       });
     }
+
+    const transferCost = await warehouseModel.averageUnitCost(payload.warehouse_id, payload.material_id, conn);
 
     await warehouseModel.adjustStockSlot(
       {
@@ -658,10 +714,13 @@ async function transferStock(payload, userId) {
         transaction_date: payload.transaction_date || today(),
         performed_by: payload.performed_by ?? userId ?? null,
         notes: payload.notes ?? null,
+        unit_cost: transferCost,
+        total_cost: transferCost != null ? Number((transferCost * quantity).toFixed(2)) : null,
+        vehicle_number: payload.vehicle_number ? String(payload.vehicle_number).trim() : null,
       },
       conn
     );
-  }).then((id) => warehouseModel.findTransactionById(id)).then(toTransaction);
+  }, opts.conn).then((id) => warehouseModel.findTransactionById(id, opts.conn)).then(toTransaction);
 }
 
 /**

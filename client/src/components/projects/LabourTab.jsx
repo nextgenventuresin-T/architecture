@@ -16,9 +16,9 @@ import { formatCurrency, formatNumber, formatDate } from '../../utils/format';
  * Project / Site Labour Tracking:
  * - Summary KPI: Labour Assigned (Budget) -> Labour Worked (Actuals) -> Remaining
  * - Dual switchable views:
- *   A. Labour Worked / Daily Attendance Log (from Daily Work Updates)
- *   B. Phase Budget Duration Breakdown (Duration × Working Days × Workers)
- * - Complete filtering by Contractor, Phase, and Date.
+ *   A. Labour Worked / Daily Attendance Log (from Daily Work Updates & Task Logs)
+ *   B. Task-wise Labour Budget (Planned Workers × Daily Wage × Working Days per Task)
+ * - Complete filtering by Contractor, Task, Site, and Date.
  */
 export default function LabourTab({ detail, projectId: propProjectId, siteId: propSiteId, lookups, onChanged }) {
   const projectId = propProjectId || detail?.project?.id || detail?.id;
@@ -36,12 +36,14 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
       remainingCost: 0,
     },
     worked: [],
+    tasks: [],
+    budgetByTask: [],
     budgetByPhase: [],
   });
 
   const [viewMode, setViewMode] = useState('worked'); // 'worked' or 'budget'
   const [searchFilter, setSearchFilter] = useState('');
-  const [phaseFilter, setPhaseFilter] = useState('');
+  const [taskFilter, setTaskFilter] = useState('');
   const [contractorFilter, setContractorFilter] = useState('');
   const [siteFilter, setSiteFilter] = useState(initialSiteId);
   const [dateFrom, setDateFrom] = useState('');
@@ -54,6 +56,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
   const [logForm, setLogForm] = useState({
     record_date: new Date().toISOString().slice(0, 10),
     site_id: propSiteId || '',
+    task_id: '',
     contractor_id: detail?.project?.contractor_id || '',
     category: 'Mason',
     worker_count: 5,
@@ -74,6 +77,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
       await projectsApi.logLabour(projectId, {
         ...logForm,
         site_id: logForm.site_id ? Number(logForm.site_id) : undefined,
+        task_id: logForm.task_id ? Number(logForm.task_id) : undefined,
         contractor_id: logForm.contractor_id ? Number(logForm.contractor_id) : undefined,
         worker_count: Number(logForm.worker_count || 1),
         present_count: Number(logForm.present_count || 1),
@@ -111,6 +115,8 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
             remainingCost: 0,
           },
           worked: [],
+          tasks: [],
+          budgetByTask: [],
           budgetByPhase: [],
         }
       );
@@ -134,6 +140,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
             daily_work_id: l.id,
             work_date: l.record_date,
             phase_name: l.category,
+            task_name: l.category,
             site_name: l.site_name,
             contractor_name: l.contractor_name,
             labour_count: l.present_count,
@@ -141,6 +148,8 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
             work_description: `${l.category} crew deployment`,
             verified_by_engineer: true,
           })),
+          tasks: [],
+          budgetByTask: [],
           budgetByPhase: [],
         });
       }
@@ -154,12 +163,22 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
   }, [projectId, siteFilter, dateFrom, dateTo]);
 
   // Unique filter lists
-  const availablePhases = useMemo(() => {
+  const taskBudgetList = useMemo(() => {
+    return data.budgetByTask || data.tasks || data.budgetByPhase || [];
+  }, [data.budgetByTask, data.tasks, data.budgetByPhase]);
+
+  const availableTasks = useMemo(() => {
     const set = new Set();
-    data.worked.forEach((w) => { if (w.phase_name) set.add(w.phase_name); });
-    data.budgetByPhase.forEach((b) => { if (b.phase_name) set.add(b.phase_name); });
+    data.worked.forEach((w) => {
+      const t = w.task_name || w.phase_name;
+      if (t) set.add(t);
+    });
+    taskBudgetList.forEach((b) => {
+      const t = b.task_name || b.name || b.phase_name;
+      if (t) set.add(t);
+    });
     return Array.from(set).sort();
-  }, [data.worked, data.budgetByPhase]);
+  }, [data.worked, taskBudgetList]);
 
   const availableContractors = useMemo(() => {
     const set = new Set();
@@ -169,15 +188,19 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
 
   const filteredWorked = useMemo(() => {
     return data.worked.filter((row) => {
-      if (searchFilter && !row.work_description?.toLowerCase().includes(searchFilter.toLowerCase()) &&
-          !row.contractor_name?.toLowerCase().includes(searchFilter.toLowerCase())) {
+      if (
+        searchFilter &&
+        !row.work_description?.toLowerCase().includes(searchFilter.toLowerCase()) &&
+        !row.contractor_name?.toLowerCase().includes(searchFilter.toLowerCase()) &&
+        !(row.task_name || '').toLowerCase().includes(searchFilter.toLowerCase())
+      ) {
         return false;
       }
-      if (phaseFilter && row.phase_name !== phaseFilter) return false;
+      if (taskFilter && (row.task_name !== taskFilter && row.phase_name !== taskFilter)) return false;
       if (contractorFilter && row.contractor_name !== contractorFilter) return false;
       return true;
     });
-  }, [data.worked, searchFilter, phaseFilter, contractorFilter]);
+  }, [data.worked, searchFilter, taskFilter, contractorFilter]);
 
   const workedColumns = [
     {
@@ -233,6 +256,24 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
       ),
     },
     {
+      key: 'daily_cost',
+      header: 'Daily Labour Cost',
+      align: 'right',
+      render: (row) => {
+        const isCompanyLabour = row.subcategory_name?.includes('Company') || row.labour_type?.toLowerCase().includes('company') || row.worker_type === 'company_labour';
+        return (
+          <div className="text-right">
+            <span className="font-semibold tabular-nums text-emerald-700">
+              {formatCurrency(row.daily_cost || 0)}
+            </span>
+            {isCompanyLabour && (
+              <p className="text-[10px] text-blue-700 font-medium">Company Labour (₹0 Cost)</p>
+            )}
+          </div>
+        );
+      },
+    },
+    {
       key: 'description',
       header: 'Work Completed',
       render: (row) => (
@@ -261,7 +302,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
 
   const resetFilters = () => {
     setSearchFilter('');
-    setPhaseFilter('');
+    setTaskFilter('');
     setContractorFilter('');
     setDateFrom('');
     setDateTo('');
@@ -328,11 +369,11 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
         <div className="rounded-2xl border border-line bg-canvas-subtle/50 p-5 shadow-card flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-ink-subtle">Duration-Linked</span>
-              <Badge tone="positive">Auto-calc</Badge>
+              <span className="text-xs font-semibold uppercase tracking-wider text-ink-subtle">Task Planning</span>
+              <Badge tone="positive">Manual Tasks</Badge>
             </div>
             <p className="mt-2 text-xs text-ink-muted leading-relaxed">
-              Total Labour Cost = Workers × Daily Wage × Working Days (Duration in months × working days/mo).
+              Total Labour Cost = Workers × Daily Wage × Task Working Days planned across manual project tasks.
             </p>
           </div>
           <Button variant="secondary" size="sm" onClick={fetchTracking} className="mt-2 w-full">
@@ -347,7 +388,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
         <CardHeader
           title={
             <div className="flex flex-wrap items-center gap-3">
-              <span>Labour Tracking & Phase Budget</span>
+              <span>Labour Tracking & Task Budget</span>
               <div className="inline-flex rounded-lg border border-line bg-canvas p-1">
                 <button
                   type="button"
@@ -369,15 +410,15 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
                       : 'text-ink-muted hover:text-ink'
                   }`}
                 >
-                  Phase-wise Duration Budget ({data.budgetByPhase.length})
+                  Task-wise Labour Budget ({taskBudgetList.length})
                 </button>
               </div>
             </div>
           }
           description={
             viewMode === 'worked'
-              ? 'On-site worker deployment logged through contractor daily work updates.'
-              : 'Labour budget formulas calculated from phase expected duration × working days per month.'
+              ? 'On-site worker deployment logged through contractor daily work updates and task worker logs.'
+              : 'Labour budget allocations planned per manual project task: Workers × Daily Wage × Working Days.'
           }
           action={
             <Button
@@ -387,6 +428,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
                 setLogForm({
                   record_date: new Date().toISOString().slice(0, 10),
                   site_id: siteFilter || propSiteId || (detail?.sites?.[0]?.id || ''),
+                  task_id: '',
                   contractor_id: detail?.project?.contractor_id || '',
                   category: 'Mason',
                   worker_count: 5,
@@ -410,21 +452,21 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
             <div className="flex flex-wrap items-center gap-3">
               <div className="w-56">
                 <TextField
-                  placeholder="Search work or contractor…"
+                  placeholder="Search work, task or contractor…"
                   value={searchFilter}
                   onChange={(e) => setSearchFilter(e.target.value)}
                   size="sm"
                 />
               </div>
 
-              {availablePhases.length > 0 && (
+              {availableTasks.length > 0 && (
                 <div className="w-48">
                   <Select
-                    value={phaseFilter}
-                    onChange={(e) => setPhaseFilter(e.target.value)}
+                    value={taskFilter}
+                    onChange={(e) => setTaskFilter(e.target.value)}
                     options={[
-                      { value: '', label: 'All Phases' },
-                      ...availablePhases.map((phase) => ({ value: phase, label: phase })),
+                      { value: '', label: 'All Tasks' },
+                      ...availableTasks.map((task) => ({ value: task, label: task })),
                     ]}
                   />
                 </div>
@@ -460,7 +502,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
                 />
               </div>
 
-              {(searchFilter || phaseFilter || contractorFilter || dateFrom || dateTo) && (
+              {(searchFilter || taskFilter || contractorFilter || dateFrom || dateTo) && (
                 <Button variant="ghost" size="sm" onClick={resetFilters} className="text-xs">
                   Clear Filters
                 </Button>
@@ -488,61 +530,85 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
           />
         ) : (
           <div className="divide-y divide-line">
-            {data.budgetByPhase.length === 0 ? (
+            {taskBudgetList.length === 0 ? (
               <div className="p-12 text-center text-ink-muted">
                 <HardHat className="mx-auto h-10 w-10 text-ink-subtle mb-3" />
-                <p className="font-medium text-ink">No Phase-wise Labour Budget Defined</p>
-                <p className="text-xs text-ink-subtle mt-1">Configure phase duration and labour rates in Phases & Budget tab.</p>
+                <p className="font-medium text-ink">No Task-wise Labour Budget Defined</p>
+                <p className="text-xs text-ink-subtle mt-1">Configure tasks and add labour allocations in the Tasks & Planning tab.</p>
               </div>
             ) : (
-              data.budgetByPhase.map((phase) => (
-                <div key={phase.phase_number} className="p-6 space-y-4">
+              taskBudgetList.map((task, idx) => (
+                <div key={task.task_id || task.id || idx} className="p-6 space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <Badge tone="brand">Phase {phase.phase_number}</Badge>
-                        <h4 className="font-semibold text-ink">{phase.phase_name}</h4>
+                        <Badge tone="brand">Task {idx + 1}</Badge>
+                        <h4 className="font-semibold text-ink">{task.task_name || task.name}</h4>
+                        {task.status && (
+                          <Badge tone={task.status === 'completed' ? 'positive' : task.status === 'delayed' ? 'danger' : 'neutral'}>
+                            {task.status}
+                          </Badge>
+                        )}
                       </div>
                       <p className="mt-1 text-xs text-ink-subtle">
-                        Duration: <span className="font-medium text-ink">{phase.expected_duration_months} months</span> ·{' '}
-                        Working days/mo: <span className="font-medium text-ink">{phase.working_days_per_month} days</span> ·{' '}
-                        Total Calculated Days: <span className="font-semibold text-brand">{phase.calculated_working_days} working days</span>
+                        Site: <span className="font-medium text-ink">{task.site_name || 'General Site'}</span> ·{' '}
+                        Duration: <span className="font-medium text-ink">{task.duration_days || task.calculated_working_days || 1} days</span> ·{' '}
+                        Allocated Trades: <span className="font-semibold text-brand">{(task.labourItems || []).length} roles</span>
                       </p>
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-ink-subtle">Phase Labour Budget</p>
-                      <p className="font-display text-lg font-bold text-ink">{formatCurrency(phase.totalBudgetedCost)}</p>
-                      <p className="text-xs text-ink-muted">{formatNumber(phase.totalBudgetedDays)} worker-days</p>
+                    <div className="flex flex-wrap items-center gap-2.5 text-right">
+                      <div className="rounded-lg border border-line bg-canvas/60 px-3 py-1.5 text-right">
+                        <p className="text-[10px] text-ink-subtle">Planned Labour Cost</p>
+                        <p className="font-display text-sm font-bold text-ink">{formatCurrency(task.totalBudgetedCost || 0)}</p>
+                        <p className="text-[10px] text-ink-muted">{formatNumber(task.totalBudgetedDays || 0)} planned days</p>
+                      </div>
+                      <div className="rounded-lg border border-amber-200/80 bg-amber-50/60 px-3 py-1.5 text-right">
+                        <p className="text-[10px] text-amber-800 font-medium">Actual Labour Cost</p>
+                        <p className="font-display text-sm font-bold text-amber-700">{formatCurrency(task.workedCost || 0)}</p>
+                        <p className="text-[10px] text-amber-700">{formatNumber(task.workedDays || 0)} days logged</p>
+                      </div>
+                      <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/60 px-3 py-1.5 text-right">
+                        <p className="text-[10px] text-emerald-800 font-medium">Remaining Budget</p>
+                        <p className="font-display text-sm font-bold text-emerald-700">
+                          {formatCurrency(task.remainingCost != null ? task.remainingCost : Math.max(0, (task.totalBudgetedCost || 0) - (task.workedCost || 0)))}
+                        </p>
+                        <p className="text-[10px] text-emerald-700">{formatNumber(task.remainingDays || 0)} days left</p>
+                      </div>
                     </div>
                   </div>
 
-                  {phase.labourItems && phase.labourItems.length > 0 ? (
+                  {task.labourItems && task.labourItems.length > 0 ? (
                     <div className="overflow-x-auto rounded-xl border border-line bg-canvas-subtle/30">
                       <table className="w-full text-left text-xs">
                         <thead className="border-b border-line bg-canvas-subtle text-ink-muted">
                           <tr>
-                            <th className="py-2.5 px-4 font-medium">Labour Role / Type</th>
+                            <th className="py-2.5 px-4 font-medium">Labour Role / Trade</th>
                             <th className="py-2.5 px-4 font-medium text-right">No. of Workers</th>
                             <th className="py-2.5 px-4 font-medium text-right">Daily Wage</th>
-                            <th className="py-2.5 px-4 font-medium text-right">Calculated Days</th>
-                            <th className="py-2.5 px-4 font-medium text-right">Total Cost</th>
+                            <th className="py-2.5 px-4 font-medium text-right">Working Days</th>
+                            <th className="py-2.5 px-4 font-medium text-right">Total Budget</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-line bg-white">
-                          {phase.labourItems.map((item, idx) => (
-                            <tr key={idx}>
-                              <td className="py-2.5 px-4 font-medium text-ink">{item.labour_type}</td>
-                              <td className="py-2.5 px-4 text-right tabular-nums text-ink">{formatNumber(item.workers_count)}</td>
-                              <td className="py-2.5 px-4 text-right tabular-nums text-ink-muted">{formatCurrency(item.daily_wage)}</td>
-                              <td className="py-2.5 px-4 text-right tabular-nums text-ink-muted">{item.working_days} days</td>
-                              <td className="py-2.5 px-4 text-right font-medium tabular-nums text-ink">{formatCurrency(item.total_cost)}</td>
+                          {task.labourItems.map((item, lIdx) => (
+                            <tr key={lIdx}>
+                              <td className="py-2.5 px-4 font-medium text-ink">
+                                {item.labour_type || item.skill_trade || item.labour_name || 'General Labour'}
+                                {item.labour_name && item.labour_name !== item.labour_type && (
+                                  <span className="text-ink-subtle font-normal ml-1.5">({item.labour_name})</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-4 text-right tabular-nums text-ink">{formatNumber(item.workers_count || item.worker_count || 1)}</td>
+                              <td className="py-2.5 px-4 text-right tabular-nums text-ink-muted">{formatCurrency(item.daily_wage || 0)}</td>
+                              <td className="py-2.5 px-4 text-right tabular-nums text-ink-muted">{item.working_days || 1} days</td>
+                              <td className="py-2.5 px-4 text-right font-medium tabular-nums text-ink">{formatCurrency(item.total_cost || 0)}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
                   ) : (
-                    <p className="text-xs italic text-ink-subtle">No specific labour line items allocated for this phase.</p>
+                    <p className="text-xs italic text-ink-subtle">No labour roles allocated for this task.</p>
                   )}
                 </div>
               ))
@@ -602,7 +668,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
             />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Select
               label="Site"
               value={logForm.site_id}
@@ -625,6 +691,19 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
                 ...(lookups?.contractors || []).map((c) => ({
                   value: c.id,
                   label: c.name,
+                })),
+              ]}
+            />
+
+            <Select
+              label="Task (Optional)"
+              value={logForm.task_id}
+              onChange={(e) => setLogForm({ ...logForm, task_id: e.target.value })}
+              options={[
+                { value: '', label: 'General Project' },
+                ...(detail?.tasks || data?.tasks || taskBudgetList || []).map((t) => ({
+                  value: t.id || t.task_id,
+                  label: t.name || t.task_name,
                 })),
               ]}
             />

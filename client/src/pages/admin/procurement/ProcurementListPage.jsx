@@ -128,13 +128,25 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
       ),
     },
     { key: 'kind', header: 'Type', value: (row) => procurementFlowLabel(row), render: kindBadge },
-    { key: 'material', header: 'Material', value: (row) => row.material.name,
-      render: (row) => (<div><p className="text-ink">{row.material.name}</p><p className="text-xs text-ink-subtle">{formatNumber(row.quantity)} {row.unit}</p></div>) },
+    { key: 'material', header: 'Item / Material', value: (row) => row.tool?.name || row.material?.name || '—',
+      render: (row) => (
+        <div>
+          <p className="text-ink font-medium">
+            {row.tool ? (
+              <span className="inline-flex items-center gap-1.5"><span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">Tool</span>{row.tool.name}</span>
+            ) : (
+              row.material?.name || '—'
+            )}
+          </p>
+          <p className="text-xs text-ink-subtle">{formatNumber(row.quantity)} {row.unit}</p>
+        </div>
+      ) },
     { key: 'source', header: 'Source', value: (row) => row.source?.name || row.supplier || '', render: (row) => <span className="text-xs text-ink-muted">{row.source?.name || row.supplier || '—'}</span> },
     { key: 'destination', header: 'Destination', value: (row) => row.destination?.name || projectName(row), render: (row) => <span className="text-xs text-ink-muted">{row.destination?.name || projectName(row)}</span> },
     { key: 'project', header: 'Project', value: (row) => row.project?.name || '', render: (row) => <span className="text-xs text-ink-subtle">{row.project?.name || '—'}</span> },
     { key: 'site', header: 'Site', value: (row) => row.site?.name || '', render: (row) => <span className="text-xs text-ink-subtle">{row.site?.name || '—'}</span> },
-    { key: 'amount', header: 'Amount', align: 'right', value: (row) => amountOf(row), render: (row) => <span className="tabular-nums text-ink-muted">{formatCurrency(amountOf(row))}</span> },
+    { key: 'rate', header: 'Cost / Unit', align: 'right', value: (row) => row.purchaseRate || row.estimatedRate || 0, render: (row) => <span className="tabular-nums text-ink">{formatCurrency(row.purchaseRate || row.estimatedRate || 0)}</span> },
+    { key: 'amount', header: 'Total Value', align: 'right', value: (row) => amountOf(row), render: (row) => <span className="tabular-nums font-semibold text-ink">{formatCurrency(amountOf(row))}</span> },
     { key: 'status', header: 'Status', value: (row) => row.status, render: statusBadge },
   ];
 

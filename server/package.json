@@ -12,7 +12,9 @@
     "db:seed": "node src/db/seed.js",
     "db:seed:demo": "node src/db/seedDemo.js",
     "db:seed:additive-demo": "node scripts_test/seed_additive_demo.js",
-    "test:additive-demo": "node scripts_test/additive_demo_smoke_test.js"
+    "test:additive-demo": "node scripts_test/additive_demo_smoke_test.js",
+    "db:clear:data": "node src/db/clear_finance_sites_procurement.js",
+    "db:clean": "node scripts/clean-data.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

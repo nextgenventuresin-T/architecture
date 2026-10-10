@@ -54,6 +54,11 @@ const fulfil = asyncHandler(async (req, res) =>
   ok(res, await procurementService.fulfil(req.params.id, req.body, req.user.id))
 );
 
+/** POST /api/procurement/:id/tool-fulfil - allocate / register the physical machine */
+const toolFulfil = asyncHandler(async (req, res) =>
+  ok(res, await procurementService.toolFulfil(req.params.id, req.body, req.user))
+);
+
 /** POST /api/procurement/:id/bill — attach a real bill/invoice file */
 const uploadBill = asyncHandler(async (req, res) =>
   ok(res, await procurementService.attachBill(req.params.id, req.file, req.hrScope, req.user.id))
@@ -72,4 +77,4 @@ const dispatch = asyncHandler(async (req, res) =>
   ok(res, await procurementService.dispatch(req.params.id, req.body, req.hrScope, req.user.id))
 );
 
-module.exports = { list, lookups, detail, create, update, updateStatus, confirmSource, placeOrder, receive, updateReceipt, fulfil, dispatch, uploadBill, downloadBill };
+module.exports = { list, lookups, detail, create, update, updateStatus, confirmSource, placeOrder, receive, updateReceipt, fulfil, toolFulfil, dispatch, uploadBill, downloadBill };

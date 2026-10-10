@@ -25,14 +25,21 @@ async function createUpdate({
   misc_amount,
   misc_remarks,
   misc_receipt_path,
+  tool_id,
+  tool_name,
+  tool_cost,
+  tool_remarks,
+  unit_cost,
+  material_cost,
 }) {
   const [result] = await pool.query(
     `INSERT INTO daily_work_updates
       (project_id, site_id, contractor_id, task_id, phase_number, phase_title, subcategory,
        material_id, quantity_used, unit, warehouse_transaction_id, expense_id,
        work_date, work_done, work_status, progress_percentage, remarks, created_by,
-       misc_description, misc_amount, misc_remarks, misc_receipt_path)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       misc_description, misc_amount, misc_remarks, misc_receipt_path,
+       tool_id, tool_name, tool_cost, tool_remarks, unit_cost, material_cost)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       project_id,
       site_id || null,
@@ -56,6 +63,12 @@ async function createUpdate({
       misc_amount ? Number(misc_amount) : 0,
       misc_remarks || null,
       misc_receipt_path || null,
+      tool_id || null,
+      tool_name || null,
+      tool_cost ? Number(tool_cost) : 0,
+      tool_remarks || null,
+      unit_cost != null ? Number(unit_cost) : null,
+      material_cost != null ? Number(material_cost) : null,
     ]
   );
   return result.insertId;
@@ -121,9 +134,15 @@ async function findById(id) {
   return { ...rows[0], photos };
 }
 
-async function findAll({ projectId, siteId, contractorId, taskId, date, page = 1, pageSize = 20 } = {}) {
+async function findAll({ projectId, siteId, contractorId, taskId, date, pmProjectIds, page = 1, pageSize = 20 } = {}) {
   const where = [];
   const params = [];
+
+  // Project Manager: only their assigned projects (deny-by-default).
+  if (Array.isArray(pmProjectIds)) {
+    if (pmProjectIds.length === 0) where.push('1 = 0');
+    else { where.push(`dwu.project_id IN (${pmProjectIds.map(() => '?').join(',')})`); params.push(...pmProjectIds.map(Number)); }
+  }
 
   if (projectId) {
     where.push('dwu.project_id = ?');

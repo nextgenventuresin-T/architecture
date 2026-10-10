@@ -64,7 +64,7 @@ const SKILL_MAX = 80;
 const workerRules = (isCreate) => {
   const required = (chain) => (isCreate ? chain : chain.optional());
   return [
-    body('contractorId').optional().isInt({ min: 1 }).withMessage('Select a contractor.').toInt(),
+    body('contractorId').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a contractor.').toInt(),
     required(body('fullName').trim().notEmpty().withMessage('Enter the worker\'s name.').isLength({ max: 150 })),
     body('phone').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 30 }),
     body('skillCategory').optional({ checkFalsy: true }).trim().isLength({ max: SKILL_MAX }),
@@ -72,6 +72,11 @@ const workerRules = (isCreate) => {
     body('status').optional().isIn(['active', 'inactive']).withMessage('Choose a valid status.'),
     body('joiningDate').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Enter a valid joining date.'),
     body('workerCode').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 30 }),
+    body('aadhaarNumber').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 30 }),
+    body('aadhaar_number').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 30 }),
+    body('isCompanyLabour').optional().isBoolean().toBoolean(),
+    body('is_company_labour').optional().isBoolean().toBoolean(),
+    body('workerType').optional().trim(),
     body('notes').optional({ nullable: true }).trim(),
   ];
 };
@@ -86,6 +91,7 @@ router.get('/contractor-workers/:id/history', [idParam()], validate, (req, res, 
 router.get('/contractor-workers/:id', [idParam()], validate, controller.getWorker);
 router.post('/contractor-workers', canCreate, workerRules(true), validate, controller.createWorker);
 router.patch('/contractor-workers/:id', canEdit, [idParam(), ...workerRules(false)], validate, controller.updateWorker);
+router.delete('/contractor-workers/:id', canEdit, [idParam()], validate, controller.deleteWorker);
 
 // ------------------------------------------------------- labour directory & lookup
 router.get(
@@ -115,6 +121,8 @@ router.get(
   controller.diary
 );
 router.get('/labour-directory/:workerType/:id/history', [idParam()], validate, controller.getWorkerHistory);
+router.patch('/labour-directory/:id', canEdit, [idParam(), ...workerRules(false)], validate, controller.updateWorker);
+router.delete('/labour-directory/:id', canEdit, [idParam()], validate, controller.deleteWorker);
 
 // ------------------------------------------------------------ assignments
 

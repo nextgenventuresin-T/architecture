@@ -10,7 +10,7 @@ const { pool } = require('../config/db');
 const LIST_SELECT = `
   SELECT
     p.id, p.code, p.name, p.project_type, p.location, p.description,
-    p.start_date, p.expected_completion, p.estimated_budget,
+    p.start_date, p.expected_completion, p.estimated_budget, p.client_contract_value,
     p.status, p.progress, p.current_phase,
     c.id  AS client_id,     c.name AS client_name,
     pm.id AS project_manager_id, pm.full_name AS project_manager_name,
@@ -106,8 +106,8 @@ async function nextCode() {
 
 const WRITABLE = [
   'code', 'name', 'client_id', 'project_type', 'description', 'location',
-  'start_date', 'expected_completion', 'estimated_budget', 'project_manager_id',
-  'architect_id', 'site_engineer_id', 'contractor_id', 'status', 'current_phase',
+  'start_date', 'expected_completion', 'estimated_budget', 'client_contract_value',
+  'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id', 'status', 'current_phase',
 ];
 
 async function create(payload) {
@@ -211,7 +211,7 @@ const relatedQueries = {
     SELECT t.*, s.name AS site_name,
            (SELECT COUNT(*) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS worker_entries_count,
            (SELECT COUNT(DISTINCT twl.worker_name) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS unique_workers_count,
-           (SELECT COALESCE(SUM(twl.daily_wage * (twl.hours_worked / 8)), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
+           (SELECT COALESCE(SUM(CASE WHEN twl.worker_type IN ('company_labour', 'company_employee') OR LOWER(COALESCE(twl.labour_type, '')) LIKE '%company%' THEN 0 ELSE twl.daily_wage * (twl.hours_worked / 8) END), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
            (SELECT COALESCE(SUM(dwu.quantity_used * COALESCE(tm.cost_per_unit, 0)), 0)
             FROM daily_work_updates dwu
             LEFT JOIN task_materials tm ON tm.task_id = dwu.task_id AND tm.material_id = dwu.material_id
@@ -317,10 +317,16 @@ async function findFinancials(projectId) {
        (SELECT COALESCE(SUM(quantity * rate), 0) FROM material_entries WHERE project_id = ?) AS material_cost,
        (SELECT COALESCE(SUM(contract_value), 0) FROM contractor_payments WHERE project_id = ?) AS contract_value,
        (SELECT COALESCE(SUM(paid_amount), 0) FROM contractor_payments WHERE project_id = ?) AS contractor_paid,
-       (SELECT COALESCE(SUM(l.present_count * l.daily_rate), 0)
+       (
+         (SELECT COALESCE(SUM(CASE WHEN twl.worker_type IN ('company_labour', 'company_employee') OR LOWER(COALESCE(twl.labour_type, '')) LIKE '%company%' THEN 0 ELSE (twl.hours_worked / 8.0) * twl.daily_wage END), 0)
+          FROM task_worker_logs twl
+          WHERE twl.project_id = ?)
+         +
+         (SELECT COALESCE(SUM(l.present_count * l.daily_rate), 0)
           FROM labour_records l JOIN sites s ON s.id = l.site_id
-          WHERE s.project_id = ?) AS labour_cost`,
-    Array(6).fill(projectId)
+          WHERE s.project_id = ?)
+       ) AS labour_cost`,
+    Array(7).fill(projectId)
   );
 
   const [byCategory] = await pool.query(

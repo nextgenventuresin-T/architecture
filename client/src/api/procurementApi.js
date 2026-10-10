@@ -24,6 +24,8 @@ export const procurementApi = {
   confirmSource: (id) => axiosClient.post(`/procurement/${id}/confirm`).then((r) => r.data.data.request),
   placeOrder: (id, payload) => axiosClient.post(`/procurement/${id}/order`, payload).then((r) => r.data.data.request),
   fulfil: (id, payload = {}) => axiosClient.post(`/procurement/${id}/fulfil`, payload).then((r) => r.data.data),
+  // Machine requests: allocate a chosen serial / register a purchased or rented machine.
+  toolFulfil: (id, payload = {}) => axiosClient.post(`/procurement/${id}/tool-fulfil`, payload).then((r) => r.data.data),
   dispatch: (id, payload = {}) => axiosClient.post(`/procurement/${id}/dispatch`, payload).then((r) => r.data.data),
   // Real bill/invoice file (multipart upload; authenticated blob download).
   uploadBill: (id, file) => {

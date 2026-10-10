@@ -66,6 +66,11 @@ const plannedMaterials = asyncHandler(async (req, res) => {
   return ok(res, result);
 });
 
+const plannedTools = asyncHandler(async (req, res) => {
+  const result = await taskService.getPlannedTools(req.params.id, req.hrScope);
+  return ok(res, result);
+});
+
 const budgetApprovals = asyncHandler(async (req, res) => {
   const result = await taskService.getBudgetApprovals(req.params.id);
   return ok(res, result);
@@ -84,5 +89,6 @@ module.exports = {
   unassignWorker,
   createWorker,
   plannedMaterials,
+  plannedTools,
   budgetApprovals,
 };

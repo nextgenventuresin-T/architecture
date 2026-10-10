@@ -39,6 +39,12 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
   if (!request) return null;
 
   const isInternalTransfer = request.kind === 'internal_transfer';
+  const isCentral = request.kind === 'central_purchase' ||
+    request.sourceType === 'central_warehouse' ||
+    request.destinationType === 'central_warehouse' ||
+    request.source?.type === 'central_warehouse' ||
+    request.destination?.type === 'central_warehouse';
+  const isVehicleRequired = isInternalTransfer || isCentral;
 
   const set = (key) => (event) => {
     setValues((current) => ({ ...current, [key]: event.target.value }));
@@ -56,10 +62,10 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
       });
       return;
     }
-    // The receiving contractor verifies this number before the stock lands, so
-    // a contractor-to-contractor shipment cannot go out without one.
-    if (isInternalTransfer && !values.vehicle_number.trim()) {
-      setFieldErrors({ vehicle_number: 'Enter the vehicle number — the receiving contractor verifies it.' });
+    // The receiving contractor verifies this number before the stock lands, and
+    // Central Warehouse shipments require a vehicle number.
+    if (isVehicleRequired && !values.vehicle_number.trim()) {
+      setFieldErrors({ vehicle_number: isCentral ? 'Vehicle number is mandatory for Central Warehouse shipments.' : 'Enter the vehicle number — the receiving contractor verifies it.' });
       return;
     }
     setIsSaving(true);
@@ -128,7 +134,7 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <InputField label="Quantity to dispatch" required type="number" min="0" step="0.01" value={values.sent_quantity} onChange={set('sent_quantity')} error={fieldErrors.sent_quantity} />
-        <InputField label="Vehicle number" required={isInternalTransfer} value={values.vehicle_number} onChange={set('vehicle_number')} error={fieldErrors.vehicle_number} placeholder="PB11 AB 1234" />
+        <InputField label="Vehicle number" required={isVehicleRequired} value={values.vehicle_number} onChange={set('vehicle_number')} error={fieldErrors.vehicle_number} placeholder="PB11 AB 1234" description={isCentral ? "Mandatory for Central Warehouse shipments" : undefined} />
         <InputField label="Driver name" value={values.driver_name} onChange={set('driver_name')} error={fieldErrors.driver_name} />
         <InputField label="Driver phone" value={values.driver_phone} onChange={set('driver_phone')} error={fieldErrors.driver_phone} />
         <InputField label="Transport cost" type="number" min="0" step="0.01" value={values.transport_cost} onChange={set('transport_cost')} error={fieldErrors.transport_cost} />

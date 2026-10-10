@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Check, X, Send, RotateCcw, ShoppingCart, PackagePlus, Ban, ClipboardCheck } from 'lucide-react';
+import { Check, X, Send, RotateCcw, ShoppingCart, PackagePlus, Ban, ClipboardCheck, Wrench } from 'lucide-react';
 import Button from '../ui/Button';
 import PlaceOrderDialog from './PlaceOrderDialog';
 import ReceiveDialog from './ReceiveDialog';
 import ReceiveMovementDialog from './ReceiveMovementDialog';
 import DispatchDialog from './DispatchDialog';
+import VerifiedReceiptDialog from './VerifiedReceiptDialog';
+import ToolFulfilDialog from './ToolFulfilDialog';
 import { procurementApi } from '../../api/procurementApi';
 import { toApiError } from '../../api/axiosClient';
 import useAuth from '../../hooks/useAuth';
@@ -32,7 +34,8 @@ export default function StatusActions({ request, movement, onChanged, onError })
   const { user } = useAuth();
   const role = user?.role;
   const canManage = [ROLES.ADMIN, ROLES.PROCUREMENT].includes(role);
-  const canManageOwnRequest = canManage || role === ROLES.CONTRACTOR;
+  // A Project Manager raises and progresses their own requests; approve / reject stay with Admin.
+  const canManageOwnRequest = canManage || role === ROLES.CONTRACTOR || role === ROLES.PROJECT_MANAGER;
   const canApprove = role === ROLES.ADMIN;
   const canReceive = [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE].includes(role);
 
@@ -41,6 +44,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   const [isReceiving, setIsReceiving] = useState(false);
   const [isReceivingMovement, setIsReceivingMovement] = useState(false);
   const [isFulfilling, setIsFulfilling] = useState(false);
+  const [isAllocatingTool, setIsAllocatingTool] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [isConfirmingSource, setIsConfirmingSource] = useState(false);
 
@@ -50,6 +54,8 @@ export default function StatusActions({ request, movement, onChanged, onError })
   const transitions = STATUS_TRANSITIONS[status] ?? [];
   const isApprovalDecision = status === 'pending_approval';
   const isFlowRequest = request.kind && request.kind !== 'project_site';
+  // Machines are tracked per serial number: completed with "Allocate machine", never received into stock.
+  const isToolRequest = request.itemType === 'tool';
 
   async function applyStatus(nextStatus) {
     setPendingStatus(nextStatus);
@@ -60,18 +66,6 @@ export default function StatusActions({ request, movement, onChanged, onError })
       onError(toApiError(caught));
     } finally {
       setPendingStatus(null);
-    }
-  }
-
-  async function applyFulfil() {
-    setIsFulfilling(true);
-    try {
-      await procurementApi.fulfil(request.id);
-      onChanged('Material moved into warehouse stock.');
-    } catch (caught) {
-      onError(toApiError(caught));
-    } finally {
-      setIsFulfilling(false);
     }
   }
 
@@ -115,7 +109,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
       );
     }
 
-    if (canManage && status === 'approved' && !isFlowRequest) {
+    if (canManage && status === 'approved' && !isFlowRequest && !isToolRequest) {
       buttons.push(
         <Button key="place-order" type="button" variant="primary" onClick={() => setIsPlacingOrder(true)}>
           <ShoppingCart className="h-4 w-4" aria-hidden="true" />
@@ -132,11 +126,26 @@ export default function StatusActions({ request, movement, onChanged, onError })
     (request.kind === 'contractor_supply' && request.source?.type === 'central_warehouse');
   const isInternalTransfer = request.kind === 'internal_transfer';
 
-  if (canReceive && isFlowRequest && !isMovementKind && status === 'approved' && !request.warehouseTransactionId) {
+  if (canReceive && isFlowRequest && !isMovementKind && !isToolRequest && status === 'approved' && !request.warehouseTransactionId) {
     buttons.push(
-      <Button key="fulfil" type="button" variant="primary" isLoading={isFulfilling} loadingText="Moving…" onClick={applyFulfil}>
+      <Button key="fulfil" type="button" variant="primary" onClick={() => setIsFulfilling(true)}>
         <PackagePlus className="h-4 w-4" aria-hidden="true" />
-        Fulfil into warehouse
+        Fulfil / Receive into warehouse
+      </Button>
+    );
+  }
+
+  // Machine requests: Admin/Procurement obtains the physical, serial-numbered unit.
+  if (canManage && isToolRequest && status === 'approved') {
+    const label = request.toolProcurementType === 'rented'
+      ? 'Register rented machine'
+      : request.toolProcurementType === 'to_be_purchased'
+        ? 'Register purchased machine'
+        : 'Allocate machine';
+    buttons.push(
+      <Button key="allocate-tool" type="button" variant="primary" onClick={() => setIsAllocatingTool(true)}>
+        <Wrench className="h-4 w-4" aria-hidden="true" />
+        {label}
       </Button>
     );
   }
@@ -196,7 +205,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
 
   // Legacy project/supplier receipt (into material_entries) — not for the
   // two-phase movement kinds, which use the movement receive above.
-  if (canReceive && !isMovementKind && ['ordered', 'partially_received'].includes(status)) {
+  if (canReceive && !isMovementKind && !isToolRequest && ['ordered', 'partially_received'].includes(status)) {
     buttons.push(
       <Button key="receive" type="button" variant="primary" onClick={() => setIsReceiving(true)}>
         <PackagePlus className="h-4 w-4" aria-hidden="true" />
@@ -216,6 +225,25 @@ export default function StatusActions({ request, movement, onChanged, onError })
         onClose={() => setIsPlacingOrder(false)}
         onSaved={(message) => {
           setIsPlacingOrder(false);
+          onChanged(message);
+        }}
+      />
+
+      <VerifiedReceiptDialog
+        request={isFulfilling ? request : null}
+        onClose={() => setIsFulfilling(false)}
+        onSaved={(message) => {
+          setIsFulfilling(false);
+          onChanged(message);
+        }}
+        onError={onError}
+      />
+
+      <ToolFulfilDialog
+        request={isAllocatingTool ? request : null}
+        onClose={() => setIsAllocatingTool(false)}
+        onSaved={(message) => {
+          setIsAllocatingTool(false);
           onChanged(message);
         }}
       />

@@ -64,34 +64,61 @@ async function decide(id, decision, userId, note) {
     const tba = tbaRows[0];
     const excess = Number(tba.requested_excess || 0);
     if (decision === 'approved') {
+      const [[taskRow]] = await pool.query('SELECT labour_budget, approved_additional_budget FROM project_tasks WHERE id = ?', [tba.task_id]);
+      const currentLabourBudget = Number(taskRow?.labour_budget || 0);
+      const isCompanyWorker = tba.worker_type === 'company_labour' || tba.worker_type === 'company_employee';
+      const revisedLabourBudget = isCompanyWorker ? currentLabourBudget : currentLabourBudget + excess;
+
       await pool.query(
         `UPDATE task_budget_approvals
-         SET status = 'approved', decided_by = ?, decision_note = ?, decided_at = NOW()
+         SET status = 'approved', decided_by = ?, decision_note = ?, decided_at = NOW(),
+             revised_labour_budget = ?
          WHERE id = ?`,
-        [userId, note || null, tba.id]
+        [userId, note || null, revisedLabourBudget, tba.id]
       );
       // Keep original budget (total_budget) strictly UNCHANGED!
       // Add approved additional amount to approved_additional_budget and clear from pending_excess_budget!
-      await pool.query(
-        `UPDATE project_tasks
-         SET approved_additional_budget = approved_additional_budget + ?,
-             pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
-         WHERE id = ?`,
-        [excess, excess, tba.task_id]
-      );
+      if (!isCompanyWorker && excess > 0) {
+        await pool.query(
+          `UPDATE project_tasks
+           SET approved_additional_budget = approved_additional_budget + ?,
+               pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
+           WHERE id = ?`,
+          [excess, excess, tba.task_id]
+        );
+      }
+      if (tba.worker_id) {
+        await pool.query(
+          `UPDATE task_assigned_workers
+           SET status = 'active'
+           WHERE task_id = ? AND worker_id = ? AND worker_type = ?`,
+          [tba.task_id, tba.worker_id, tba.worker_type || 'daily_wage']
+        );
+      }
     } else if (decision === 'rejected') {
+      const isCompanyWorker = tba.worker_type === 'company_labour' || tba.worker_type === 'company_employee';
       await pool.query(
         `UPDATE task_budget_approvals
          SET status = 'rejected', decided_by = ?, decision_note = ?, decided_at = NOW()
          WHERE id = ?`,
         [userId, note || null, tba.id]
       );
-      await pool.query(
-        `UPDATE project_tasks
-         SET pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
-         WHERE id = ?`,
-        [excess, tba.task_id]
-      );
+      if (!isCompanyWorker && excess > 0) {
+        await pool.query(
+          `UPDATE project_tasks
+           SET pending_excess_budget = GREATEST(0, pending_excess_budget - ?)
+           WHERE id = ?`,
+          [excess, tba.task_id]
+        );
+      }
+      if (tba.worker_id) {
+        await pool.query(
+          `UPDATE task_assigned_workers
+           SET status = 'rejected'
+           WHERE task_id = ? AND worker_id = ? AND worker_type = ?`,
+          [tba.task_id, tba.worker_id, tba.worker_type || 'daily_wage']
+        );
+      }
     }
   }
 

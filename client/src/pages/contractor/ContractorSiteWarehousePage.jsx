@@ -236,11 +236,11 @@ export default function ContractorSiteWarehousePage() {
     },
     {
       key: 'phase',
-      header: 'Phase & Scope',
+      header: 'Task / Scope',
       render: (row) => (
         <div>
           <p className="font-medium text-ink text-xs">
-            Phase {row.phaseNumber ?? row.phase_number}: {row.phaseTitle || row.phase_name || '—'}
+            {row.taskName || row.task_name ? `Task: ${row.taskName || row.task_name}` : (row.phaseTitle || row.phase_name || 'General')}
           </p>
           <p className="text-[11px] text-ink-subtle">{row.subcategory || '—'}</p>
         </div>

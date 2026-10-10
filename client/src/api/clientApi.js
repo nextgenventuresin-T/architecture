@@ -6,6 +6,7 @@ export const clientApi = {
   create: (payload) => axiosClient.post('/clients', payload).then((r) => r.data.data.client),
   update: (id, payload) => axiosClient.patch(`/clients/${id}`, payload).then((r) => r.data.data.client),
   remove: (id) => axiosClient.delete(`/clients/${id}`).then((r) => r.data.data),
+  projects: (id) => axiosClient.get(`/clients/${id}/projects`).then((r) => r.data.data.projects),
 };
 
 export default clientApi;

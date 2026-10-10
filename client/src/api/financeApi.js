@@ -56,6 +56,21 @@ export const financeApi = {
     axiosClient.get('/finance/contractor-inventory', { params: { contractorId } }).then((r) => r.data.data),
   recordConsumption: (payload) =>
     axiosClient.post('/finance/contractor-consumption', payload).then((r) => r.data.data),
+
+  // Restructured Finance Tabs
+  projectCosts: (params) => axiosClient.get('/finance/project-costs', { params }).then((r) => r.data.data),
+  actualExpenses: (params) => axiosClient.get('/finance/actual-expenses', { params }).then((r) => r.data.data),
+  budgetVsActual: (params) => axiosClient.get('/finance/budget-vs-actual', { params }).then((r) => r.data.data),
+  procurementLedger: (params) => axiosClient.get('/finance/procurement-ledger', { params }).then((r) => r.data.data),
+  vendorPayables: (params) => axiosClient.get('/finance/vendor-payables', { params }).then((r) => r.data.data),
+  recordVendorPayment: (payload) => axiosClient.post('/finance/vendor-payments', payload).then((r) => r.data.data),
+  vendorPaymentsHistory: (id) => axiosClient.get(`/finance/vendor-payments/${id}`).then((r) => r.data.data),
+  clientPaymentsSummary: (params) => axiosClient.get('/finance/client-payments', { params }).then((r) => r.data.data),
+  recordClientPayment: (payload) => axiosClient.post('/finance/client-payments', payload).then((r) => r.data.data),
+  clientPaymentsHistory: (params) => axiosClient.get('/finance/client-payments/history', { params }).then((r) => r.data.data),
+  profitabilitySummary: (params) => axiosClient.get('/finance/profitability', { params }).then((r) => r.data.data),
+  ledgerEntry: (params) => axiosClient.get('/finance/ledger-entry', { params }).then((r) => r.data.data),
+  drilldownDetails: (params) => axiosClient.get('/finance/drilldown', { params }).then((r) => r.data.data),
 };
 
 export default financeApi;

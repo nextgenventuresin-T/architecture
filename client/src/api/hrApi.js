@@ -19,6 +19,7 @@ export const hrApi = {
     history: (id) => axiosClient.get(`/hr/contractor-workers/${id}/history`).then((r) => r.data.data),
     create: (payload) => axiosClient.post('/hr/contractor-workers', payload).then((r) => r.data.data.worker),
     update: (id, payload) => axiosClient.patch(`/hr/contractor-workers/${id}`, payload).then((r) => r.data.data.worker),
+    delete: (id) => axiosClient.delete(`/hr/contractor-workers/${id}`).then((r) => r.data),
   },
 
   // -------------------------------------------------- unified labour directory
@@ -28,6 +29,8 @@ export const hrApi = {
       axiosClient.get('/hr/labour-directory/lookup', { params }).then((r) => r.data.data.workforce),
     history: (workerType, id) =>
       axiosClient.get(`/hr/labour-directory/${workerType}/${id}/history`).then((r) => r.data.data),
+    update: (id, payload) => axiosClient.patch(`/hr/contractor-workers/${id}`, payload).then((r) => r.data.data.worker),
+    delete: (id) => axiosClient.delete(`/hr/contractor-workers/${id}`).then((r) => r.data),
   },
 
   // ------------------------------------------------------------ assignments

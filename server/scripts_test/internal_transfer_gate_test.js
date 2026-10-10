@@ -81,6 +81,8 @@ const stubs = {
         procurementRequestId: request.id,
       };
       movements.push(mv);
+      // The real implementation flips the request to 'ordered' inside the dispatch transaction.
+      db[request.id].status = 'ordered';
       return mv;
     },
   },
@@ -215,11 +217,10 @@ const noStock = () => (stockCalls.length === 0 ? null : `stock moved: ${JSON.str
     () => (db[2].status === 'ordered' ? null : `status is ${db[2].status}`));
 
   resetWorld();
-  await expectOk('central supply — /fulfil still permitted (not an internal transfer)', async () => {
-    db[2].procurement_kind = 'central_purchase';
-    db[2].source_type = 'supplier';
-    return procurementService.fulfil(2, {}, 99);
-  }, () => (stockCalls.length === 1 ? null : 'expected the supplier receipt leg to run'));
+  await expectReject('central supply — /fulfil is refused: it must be dispatched, then received with the vehicle verified',
+    () => procurementService.fulfil(2, { vehicle_number: 'PB11AB1234' }, 99), 400, 'send material');
+  await expectOk('central supply — refused fulfil moved no stock', async () => null,
+    () => (stockCalls.length === 0 ? null : 'stock moved'));
 
   // === Req 7 support: viewer-scoped action flags
   resetWorld();

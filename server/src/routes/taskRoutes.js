@@ -112,6 +112,13 @@ router.get(
 );
 
 router.get(
+  '/:id/planned-tools',
+  [param('id').isInt({ min: 1 })],
+  validate,
+  controller.plannedTools
+);
+
+router.get(
   '/:id/budget-approvals',
   [param('id').isInt({ min: 1 })],
   validate,
@@ -128,7 +135,7 @@ router.post(
     param('id').isInt({ min: 1 }),
     body('worker_name').trim().notEmpty().withMessage('Worker name is required.'),
     body('worker_id').isInt({ min: 1 }).withMessage('Valid worker ID is required.'),
-    body('worker_type').isIn(['daily_wage', 'company_employee']).withMessage('Valid worker type is required.'),
+    body('worker_type').isIn(['daily_wage', 'company_labour', 'company_employee', 'labour']).withMessage('Valid worker type is required.'),
   ],
   validate,
   controller.assignWorker
