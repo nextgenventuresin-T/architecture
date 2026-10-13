@@ -294,14 +294,13 @@ const relatedQueries = {
            (SELECT COUNT(*) FROM approval_requests a WHERE a.project_id = p.id AND a.status = 'pending') AS pending_approvals,
            (SELECT COALESCE(AVG(s.progress), 0) FROM sites s WHERE s.project_id = p.id AND s.contractor_id = c.id) AS work_progress
     FROM contractors c
-    JOIN projects p ON (
-      p.id = ? AND (
-        c.id = p.contractor_id
-        OR c.id IN (SELECT s2.contractor_id FROM sites s2 WHERE s2.project_id = p.id AND s2.contractor_id IS NOT NULL)
-        OR c.id IN (SELECT cp2.contractor_id FROM contractor_payments cp2 WHERE cp2.project_id = p.id)
-      )
-    )
+    JOIN projects p ON p.id = ?
     LEFT JOIN contractor_payments cp ON cp.contractor_id = c.id AND cp.project_id = p.id
+    WHERE (
+      c.id = p.contractor_id
+      OR c.id IN (SELECT s2.contractor_id FROM sites s2 WHERE s2.project_id = p.id AND s2.contractor_id IS NOT NULL)
+      OR c.id IN (SELECT cp2.contractor_id FROM contractor_payments cp2 WHERE cp2.project_id = p.id)
+    )
     GROUP BY c.id, cp.id`,
 
   activities: `
