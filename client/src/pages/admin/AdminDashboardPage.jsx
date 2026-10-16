@@ -17,7 +17,7 @@ export default function AdminDashboardPage() {
   const { user } = useAuth();
   const { data, isLoading, error, reload, decideApproval, search } = useAdminData();
 
-  const firstName = (user?.fullName || '').split(' ')[0];
+  const fullName = (user?.fullName || '').trim();
 
   if (error) {
     return (
@@ -36,7 +36,7 @@ export default function AdminDashboardPage() {
   return (
     <>
       <PageHeader
-        title={firstName ? `Good to see you, ${firstName}` : 'Dashboard'}
+        title={fullName ? `Good to see you, ${fullName}` : 'Dashboard'}
         description="Everything across your sites, contractors and approvals in one view."
         breadcrumbs={[{ label: 'Dashboard' }]}
         actions={

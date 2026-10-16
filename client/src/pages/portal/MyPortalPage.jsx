@@ -107,7 +107,7 @@ export default function MyPortalPage() {
     <>
       <PageHeader
         title="My Portal"
-        description={`${user?.fullName ? `Hi ${user.fullName.split(' ')[0]} - ` : ''}mark your attendance and manage your leave.`}
+        description={`${user?.fullName ? `Hi ${user.fullName.trim()} - ` : ''}mark your attendance and manage your leave.`}
       />
 
       {error && <Alert tone="error" className="mb-4" title="Could not complete that">{error.message}</Alert>}
