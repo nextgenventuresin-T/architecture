@@ -195,7 +195,7 @@ const STOCK_SELECT = `
     ws.id, ws.warehouse_id, ws.material_id, ws.project_id, ws.site_id,
     ws.quantity, ws.updated_at,
     w.code AS warehouse_code, w.name AS warehouse_name, w.location AS warehouse_location,
-    COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) AS material_code,
+    COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) AS material_code,
     m.name AS material_name, m.category AS material_category,
     m.unit AS material_unit, m.min_stock,
     p.name AS project_name, p.code AS project_code,
@@ -223,7 +223,7 @@ function buildStockFilters({ search, warehouseId, materialId, category, projectI
   const params = [];
 
   if (search) {
-    where.push("(m.name LIKE ? OR COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) LIKE ? OR m.category LIKE ? OR w.name LIKE ?)");
+    where.push("(m.name LIKE ? OR COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) LIKE ? OR m.category LIKE ? OR w.name LIKE ?)");
     params.push(...Array(4).fill(`%${search}%`));
   }
   if (warehouseId && warehouseId !== 'all') {
@@ -345,7 +345,7 @@ async function findProjectSiteStock({ projectId, siteId, contractorId }) {
     `SELECT ws.project_id, ws.site_id, ws.material_id,
             p.name AS project_name, p.code AS project_code,
             s.name AS site_name,
-            COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) AS material_code,
+            COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) AS material_code,
             m.name AS material_name, m.unit AS material_unit, m.category AS material_category,
             SUM(ws.quantity) AS quantity,
             COUNT(DISTINCT ws.warehouse_id) AS warehouse_count
@@ -373,7 +373,7 @@ const TX_SELECT = `
     t.unit_cost, t.total_cost, t.vehicle_number,
     w.code AS warehouse_code, w.name AS warehouse_name,
     dw.code AS destination_code, dw.name AS destination_name,
-    COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) AS material_code,
+    COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) AS material_code,
     m.name AS material_name, m.category AS material_category, m.unit AS material_unit,
     p.name AS project_name, p.code AS project_code,
     s.name AS site_name,
@@ -609,7 +609,7 @@ async function ensureCentralWarehouse() {
 async function ensureContractorWarehouses() {
   await pool.query(
     `INSERT INTO warehouses (code, name, location, description, status, type, contractor_id)
-     SELECT CONCAT('WH-C', LPAD(c.id, 3, '0')),
+     SELECT CONCAT('WH-C', LPAD(c.id, GREATEST(3, CHAR_LENGTH(c.id)), '0')),
             CONCAT(c.name, ' Warehouse'),
             COALESCE(NULLIF(TRIM(c.address), ''), 'Contractor site'),
             'Contractor-held stock', 'active', 'contractor', c.id
@@ -678,7 +678,7 @@ async function findCentralOverview(warehouseIds) {
 
   const [rows] = await pool.query(
     `SELECT m.id AS material_id,
-            COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) AS material_code,
+            COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) AS material_code,
             m.name AS material_name, m.category AS material_category,
             m.unit AS material_unit, m.min_stock,
             COALESCE(bal.current_stock, 0)        AS current_stock,
@@ -796,7 +796,7 @@ async function findContractorTransactions({ page = 1, pageSize = 20, ...filters 
        t.procurement_request_id, t.transaction_date, t.performed_by, t.notes, t.created_at,
        w.code AS warehouse_code, w.name AS warehouse_name,
        dw.code AS destination_code, dw.name AS destination_name,
-       COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0'))) AS material_code,
+       COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) AS material_code,
        m.name AS material_name, m.category AS material_category, m.unit AS material_unit,
        p.name AS project_name, p.code AS project_code,
        s.name AS site_name,

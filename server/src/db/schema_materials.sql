@@ -130,7 +130,7 @@ DEALLOCATE PREPARE s;
 -- Backfill BEFORE the unique index goes on, so the 15 catalogue rows seeded by
 -- schema_projects.sql all get a code. Only rows without one are touched.
 UPDATE `materials`
-SET `code` = CONCAT('MAT-', LPAD(`id`, 4, '0'))
+SET `code` = CONCAT('MAT-', LPAD(`id`, GREATEST(4, CHAR_LENGTH(`id`)), '0'))
 WHERE `code` IS NULL OR `code` = '';
 
 SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS

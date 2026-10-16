@@ -74,7 +74,7 @@ WHERE `contractor_id` IS NOT NULL AND `type` <> 'contractor';
 -- Location is NOT NULL, so fall back to a placeholder when the contractor has
 -- no address on file.
 INSERT INTO `warehouses` (`code`, `name`, `location`, `description`, `status`, `type`, `contractor_id`)
-SELECT CONCAT('WH-C', LPAD(c.`id`, 3, '0')),
+SELECT CONCAT('WH-C', LPAD(c.`id`, GREATEST(3, CHAR_LENGTH(c.`id`)), '0')),
        CONCAT(c.`name`, ' Warehouse'),
        COALESCE(NULLIF(TRIM(c.`address`), ''), 'Contractor site'),
        'Contractor-held stock',

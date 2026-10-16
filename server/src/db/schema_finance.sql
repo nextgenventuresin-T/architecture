@@ -170,7 +170,7 @@ DEALLOCATE PREPARE s;
 -- row gets one. Only rows without a number are touched, so re-runs are a no-op
 -- and an admin-entered number is never overwritten.
 UPDATE `expenses`
-SET `expense_number` = CONCAT('EXP-', LPAD(`id`, 4, '0'))
+SET `expense_number` = CONCAT('EXP-', LPAD(`id`, GREATEST(4, CHAR_LENGTH(`id`)), '0'))
 WHERE `expense_number` IS NULL OR `expense_number` = '';
 
 SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS

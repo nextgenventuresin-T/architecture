@@ -100,7 +100,7 @@ DEALLOCATE PREPARE s;
 -- Backfill codes BEFORE the unique index goes on, so existing Interface 3 rows
 -- do not collide on NULL-vs-value. Only rows without a code are touched.
 UPDATE `employees`
-SET `employee_code` = CONCAT('EMP-', LPAD(`id`, 4, '0'))
+SET `employee_code` = CONCAT('EMP-', LPAD(`id`, GREATEST(4, CHAR_LENGTH(`id`)), '0'))
 WHERE `employee_code` IS NULL OR `employee_code` = '';
 
 SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS

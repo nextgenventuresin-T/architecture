@@ -527,7 +527,7 @@ function paymentTrackingSql() {
       SELECT
         CONCAT('CON-', cp.id),
         'contractor',
-        COALESCE(cp.payment_reference, CONCAT('CP-', LPAD(cp.id, 4, '0'))),
+        COALESCE(cp.payment_reference, CONCAT('CP-', LPAD(cp.id, GREATEST(4, CHAR_LENGTH(cp.id)), '0'))),
         cp.project_id, cp.site_id,
         p.name, s.name,
         c.name,

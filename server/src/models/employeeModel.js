@@ -50,9 +50,9 @@ const SITE_UNION = `
  * so they can still hold a NULL code. Derive a stable display code for those
  * instead of showing a blank Employee ID; saving the employee persists it.
  */
-const CODE_EXPR = "COALESCE(e.employee_code, CONCAT('EMP-', LPAD(e.id, 4, '0')))";
-const CODE_EXPR_MGR = "COALESCE(mgr.employee_code, CONCAT('EMP-', LPAD(mgr.id, 4, '0')))";
-const CODE_EXPR_MGR2 = "COALESCE(mgr2.employee_code, CONCAT('EMP-', LPAD(mgr2.id, 4, '0')))";
+const CODE_EXPR = "COALESCE(e.employee_code, CONCAT('EMP-', LPAD(e.id, GREATEST(4, CHAR_LENGTH(e.id)), '0')))";
+const CODE_EXPR_MGR = "COALESCE(mgr.employee_code, CONCAT('EMP-', LPAD(mgr.id, GREATEST(4, CHAR_LENGTH(mgr.id)), '0')))";
+const CODE_EXPR_MGR2 = "COALESCE(mgr2.employee_code, CONCAT('EMP-', LPAD(mgr2.id, GREATEST(4, CHAR_LENGTH(mgr2.id)), '0')))";
 
 const LIST_SELECT = `
   SELECT
@@ -313,7 +313,7 @@ async function findByCode(code) {
   const [rows] = await pool.query(
     `SELECT id FROM employees
      WHERE employee_code = ?
-        OR (employee_code IS NULL AND CONCAT('EMP-', LPAD(id, 4, '0')) = ?)
+        OR (employee_code IS NULL AND CONCAT('EMP-', LPAD(id, GREATEST(4, CHAR_LENGTH(id)), '0')) = ?)
      LIMIT 1`,
     [code, code]
   );

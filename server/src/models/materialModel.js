@@ -28,7 +28,7 @@ const STOCK_ROLLUP = `
 `;
 
 /** Codes are backfilled by the migration, but derive one if a row slips through. */
-const CODE_EXPR = "COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, 4, '0')))";
+const CODE_EXPR = "COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0')))";
 
 const LIST_SELECT = `
   SELECT
@@ -138,7 +138,7 @@ async function findByName(name) {
 async function findByCode(code) {
   const [rows] = await pool.query(
     `SELECT id FROM materials
-     WHERE code = ? OR (code IS NULL AND CONCAT('MAT-', LPAD(id, 4, '0')) = ?)
+     WHERE code = ? OR (code IS NULL AND CONCAT('MAT-', LPAD(id, GREATEST(4, CHAR_LENGTH(id)), '0')) = ?)
      LIMIT 1`,
     [code, code]
   );

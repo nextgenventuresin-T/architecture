@@ -118,7 +118,7 @@ function buildSourceSelect(moduleKey, scope) {
   if (moduleKey === 'general') {
     sql = `
       SELECT 'general' AS module, a.id AS source_id,
-             CONCAT('AR-', LPAD(a.id, 4, '0')) AS reference,
+             CONCAT('AR-', LPAD(a.id, GREATEST(4, CHAR_LENGTH(a.id)), '0')) AS reference,
              a.title AS title,
              a.request_type AS request_type,
              a.project_id AS project_id, p.name AS project_name,
@@ -226,7 +226,7 @@ function buildSourceSelect(moduleKey, scope) {
   } else if (moduleKey === 'finance') {
     sql = `
       SELECT 'finance' AS module, e.id AS source_id,
-             COALESCE(e.expense_number, CONCAT('EXP-', LPAD(e.id, 4, '0'))) AS reference,
+             COALESCE(e.expense_number, CONCAT('EXP-', LPAD(e.id, GREATEST(4, CHAR_LENGTH(e.id)), '0'))) AS reference,
              e.description AS title,
              CONCAT('expense-', e.category) AS request_type,
              e.project_id AS project_id, p.name AS project_name,
