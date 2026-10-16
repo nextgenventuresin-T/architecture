@@ -27,6 +27,7 @@ const pmRoutes = require('./pmRoutes');
 const projectManagerRoutes = require('./projectManagerRoutes');
 const labourRoutes = require('./labourRoutes');
 const staffPortalRoutes = require('./staffPortalRoutes');
+const importRoutes = require('./importRoutes');
 
 const router = express.Router();
 
@@ -63,6 +64,8 @@ router.use('/labour', labourRoutes);
 // "My Portal" (every login: own attendance + leave) and its Admin/HR side.
 router.use('/my-portal', staffPortalRoutes.myPortal);
 router.use('/staff-attendance', staffPortalRoutes.staff);
+// Bulk Excel/CSV import: vendors, materials, machine types, serial machines.
+router.use('/imports', importRoutes);
 
 // Future ERP modules mount here, one per interface.
 

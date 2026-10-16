@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Eye, Pencil, Package, Warehouse, Wrench, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Eye, Pencil, Package, Warehouse, Wrench, Edit2, Trash2, Upload } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
 import DataTable from '../../../components/ui/DataTable';
@@ -11,6 +11,7 @@ import MaterialFilters from '../../../components/materials/MaterialFilters';
 import Pagination from '../../../components/projects/Pagination';
 import ToolModal from '../../../components/tools/ToolModal';
 import ToolUnitsPanel from '../../../components/tools/ToolUnitsPanel';
+import ImportDialog from '../../../components/import/ImportDialog';
 import useAsync from '../../../hooks/useAsync';
 import { materialsApi } from '../../../api/materialsApi';
 import { toolApi } from '../../../api/toolApi';
@@ -38,6 +39,10 @@ export default function MaterialListPage() {
   const [selectedTool, setSelectedTool] = useState(null);
   const [isToolModalOpen, setIsToolModalOpen] = useState(false);
   const [registerSignal, setRegisterSignal] = useState(0);
+
+  // Bulk import: which list the dialog is importing into (null = closed).
+  const [importEntity, setImportEntity] = useState(null);
+  const [unitsVersion, setUnitsVersion] = useState(0);
 
   const loadLookups = useCallback(() => {
     materialsApi
@@ -131,14 +136,28 @@ export default function MaterialListPage() {
         breadcrumbs={[{ label: 'Dashboard', to: '/admin' }, { label: 'Materials & Tools' }]}
         actions={
           activeTab === 'materials' ? (
-            <Link to="/admin/materials/new">
-              <Button className="gap-2">
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                Add material
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" className="gap-2" onClick={() => setImportEntity('materials')}>
+                <Upload className="h-4 w-4" aria-hidden="true" />
+                Import Excel / CSV
               </Button>
-            </Link>
+              <Link to="/admin/materials/new">
+                <Button className="gap-2">
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  Add material
+                </Button>
+              </Link>
+            </div>
           ) : (
             <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" className="gap-2" onClick={() => setImportEntity('tools')}>
+                <Upload className="h-4 w-4" aria-hidden="true" />
+                Import machine types
+              </Button>
+              <Button variant="secondary" className="gap-2" onClick={() => setImportEntity('machines')}>
+                <Upload className="h-4 w-4" aria-hidden="true" />
+                Import machines (serial no.)
+              </Button>
               <Button className="gap-2" onClick={() => setRegisterSignal((n) => n + 1)}>
                 <Plus className="h-4 w-4" aria-hidden="true" />
                 Add machine with serial no.
@@ -326,7 +345,7 @@ export default function MaterialListPage() {
             </div>
           </Card>
 
-          <ToolUnitsPanel tools={tools} mode="admin" onChanged={loadTools} registerSignal={registerSignal} />
+          <ToolUnitsPanel key={unitsVersion} tools={tools} mode="admin" onChanged={loadTools} registerSignal={registerSignal} />
 
           <ToolModal
             isOpen={isToolModalOpen}
@@ -336,6 +355,21 @@ export default function MaterialListPage() {
           />
         </>
       )}
+
+      <ImportDialog
+        isOpen={Boolean(importEntity)}
+        entity={importEntity || 'materials'}
+        onClose={() => setImportEntity(null)}
+        onImported={() => {
+          if (importEntity === 'materials') {
+            reload();
+            loadLookups();
+          } else {
+            loadTools();
+            if (importEntity === 'machines') setUnitsVersion((n) => n + 1);
+          }
+        }}
+      />
     </>
   );
 }

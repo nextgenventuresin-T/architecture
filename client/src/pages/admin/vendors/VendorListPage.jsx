@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ShoppingBag,
   Store,
+  Upload,
 } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card, CardBody } from '../../../components/ui/Card';
@@ -21,6 +22,7 @@ import Badge from '../../../components/ui/Badge';
 import Modal from '../../../components/ui/Modal';
 import InfoList from '../../../components/projects/InfoList';
 import VendorFormModal from './VendorFormModal';
+import ImportDialog from '../../../components/import/ImportDialog';
 import { vendorApi } from '../../../api/vendorApi';
 import { formatCurrency, formatDate } from '../../../utils/format';
 import SearchableSelect from '../../../components/ui/SearchableSelect';
@@ -40,6 +42,7 @@ export default function VendorListPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingVendor, setEditingVendor] = useState(null);
   const [viewing, setViewing] = useState(null);
+  const [isImportOpen, setIsImportOpen] = useState(false);
 
   const loadVendors = useCallback(() => {
     setIsLoading(true);
@@ -99,10 +102,16 @@ export default function VendorListPage() {
         title="Vendors & Suppliers"
         description="Approved material and machinery vendors for warehouse and direct-to-site procurement."
         actions={
-          <Button variant="primary" onClick={handleCreate}>
-            <Plus className="h-4 w-4 mr-1.5" />
-            Add Vendor
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setIsImportOpen(true)}>
+              <Upload className="h-4 w-4 mr-1.5" />
+              Import Excel / CSV
+            </Button>
+            <Button variant="primary" onClick={handleCreate}>
+              <Plus className="h-4 w-4 mr-1.5" />
+              Add Vendor
+            </Button>
+          </div>
         }
       />
 
@@ -286,6 +295,13 @@ export default function VendorListPage() {
         onClose={() => setIsModalOpen(false)}
         onSaved={() => { loadVendors(); loadCities(); }}
         vendor={editingVendor}
+      />
+
+      <ImportDialog
+        isOpen={isImportOpen}
+        entity="vendors"
+        onClose={() => setIsImportOpen(false)}
+        onImported={() => { loadVendors(); loadCities(); }}
       />
     </div>
   );
