@@ -21,11 +21,38 @@ const { normalizeVehicle, vehiclesMatch } = require('../utils/vehicle');
 const warehouseService = require('./warehouseService');
 const materialMovementService = require('./materialMovementService');
 const { getActualMaterialRate } = require('../utils/materialPricing');
+const areaService = require('./areaService');
+const transportExpenseService = require('./transportExpenseService');
+const { transportCategoryFor } = require('../config/costBuckets');
+
+/**
+ * How the goods physically arrive, derived from the flow (never stored):
+ *   direct_site : an outside vendor delivers straight to the project site / its contractor
+ *   warehouse   : bought into, or issued from, the central warehouse
+ *   transfer    : moved between contractors / sites
+ */
+function deliveryModeFor(row) {
+  const kind = row.procurement_kind || 'project_site';
+  if (kind === 'internal_transfer') return 'transfer';
+  if (kind === 'central_purchase' || row.source_type === 'central_warehouse') return 'warehouse';
+  return 'direct_site';
+}
+
+/** Non-negative money amount from a payload field, or null when absent / blank. */
+function moneyOrNull(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw ApiError.badRequest('Check the highlighted fields.', { [field]: 'Enter a valid amount (0 or more).' });
+  }
+  return Number(n.toFixed(2));
+}
 
 // Where a request delivers to, and where it draws from.
 const PROCUREMENT_KINDS = ['project_site', 'central_purchase', 'contractor_supply', 'internal_transfer'];
 const SOURCE_TYPES = ['supplier', 'central_warehouse', 'contractor', 'site'];
-const DESTINATION_TYPES = ['project_site', 'central_warehouse', 'contractor_warehouse'];
+// 'site_store': a site run by its Project Manager (no contractor) keeps its own stock.
+const DESTINATION_TYPES = ['project_site', 'central_warehouse', 'contractor_warehouse', 'site_store'];
 // Source types that move material we already own — these must never create a
 // Finance payment, only a stock movement.
 const INTERNAL_SOURCES = new Set(['central_warehouse', 'contractor', 'site']);
@@ -52,6 +79,7 @@ function buildEndpoint(side, row) {
     contractor_warehouse: contractorName ? `${contractorName} Contractor` : (warehouseName || 'Contractor warehouse'),
     site: siteName || 'Site',
     project_site: row.project_name || 'Project / site',
+    site_store: warehouseName || (siteName ? siteName + ' Site Store' : 'Site Store'),
   };
   return {
     type,
@@ -115,17 +143,65 @@ function assertValidStatus(status) {
  *                       only the SOURCE contractor may send (source_confirmed).
  *   central -> contractor : unchanged — Admin/Procurement/Warehouse send.
  */
+/**
+ * The contractor an outside-vendor order is delivered straight to (vendor -> their
+ * site / warehouse), or null. Central-warehouse purchases and stock movements
+ * between our own locations are not vendor deliveries to a contractor.
+ */
+function vendorOrderReceiverId(row) {
+  if (row.source_type !== 'supplier' || row.procurement_kind === 'central_purchase') return null;
+  return Number(row.destination_contractor_id || row.contractor_id) || null;
+}
+
+/** The contractor a machine request is delivered to (whoever raised it - contractor or PM - it goes to the site's contractor). */
+function toolReceiverId(row) {
+  return Number(row.contractor_id || row.destination_contractor_id) || null;
+}
+
+/**
+ * The PM-run site a request is delivered to: no contractor on the request (the site and
+ * its project have none), so it lands in that site's Site Store and its PM receives it.
+ */
+function pmRunSiteOf(row) {
+  if (row.contractor_id || row.destination_contractor_id) return null;
+  return Number(row.destination_site_id || row.site_id) || null;
+}
+
+/** True when the viewer is a PM assigned to that site. */
+function viewerPmHasSite(viewer, siteId) {
+  return viewer?.role === ROLES.PROJECT_MANAGER && siteId != null && (viewer.pmSiteIds || []).includes(Number(siteId));
+}
+
 function capabilitiesFor(row, viewer) {
   const kind = row.procurement_kind || 'project_site';
+  const pmSite = pmRunSiteOf(row);
+  const pmReceives = viewerPmHasSite(viewer, pmSite);
   const isInternalTransfer = kind === 'internal_transfer';
   const isCentralSupply = kind === 'contractor_supply' && row.source_type === 'central_warehouse';
   const role = viewer?.role ?? null;
   const viewerContractorId = viewer?.contractorId != null ? Number(viewer.contractorId) : null;
-  // Machines are tracked by serial number and completed by Admin ("Allocate machine"),
-  // never sent / confirmed / received like stock.
+  // Machines are tracked by serial number: Admin allocates / registers the unit and
+  // dispatches it ('ordered'); the receiving contractor then verifies the vehicle and receives it.
   if (row.item_type === 'tool' || (!row.material_id && row.tool_id)) {
-    return { isInternalTransfer: kind === 'internal_transfer', isSourceContractor: false, canConfirmSource: false, canDispatch: false, canReceiveMovement: false };
+    const receiver = toolReceiverId(row);
+    return {
+      isInternalTransfer: kind === 'internal_transfer', isSourceContractor: false, canConfirmSource: false, canDispatch: false, canReceiveMovement: false,
+      canReceiveOrder: false,
+      canReceiveTool: row.status === 'ordered' && Boolean(receiver || pmSite) && (
+        (receiver && role === ROLES.CONTRACTOR && viewerContractorId === receiver)
+        || (!receiver && pmReceives)
+        || [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE].includes(role)),
+    };
   }
+  // A vendor order placed by Admin for delivery straight to a contractor: that
+  // contractor receives it themselves, verifying the vehicle Admin recorded.
+  const receiverId = vendorOrderReceiverId(row);
+  const isVendorDelivery = row.source_type === 'supplier' && kind !== 'central_purchase';
+  const canReceiveOrder = Boolean(
+    ['ordered', 'partially_received'].includes(row.status)
+    && ((receiverId && role === ROLES.CONTRACTOR && viewerContractorId === receiverId)
+      || (isVendorDelivery && pmReceives))
+  );
   const isSourceContractor = Boolean(
     isInternalTransfer
     && viewerContractorId !== null
@@ -153,8 +229,9 @@ function capabilitiesFor(row, viewer) {
     // the source contractor is not offered a Receive button on their own send.
     canReceiveMovement: (isInternalTransfer || isCentralSupply)
       && row.status === 'ordered'
-      && (isDestinationContractor
+      && (isDestinationContractor || pmReceives
           || [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE].includes(role)),
+    canReceiveOrder,
   };
 }
 
@@ -169,6 +246,13 @@ function toRequest(row, viewer) {
     id: row.id,
     requestNumber: row.request_number,
     kind: row.procurement_kind || 'project_site',
+    deliveryMode: deliveryModeFor(row),
+    area: row.area_id ? { id: row.area_id, name: row.area_name, type: row.area_type || null } : null,
+    // Part of a multi-item request: every item is still an ordinary request.
+    batch: row.batch_id ? { id: row.batch_id, number: row.batch_number || null } : null,
+    transportCost: row.transport_cost != null ? Number(row.transport_cost) : null,
+    transportPaid: Number(row.transport_paid || 0),
+    transportCategory: transportCategoryFor(row.item_type === 'tool' || (!row.material_id && row.tool_id) ? 'tool' : 'material'),
     sourceType: row.source_type || null,
     destinationType: row.destination_type || null,
     source: buildEndpoint('source', row),
@@ -269,6 +353,8 @@ function toRequest(row, viewer) {
         canConfirmSource: caps.canConfirmSource,
         canDispatch: caps.canDispatch,
         canReceiveMovement: caps.canReceiveMovement,
+        canReceiveOrder: caps.canReceiveOrder,
+        canReceiveTool: Boolean(caps.canReceiveTool),
       };
     })(),
     purchaseOrder: row.po_number ? {
@@ -300,6 +386,8 @@ function toReceipt(row) {
     notes: row.notes,
     receivedBy: row.received_by,
     materialEntryId: row.material_entry_id,
+    transportCost: Number(row.transport_cost || 0),
+    transportExpenseId: row.transport_expense_id || null,
     createdAt: row.created_at,
   };
 }
@@ -318,7 +406,7 @@ async function list(query) {
 
 /** The minimal viewer identity the capability flags are computed against. */
 function viewerFrom(hrScope) {
-  return { role: hrScope?.role ?? null, contractorId: hrScope?.contractorId ?? null };
+  return { role: hrScope?.role ?? null, contractorId: hrScope?.contractorId ?? null, pmSiteIds: hrScope?.pmSiteIds || [] };
 }
 
 function contractorScope(hrScope, userId) {
@@ -487,6 +575,22 @@ async function getContractorWarehouseId(contractorId) {
  * that kind is missing. Contractors are pinned to their own contractor id so a
  * request body can never claim to be another contractor.
  */
+/**
+ * Destination columns for a site run by its Project Manager (no contractor on the
+ * site or its project): its Site Store. Null when the site has a contractor.
+ */
+async function pmSiteStoreDestination(payload) {
+  if (!payload.site_id) return null;
+  const holder = await pmScope.siteHolder(payload.project_id ? Number(payload.project_id) : null, Number(payload.site_id));
+  if (!holder?.pmRun) return null;
+  return {
+    destination_type: 'site_store',
+    destination_contractor_id: null,
+    destination_warehouse_id: holder.warehouseId,
+    destination_site_id: holder.siteId,
+  };
+}
+
 async function resolveFlow(payload, hrScope) {
   const kind = PROCUREMENT_KINDS.includes(payload.procurement_kind) ? payload.procurement_kind : 'project_site';
   const isContractor = hrScope?.role === ROLES.CONTRACTOR;
@@ -509,6 +613,10 @@ async function resolveFlow(payload, hrScope) {
       if (project?.contractor_id) {
         destWarehouseId = await getContractorWarehouseId(project.contractor_id).catch(() => null);
       }
+    }
+    // No contractor: the site is run by its Project Manager, into its own Site Store.
+    if (!destWarehouseId && payload.site_id) {
+      destWarehouseId = (await warehouseModel.ensureSiteStore(Number(payload.site_id)))?.id || null;
     }
     if (!destWarehouseId) {
       destWarehouseId = await getCentralWarehouseId().catch(() => null);
@@ -574,7 +682,28 @@ async function resolveFlow(payload, hrScope) {
       ? await pmScope.responsibleContractorId(Number(payload.project_id), payload.site_id ? Number(payload.site_id) : null)
       : null;
     const destContractorId = isContractor ? ownContractorId : Number(payload.destination_contractor_id || pmDefault);
-    if (!destContractorId) throw ApiError.badRequest('Check the highlighted fields.', { destination_contractor_id: 'Select the receiving contractor.' });
+    if (!destContractorId) {
+      // A site with no contractor is run by its Project Manager: deliver to its Site Store.
+      const store = await pmSiteStoreDestination(payload);
+      if (!store) throw ApiError.badRequest('Check the highlighted fields.', { destination_contractor_id: 'Select the receiving contractor.' });
+      const columns = {
+        procurement_kind: 'contractor_supply',
+        item_type: isTool ? 'tool' : 'material',
+        material_id: material?.id || null,
+        tool_id: tool?.id || null,
+        source_type: sourceType,
+        ...store,
+        project_id: payload.project_id ?? null,
+        site_id: payload.site_id ?? null,
+        task_id: payload.task_id ? Number(payload.task_id) : null,
+      };
+      if (sourceType === 'central_warehouse') {
+        columns.source_warehouse_id = payload.source_warehouse_id
+          ? Number(payload.source_warehouse_id)
+          : await getCentralWarehouseId(payload.material_id, payload.quantity);
+      }
+      return { material, tool, columns };
+    }
     const destWarehouseId = await getContractorWarehouseId(destContractorId);
     const columns = {
       procurement_kind: 'contractor_supply',
@@ -610,7 +739,29 @@ async function resolveFlow(payload, hrScope) {
       ? ownContractorId
       : (payload.destination_contractor_id ? Number(payload.destination_contractor_id) : pmDefault);
     if (!sourceContractorId) throw ApiError.badRequest('Check the highlighted fields.', { source_contractor_id: 'Select the source contractor.' });
-    if (!destContractorId) throw ApiError.badRequest('Check the highlighted fields.', { destination_contractor_id: 'Select the destination contractor.' });
+    if (!destContractorId) {
+      // Transfer from a contractor INTO a PM-run site's Site Store.
+      const store = await pmSiteStoreDestination(payload);
+      if (!store) throw ApiError.badRequest('Check the highlighted fields.', { destination_contractor_id: 'Select the destination contractor.' });
+      return {
+        material,
+        tool,
+        columns: {
+          procurement_kind: 'internal_transfer',
+          item_type: isTool ? 'tool' : 'material',
+          material_id: material?.id || null,
+          tool_id: tool?.id || null,
+          source_type: 'contractor',
+          source_contractor_id: sourceContractorId,
+          source_warehouse_id: await getContractorWarehouseId(sourceContractorId),
+          source_site_id: payload.source_site_id ?? null,
+          ...store,
+          project_id: payload.project_id ?? null,
+          site_id: payload.site_id ?? null,
+          task_id: payload.task_id ? Number(payload.task_id) : null,
+        },
+      };
+    }
     if (Number(sourceContractorId) === Number(destContractorId)) {
       throw ApiError.badRequest('Check the highlighted fields.', { destination_contractor_id: 'Choose a different contractor to transfer to.' });
     }
@@ -640,7 +791,7 @@ async function resolveFlow(payload, hrScope) {
   throw ApiError.badRequest('Check the highlighted fields.', { procurement_kind: 'Choose a valid procurement type.' });
 }
 
-async function create(payload, userId, hrScope) {
+async function create(payload, userId, hrScope, options = {}) {
   // Project Managers raise requests only for projects/sites they are assigned
   // to, and only for delivery to a site - never vendor buying into the central
   // warehouse (Admin/Procurement).
@@ -655,6 +806,10 @@ async function create(payload, userId, hrScope) {
   }
 
   const { material, tool, columns: flow } = await resolveFlow(payload, hrScope);
+  const areaId = flow.project_id
+    ? await areaService.assertAreaFor(payload.area_id ?? payload.areaId, flow.project_id, flow.site_id ?? null)
+    : null;
+  const quotedTransport = moneyOrNull(payload.transport_cost, 'transport_cost');
 
   // A contractor may only procure for one of THEIR OWN assigned project/sites.
   if (hrScope?.role === ROLES.CONTRACTOR && flow.procurement_kind !== 'project_site') {
@@ -697,6 +852,7 @@ async function create(payload, userId, hrScope) {
   const scopeParams = planScope ? [planScope] : [];
 
   let isExcess = false;
+  let isUnplanned = false;
   let excessQuantity = 0;
   let plannedQtyAtReq = null;
   let procuredQtyAtReq = null;
@@ -754,8 +910,9 @@ async function create(payload, userId, hrScope) {
         excessQuantity = Number((requestedQty - remainingPlanned).toFixed(2));
       }
     } else {
-      // Material not planned for this task
+      // Material not planned for this task: Admin must authorise it before it can be procured.
       isExcess = true;
+      isUnplanned = true;
       plannedQtyAtReq = 0;
       excessQuantity = requestedQty;
     }
@@ -764,7 +921,9 @@ async function create(payload, userId, hrScope) {
       const reasonText = (payload.excess_reason || payload.reason || '').trim();
       if (!reasonText) {
         throw ApiError.badRequest('Check the highlighted fields.', {
-          excess_reason: `Requested quantity exceeds the Admin-planned quantity by ${excessQuantity} ${unitToUse}. Reason for excess procurement is mandatory.`,
+          excess_reason: isUnplanned
+            ? `${material?.name || 'This material'} is not planned for ${subtask ? `subtask "${subtask.name}"` : 'this task'}. Give a reason - Admin must authorise it before it can be procured.`
+            : `Requested quantity exceeds the Admin-planned quantity by ${excessQuantity} ${unitToUse}. Reason for excess procurement is mandatory.`,
         });
       }
     }
@@ -798,7 +957,32 @@ async function create(payload, userId, hrScope) {
       'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'purchase_rate', 'estimated_rate', 'total_amount', 'tool_unit_id']) {
       delete payload[k];
     }
-    if (!payload.rental_days && planned.plannedDays > 0) payload.rental_days = planned.plannedDays;
+    // How long the machine is needed: from a date, for N days (the last day follows).
+    const days = Math.floor(Number(payload.rental_days ?? payload.rentalDays ?? planned.plannedDays ?? 0));
+    const from = payload.rental_start_date || payload.rentalStartDate || null;
+    if (!(days >= 1)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { rental_days: 'Enter for how many days the machine is needed.' });
+    }
+    if (!from) {
+      throw ApiError.badRequest('Check the highlighted fields.', { rental_start_date: 'Enter from which date the machine is needed.' });
+    }
+    const until = new Date(from);
+    until.setDate(until.getDate() + days - 1);
+    payload.rental_days = days;
+    payload.rental_start_date = from;
+    payload.rental_end_date = until.toISOString().slice(0, 10);
+    // Longer than the task plan: Admin approves the extra days.
+    if (planned.plannedDays > 0 && days > planned.plannedDays) {
+      const reasonText = (payload.excess_reason || payload.reason || '').trim();
+      if (!reasonText) {
+        throw ApiError.badRequest('Check the highlighted fields.', {
+          excess_reason: `${tool.name} was planned for ${planned.plannedDays} day(s) but is requested for ${days}. A reason is mandatory - Admin approves the extra days.`,
+        });
+      }
+      isExcess = true;
+      plannedQtyAtReq = plannedQtyAtReq ?? planned.plannedQuantity;
+      procuredQtyAtReq = procuredQtyAtReq ?? planned.alreadyRequested;
+    }
   }
 
   let status = payload.status && STATUSES.includes(payload.status) ? payload.status : 'draft';
@@ -929,8 +1113,12 @@ async function create(payload, userId, hrScope) {
     }
   }
 
+  // A multi-item batch first validates every item this way, then creates them all.
+  if (options.dryRun) return { dryRun: true };
+
   const id = await procurementModel.create({
     request_number: requestNumber,
+    batch_id: options.batchId || null,
     material_id: flow.material_id ?? (payload.material_id ? Number(payload.material_id) : null),
     tool_id: flow.tool_id ?? (payload.tool_id ? Number(payload.tool_id) : null),
     item_type: flow.item_type || (isTool ? 'tool' : 'material'),
@@ -977,6 +1165,8 @@ async function create(payload, userId, hrScope) {
     usage_charge_policy: usageChargePolicy,
     requester_role: hrScope?.role || null,
     contractor_id: responsibleContractorId,
+    area_id: areaId,
+    transport_cost: quotedTransport,
     ...flow,
   });
 
@@ -995,11 +1185,21 @@ async function create(payload, userId, hrScope) {
     const projName = task?.project_name || `Project #${task?.project_id || payload.project_id}`;
     const itemUnit = material?.unit || 'unit';
     const itemName = material?.name || tool?.name || 'Item';
-    const notifMsg = `Excess Material Procurement Approval Required: ${payload.quantity} ${itemUnit} of ${itemName} for Task "${taskName}" on ${projName} exceeds planned baseline by ${excessQuantity} ${itemUnit}. Reason: ${reasonText}`;
+    const notifTitle = isUnplanned
+      ? 'Unplanned Material Procurement Needs Authorisation'
+      : isTool ? 'Machine Request Needs Approval' : 'Excess Material Procurement Approval Required';
+    const neededFor = isTool && payload.rental_days
+      ? ` needed for ${payload.rental_days} day(s) from ${payload.rental_start_date}`
+      : '';
+    const notifMsg = isUnplanned
+      ? `${notifTitle}: ${payload.quantity} ${itemUnit} of ${itemName} is NOT in the plan for Task "${taskName}" on ${projName}. It cannot be procured until you approve it. Reason: ${reasonText}`
+      : isTool
+        ? `${notifTitle}: ${itemName}${neededFor} for Task "${taskName}" on ${projName} is beyond the task plan. Reason: ${reasonText}`
+        : `${notifTitle}: ${payload.quantity} ${itemUnit} of ${itemName} for Task "${taskName}" on ${projName} exceeds planned baseline by ${excessQuantity} ${itemUnit}. Reason: ${reasonText}`;
 
     await notificationModel.create({
       role: 'admin',
-      title: 'Excess Material Procurement Approval Required',
+      title: notifTitle,
       message: notifMsg,
       type: 'warning',
       category: 'approval',
@@ -1016,11 +1216,13 @@ async function create(payload, userId, hrScope) {
         siteId: task?.site_id || payload.site_id,
         siteName: task?.site_name || null,
         materialId: payload.material_id,
-        materialName: material.name,
+        materialName: material?.name || tool?.name || null,
+        neededDays: isTool ? (payload.rental_days || null) : null,
         plannedQuantity: plannedQtyAtReq,
         procuredQuantity: procuredQtyAtReq,
         requestedQuantity: Number(payload.quantity),
         excessQuantity,
+        unplanned: isUnplanned,
         reason: reasonText,
         requestedBy: userId,
         requestDate: new Date().toISOString().slice(0, 10),
@@ -1066,7 +1268,55 @@ async function update(id, payload, hrScope, userId) {
     throw ApiError.badRequest('Check the highlighted fields.', { quantity: 'Enter a quantity greater than zero.' });
   }
 
+  // A Draft/Requested request was within the task plan when raised (anything beyond it
+  // went straight to Admin as Pending Approval). Editing must not move it outside the
+  // plan behind Admin's back: unplanned or extra material needs its own request.
+  const role = hrScope?.role;
+  const isMaterialRequest = (payload.item_type ?? request.item_type) !== 'tool' && (payload.material_id ?? request.material_id);
+  if ((role === ROLES.CONTRACTOR || role === 'project_manager') && isMaterialRequest) {
+    const taskId = Number(payload.task_id ?? request.task_id) || null;
+    const subtaskId = payload.subtask_id !== undefined || payload.subtaskId !== undefined
+      ? (Number(subtaskIdFrom(payload)) || null)
+      : (request.subtask_id || null);
+    const materialId = Number(payload.material_id ?? request.material_id);
+    const qty = Number(payload.quantity ?? request.quantity);
+    const changed = Number(materialId) !== Number(request.material_id) || qty !== Number(request.quantity)
+      || taskId !== (Number(request.task_id) || null) || subtaskId !== (request.subtask_id || null);
+    if (taskId && changed) {
+      const scopeSql = subtaskId ? ' AND subtask_id = ?' : ' AND subtask_id IS NULL';
+      const scopeParams = subtaskId ? [subtaskId] : [];
+      const [[plan]] = await pool.query(
+        `SELECT COUNT(*) AS plan_lines, COALESCE(SUM(quantity + COALESCE(approved_additional_quantity, 0)), 0) AS planned
+         FROM task_materials WHERE task_id = ? AND material_id = ?${scopeSql}`,
+        [taskId, materialId, ...scopeParams]
+      );
+      const [[proc]] = await pool.query(
+        `SELECT COALESCE(SUM(quantity), 0) AS procured FROM procurement_requests
+         WHERE task_id = ? AND material_id = ? AND id <> ? AND status NOT IN ('rejected', 'cancelled')${scopeSql}`,
+        [taskId, materialId, id, ...scopeParams]
+      );
+      if (!Number(plan.plan_lines)) {
+        throw ApiError.badRequest('Check the highlighted fields.', {
+          material_id: 'That material is not planned for this task. Raise a new request with a reason - Admin must authorise unplanned material before it can be procured.',
+        });
+      }
+      const remaining = Math.max(0, Number((Number(plan.planned) - Number(proc.procured)).toFixed(2)));
+      if (qty > remaining + 1e-9) {
+        throw ApiError.badRequest('Check the highlighted fields.', {
+          quantity: `Only ${remaining} is still within the plan. For more, raise a new request with a reason for Admin approval.`,
+        });
+      }
+    }
+  }
+
   const updatePayload = { ...payload };
+  if (payload.area_id !== undefined || payload.areaId !== undefined) {
+    const projectId = payload.project_id ?? request.project_id;
+    updatePayload.area_id = projectId
+      ? await areaService.assertAreaFor(payload.area_id ?? payload.areaId, projectId, payload.site_id !== undefined ? payload.site_id : request.site_id)
+      : null;
+  }
+  if (payload.transport_cost !== undefined) updatePayload.transport_cost = moneyOrNull(payload.transport_cost, 'transport_cost');
   if (updatePayload.total_amount === undefined || updatePayload.total_amount === null) {
     const finalQty = updatePayload.quantity !== undefined ? Number(updatePayload.quantity) : Number(request.quantity);
     const finalRate = updatePayload.purchase_rate !== undefined
@@ -1123,6 +1373,12 @@ async function updateStatus(id, nextStatus, role, hrScope, userId) {
     throw ApiError.forbidden('Only Admin can approve or reject a procurement request.');
   }
 
+  // A dispatched machine is already allocated to the contractor: it must be received
+  // (and later returned), never cancelled while in transit.
+  if (nextStatus === 'cancelled' && request.status === 'ordered' && (request.item_type === 'tool' || (!request.material_id && request.tool_id))) {
+    throw ApiError.badRequest('This machine is already dispatched. Receive it, then return it from Machines & Tools if it is not needed.');
+  }
+
   await procurementModel.updateStatus(id, nextStatus);
 
   // If Admin approved an excess material procurement request, link additional approved quantity to task
@@ -1140,7 +1396,7 @@ async function updateStatus(id, nextStatus, role, hrScope, userId) {
         const curApprovedAdd = Number(existingTm[0].approved_additional_quantity || 0);
         const newApprovedAdd = Number((curApprovedAdd + excessQty).toFixed(2));
         const costPerUnit = Number(existingTm[0].cost_per_unit || 0);
-        const newTotalCost = Number(((curPlanned + newApprovedAdd) * costPerUnit).toFixed(2));
+        const newTotalCost = Number(((curPlanned + newApprovedAdd) * costPerUnit + Number(existingTm[0].transport_cost || 0)).toFixed(2));
         await pool.query(
           `UPDATE task_materials
            SET approved_additional_quantity = ?,
@@ -1187,6 +1443,34 @@ async function updateStatus(id, nextStatus, role, hrScope, userId) {
         }
       }
     }
+  }
+
+  // Tell the contractor / PM who raised it, so the procurement can flow on (or stop).
+  if (['approved', 'rejected'].includes(nextStatus) && request.requested_by && Number(request.requested_by) !== Number(userId)) {
+    const requesterRole = request.requester_role;
+    const base = requesterRole === ROLES.CONTRACTOR ? '/contractor/procurement'
+      : requesterRole === ROLES.PROJECT_MANAGER ? '/pm/procurement'
+      : '/admin/procurement';
+    const [[item]] = await pool.query(
+      `SELECT COALESCE(m.name, t.name, 'Item') AS name FROM procurement_requests pr
+       LEFT JOIN materials m ON m.id = pr.material_id LEFT JOIN tools t ON t.id = pr.tool_id WHERE pr.id = ?`,
+      [id]
+    );
+    const unplanned = Boolean(request.is_excess) && Number(request.planned_quantity_at_request || 0) === 0;
+    const what = `${request.request_number}: ${request.quantity} ${request.unit || ''} ${item?.name || ''}`.replace(/\s+/g, ' ').trim();
+    await notificationModel.create({
+      userId: request.requested_by,
+      title: nextStatus === 'approved'
+        ? (unplanned ? 'Unplanned material authorised' : 'Procurement request approved')
+        : (unplanned ? 'Unplanned material not authorised' : 'Procurement request rejected'),
+      message: nextStatus === 'approved'
+        ? `${what} was approved by Admin. Procurement can now proceed.`
+        : `${what} was rejected by Admin and will not be procured.`,
+      type: nextStatus === 'approved' ? 'success' : 'warning',
+      category: 'approval',
+      actionUrl: `${base}/${id}`,
+      metadata: { module: 'procurement', procurementRequestId: id, status: nextStatus, unplanned },
+    }).catch((e) => console.error('Failed to notify requester:', e));
   }
 
   return getById(id, hrScope, userId);
@@ -1252,12 +1536,68 @@ async function placeOrder(id, payload) {
     throw ApiError.badRequest('Check the highlighted fields.', { po_number: 'That PO number is already in use.' });
   }
 
+  // Vendor delivering straight to a contractor: Admin records the vendor's dispatch
+  // (vehicle + driver) so the contractor can verify it on arrival.
+  const receiverId = vendorOrderReceiverId(request);
+  const pmSite = !receiverId && request.source_type === 'supplier' && request.procurement_kind !== 'central_purchase'
+    ? pmRunSiteOf(request) : null;
+  const vehicle = String(payload.vehicle_number ?? '').trim();
+  if ((receiverId || pmSite) && !normalizeVehicle(vehicle)) {
+    throw ApiError.badRequest('Check the highlighted fields.', {
+      vehicle_number: 'Enter the vendor\'s vehicle number - the contractor verifies it when the material arrives.',
+    });
+  }
+
   await procurementModel.markOrdered(id, {
     poNumber,
     orderedQuantity,
     orderDate: payload.order_date || new Date().toISOString().slice(0, 10),
     expectedDeliveryDate: payload.expected_delivery_date ?? null,
   });
+
+  const dispatch = {
+    vehicle_number: vehicle || null,
+    driver_name: String(payload.driver_name ?? '').trim() || null,
+    driver_phone: String(payload.driver_phone ?? '').trim() || null,
+    challan_number: String(payload.challan_number ?? '').trim() || null,
+  };
+  if (Object.values(dispatch).some(Boolean)) {
+    await pool.query(
+      `UPDATE procurement_requests SET vehicle_number = COALESCE(?, vehicle_number), driver_name = COALESCE(?, driver_name),
+         driver_phone = COALESCE(?, driver_phone), challan_number = COALESCE(?, challan_number) WHERE id = ?`,
+      [dispatch.vehicle_number, dispatch.driver_name, dispatch.driver_phone, dispatch.challan_number, id]
+    );
+  }
+
+  if (receiverId) {
+    const [[c]] = await pool.query('SELECT user_id FROM contractors WHERE id = ? LIMIT 1', [receiverId]);
+    if (c?.user_id) {
+      const [[item]] = await pool.query('SELECT name FROM materials WHERE id = ? LIMIT 1', [request.material_id]);
+      const driver = [dispatch.driver_name, dispatch.driver_phone].filter(Boolean).join(', ');
+      await notificationModel.create({
+        userId: c.user_id,
+        title: 'Material ordered for delivery to you',
+        message: `${poNumber}: ${orderedQuantity} ${request.unit || ''} ${item?.name || ''} from ${request.supplier || 'the vendor'}. `
+          + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}`
+          + `${payload.expected_delivery_date ? `, expected ${payload.expected_delivery_date}` : ''}. Verify the vehicle and receive it when it arrives.`,
+        type: 'material',
+        category: 'material',
+        actionUrl: `/contractor/procurement/${id}`,
+        metadata: { module: 'procurement', procurementRequestId: id, poNumber, ...dispatch },
+      }).catch((e) => console.error('Failed to notify receiving contractor:', e));
+    }
+  }
+  if (pmSite) {
+    const [[item]] = await pool.query('SELECT name FROM materials WHERE id = ? LIMIT 1', [request.material_id]);
+    const driver = [dispatch.driver_name, dispatch.driver_phone].filter(Boolean).join(', ');
+    await notifyProjectManagers(request.project_id, {
+      title: 'Material ordered for your site',
+      message: `${poNumber}: ${orderedQuantity} ${request.unit || ''} ${item?.name || ''} from ${request.supplier || 'the vendor'}. `
+        + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}. Verify the vehicle and receive it into the Site Store.`,
+      actionUrl: `/pm/procurement/${id}`,
+      metadata: { module: 'procurement', procurementRequestId: id, poNumber, ...dispatch },
+    });
+  }
 
   return getById(id);
 }
@@ -1271,9 +1611,29 @@ async function placeOrder(id, payload) {
  * Also lands a row in `material_entries` - the same stock ledger Interface 6
  * reads - once the transaction has committed.
  */
-async function receive(id, payload, userId) {
+async function receive(id, payload, userId, hrScope, options = {}) {
   const peek = await procurementModel.findRawById(id);
   if (!peek) throw ApiError.notFound('That procurement request does not exist.');
+  // A multi-item receive books the transport QUOTED on the request (never a value the
+  // receiver types), so a contractor / PM receiving it still cannot set freight.
+  const quoted = options.useQuotedTransport ? (Number(peek.transport_cost) > 0 ? Number(peek.transport_cost) : null) : null;
+
+  // A contractor receives only a vendor order Admin placed for delivery to THEM.
+  // Freight on that order is Admin's to book, so a contractor never enters it.
+  if (hrScope?.role === ROLES.CONTRACTOR) {
+    const receiverId = vendorOrderReceiverId(peek);
+    if (!receiverId || receiverId !== Number(hrScope.contractorId)) {
+      throw ApiError.forbidden('You can only receive a vendor order delivered to you.');
+    }
+    payload = { ...payload, transport_cost: quoted };
+  }
+  // A Project Manager receives a vendor order delivered to the Site Store of a site they run.
+  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+    if (!pmScope.pmHasSite(hrScope, pmRunSiteOf(peek)) || peek.source_type !== 'supplier') {
+      throw ApiError.forbidden('You can only receive a vendor order delivered to a site you manage.');
+    }
+    payload = { ...payload, transport_cost: quoted };
+  }
 
   const receivedQuantity = Number(payload.received_quantity);
   if (!(receivedQuantity > 0)) {
@@ -1281,6 +1641,8 @@ async function receive(id, payload, userId) {
       received_quantity: 'Enter a quantity greater than zero.',
     });
   }
+  // Freight paid for THIS delivery; booked once as a transport expense on the receipt.
+  const deliveryTransport = moneyOrNull(payload.transport_cost, 'transport_cost') || 0;
 
   let receiptId = null;
   let request = null;
@@ -1300,9 +1662,9 @@ async function receive(id, payload, userId) {
     if (isTool) {
       throw ApiError.badRequest('Machines are tracked by serial number. Register and allocate the unit from the request instead of receiving it into stock.');
     }
-    if (request.warehouse_transaction_id) {
-      throw ApiError.badRequest('This request has already been received into warehouse stock.');
-    }
+    // Partial deliveries each post their own ledger row (one receipt, one posting, UNIQUE
+    // procurement_receipt_id); the row lock and the remaining-quantity check below are what
+    // stop stock being added twice, so an earlier delivery must not block the next one.
 
     const orderedQuantity = Number(request.ordered_quantity);
     const [[sum]] = await conn.query(
@@ -1354,11 +1716,12 @@ async function receive(id, payload, userId) {
 
     const receivingDate = payload.receiving_date || new Date().toISOString().slice(0, 10);
     const [rc] = await conn.query(
-      `INSERT INTO procurement_receipts (procurement_request_id, received_quantity, receiving_date, notes, received_by)
-       VALUES (?, ?, ?, ?, ?)`,
-      [id, receivedQuantity, receivingDate, payload.notes ?? null, userId ?? null]
+      `INSERT INTO procurement_receipts (procurement_request_id, received_quantity, receiving_date, notes, received_by, transport_cost)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, receivedQuantity, receivingDate, payload.notes ?? null, userId ?? null, deliveryTransport]
     );
     receiptId = rc.insertId;
+    if (deliveryTransport > 0) await transportExpenseService.bookForReceipt(receiptId, userId, conn);
 
     if (targetWarehouseId && request.material_id) {
       const rate = Number(request.purchase_rate || request.estimated_rate || 0) || null;
@@ -1634,6 +1997,7 @@ async function fulfil(id, payload = {}, userId) {
     const stockUnitCost = totalAmount && quantity ? Number((totalAmount / quantity).toFixed(4)) : (purchaseRate || null);
 
     const receivingDate = payload.receiving_date || payload.transaction_date || new Date().toISOString().slice(0, 10);
+    const deliveryTransport = moneyOrNull(payload.transport_cost, 'transport_cost') || 0;
     const destWarehouseId = request.destination_warehouse_id
       || (kind === 'central_purchase' ? await getCentralWarehouseId() : null);
     if (!destWarehouseId) {
@@ -1641,10 +2005,13 @@ async function fulfil(id, payload = {}, userId) {
     }
 
     const [rc] = await conn.query(
-      `INSERT INTO procurement_receipts (procurement_request_id, received_quantity, receiving_date, notes, received_by)
-       VALUES (?, ?, ?, ?, ?)`,
-      [id, quantity, receivingDate, payload.notes ?? null, userId ?? null]
+      `INSERT INTO procurement_receipts (procurement_request_id, received_quantity, receiving_date, notes, received_by, transport_cost)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, quantity, receivingDate, payload.notes ?? null, userId ?? null, deliveryTransport]
     );
+    // Freight on a central-warehouse restock has no project to charge and stays on the receipt;
+    // a delivery for a project is booked once as a transport expense.
+    if (deliveryTransport > 0) await transportExpenseService.bookForReceipt(rc.insertId, userId, conn);
 
     const vehicleForRecord = enteredVehicle || recordedVehicle || null;
     const tx = await warehouseService.receiveStock({
@@ -1807,18 +2174,60 @@ async function toolFulfil(id, payload = {}, actor) {
       throw ApiError.badRequest('Unknown machine procurement type.');
     }
 
-    const sets = ["status = 'received'", 'tool_unit_id = ?', 'fulfilled_at = NOW()', 'received_by = ?'];
-    const params = [unitId, actor?.id || null];
+    // Freight to bring the machine to site, booked once under Machines.
+    const machineTransport = moneyOrNull(payload.transport_cost, 'transport_cost') || 0;
+    if (machineTransport > 0) {
+      await transportExpenseService.bookForToolDelivery(id, machineTransport, actor?.id || null, conn);
+    }
+
+    // Going to a contractor: the machine is DISPATCHED ('ordered') with its vehicle and
+    // driver, and the contractor receives it - exactly like material. Only then can it
+    // be used on the task. With no receiving contractor it is complete straight away.
+    const receiverId = Number(context.contractorId) || null;
+    // No contractor: a PM-run site - its Project Manager receives the machine.
+    const pmSite = receiverId ? null : pmRunSiteOf(request);
+    const vehicle = String(payload.vehicle_number ?? '').trim();
+    if ((receiverId || pmSite) && !normalizeVehicle(vehicle)) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'Enter the vehicle bringing the machine - the contractor verifies it when it arrives.',
+      });
+    }
+    const dispatch = (receiverId || pmSite) ? {
+      vehicle_number: vehicle,
+      driver_name: String(payload.driver_name ?? '').trim() || null,
+      driver_phone: String(payload.driver_phone ?? '').trim() || null,
+      challan_number: String(payload.challan_number ?? '').trim() || null,
+    } : null;
+
+    const sets = dispatch
+      ? ["status = 'ordered'", 'tool_unit_id = ?', 'vehicle_number = ?', 'driver_name = ?', 'driver_phone = ?', 'challan_number = ?',
+        'contractor_id = COALESCE(contractor_id, ?)']
+      : ["status = 'received'", 'tool_unit_id = ?', 'fulfilled_at = NOW()', 'received_by = ?'];
+    const params = dispatch
+      ? [unitId, dispatch.vehicle_number, dispatch.driver_name, dispatch.driver_phone, dispatch.challan_number, receiverId]
+      : [unitId, actor?.id || null];
     if (paymentFields) {
       sets.push('vendor_id = ?', 'purchase_rate = ?', 'total_amount = ?', 'amount_due = GREATEST(? - COALESCE(amount_paid, 0), 0)');
       params.push(paymentFields.vendorId, paymentFields.rate, paymentFields.total, paymentFields.total);
       if (paymentFields.purchaseDate) { sets.push('purchase_date = ?'); params.push(paymentFields.purchaseDate); }
       if (paymentFields.days) { sets.push('rental_days = ?'); params.push(paymentFields.days); }
     }
+    if (machineTransport > 0) { sets.push('transport_cost = ?'); params.push(machineTransport); }
     params.push(id);
     await conn.query(`UPDATE procurement_requests SET ${sets.join(', ')} WHERE id = ?`, params);
 
     await conn.commit();
+
+    if (dispatch && receiverId) await notifyMachineDispatch(id, receiverId, dispatch);
+    if (dispatch && pmSite) {
+      const driver = [dispatch.driver_name, dispatch.driver_phone].filter(Boolean).join(', ');
+      await notifyProjectManagers(request.project_id, {
+        title: 'Machine dispatched to your site',
+        message: `${request.request_number}: machine on its way. Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}. Verify the vehicle and receive it.`,
+        actionUrl: `/pm/procurement/${id}`,
+        metadata: { module: 'procurement', procurementRequestId: id, ...dispatch },
+      });
+    }
   } catch (error) {
     await conn.rollback();
     if (error && (error.code === 'ER_DUP_ENTRY' || error.errno === 1062)) {
@@ -1826,6 +2235,89 @@ async function toolFulfil(id, payload = {}, actor) {
         throw ApiError.badRequest('That machine is already allocated. Return or reassign it first.');
       }
     }
+    throw error;
+  } finally {
+    conn.release();
+  }
+  return getDetail(id);
+}
+
+/** Notifies the Project Manager(s) of a project - used for a PM-run site's deliveries. */
+async function notifyProjectManagers(projectId, { title, message, actionUrl, metadata }) {
+  const userIds = await pmScope.projectManagerUserIds(projectId);
+  for (const userId of userIds) {
+    await notificationModel.create({ userId, title, message, type: 'material', category: 'material', actionUrl, metadata })
+      .catch((e) => console.error('Failed to notify project manager:', e));
+  }
+}
+
+/** Tells the receiving contractor a machine is on its way, with the vehicle and driver. */
+async function notifyMachineDispatch(id, contractorId, dispatch) {
+  const [[c]] = await pool.query('SELECT user_id FROM contractors WHERE id = ? LIMIT 1', [contractorId]);
+  if (!c?.user_id) return;
+  const [[r]] = await pool.query(
+    `SELECT pr.request_number, t.name AS tool_name, u.serial_number FROM procurement_requests pr
+     LEFT JOIN tools t ON t.id = pr.tool_id LEFT JOIN tool_units u ON u.id = pr.tool_unit_id WHERE pr.id = ?`,
+    [id]
+  );
+  const driver = [dispatch.driver_name, dispatch.driver_phone].filter(Boolean).join(', ');
+  await notificationModel.create({
+    userId: c.user_id,
+    title: 'Machine dispatched to you',
+    message: `${r?.request_number}: ${r?.tool_name || 'Machine'}${r?.serial_number ? ` (serial ${r.serial_number})` : ''} is on its way. `
+      + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}. Verify the vehicle and receive it when it arrives.`,
+    type: 'material',
+    category: 'material',
+    actionUrl: `/contractor/procurement/${id}`,
+    metadata: { module: 'procurement', procurementRequestId: id, ...dispatch },
+  }).catch((e) => console.error('Failed to notify machine dispatch:', e));
+}
+
+/**
+ * The receiving contractor (or Admin/Procurement/Warehouse) receives a DISPATCHED
+ * machine: the arriving vehicle must match the dispatch. The allocation is charged
+ * from the day it is received, and only now can the machine be used on the task.
+ */
+async function toolReceive(id, payload, userId, hrScope) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[request]] = await conn.query('SELECT * FROM procurement_requests WHERE id = ? FOR UPDATE', [id]);
+    if (!request) throw ApiError.notFound('That procurement request does not exist.');
+    if (!(request.item_type === 'tool' || (!request.material_id && request.tool_id))) {
+      throw ApiError.badRequest('This is not a machine/tool request.');
+    }
+    if (request.status !== 'ordered') {
+      throw ApiError.badRequest(`Only a dispatched machine can be received (this one is ${request.status.replace('_', ' ')}).`);
+    }
+    if (hrScope?.role === ROLES.CONTRACTOR && toolReceiverId(request) !== Number(hrScope.contractorId)) {
+      throw ApiError.forbidden('You can only receive a machine dispatched to you.');
+    }
+    if (hrScope?.role === ROLES.PROJECT_MANAGER && (toolReceiverId(request) || !pmScope.pmHasSite(hrScope, pmRunSiteOf(request)))) {
+      throw ApiError.forbidden('You can only receive a machine dispatched to a site you manage.');
+    }
+    const entered = String(payload.vehicle_number ?? '').trim();
+    if (!normalizeVehicle(entered)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Enter the arriving vehicle number to verify the dispatch.' });
+    }
+    if (normalizeVehicle(request.vehicle_number) && !vehiclesMatch(entered, request.vehicle_number)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Vehicle number does not match the dispatch.' });
+    }
+    const receivingDate = payload.receiving_date || new Date().toISOString().slice(0, 10);
+
+    await conn.query(
+      `UPDATE procurement_requests SET status = 'received', received_by = ?, received_vehicle_number = ?, fulfilled_at = NOW(),
+         notes = CASE WHEN ? IS NULL THEN notes ELSE CONCAT_WS(' | ', notes, ?) END WHERE id = ?`,
+      [userId ?? null, entered, payload.notes || null, payload.notes || null, id]
+    );
+    // Charge the machine from the day it actually reached the contractor.
+    await conn.query(
+      "UPDATE tool_allocations SET start_date = ? WHERE procurement_request_id = ? AND status = 'active' AND start_date < ?",
+      [receivingDate, id, receivingDate]
+    );
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
     throw error;
   } finally {
     conn.release();
@@ -1948,5 +2440,5 @@ module.exports = {
   STATUSES, PRIORITIES, TRANSITIONS,
   PROCUREMENT_KINDS, SOURCE_TYPES, DESTINATION_TYPES,
   list, listScoped, getById, getDetail, create, update, updateStatus, confirmSource, placeOrder,
-  receive, updateReceipt, getLookups, fulfil, toolFulfil, dispatch, attachBill, getBillFile, toRequest, toReceipt,
+  receive, updateReceipt, getLookups, fulfil, toolFulfil, toolReceive, dispatch, attachBill, getBillFile, toRequest, toReceipt,
 };

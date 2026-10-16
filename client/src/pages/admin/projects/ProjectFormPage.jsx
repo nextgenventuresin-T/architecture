@@ -31,6 +31,21 @@ import { hrApi } from '../../../api/hrApi';
 import { toApiError } from '../../../api/axiosClient';
 import { PROJECT_STATUSES, PROJECT_TYPES, toOptions } from '../../../utils/projectOptions';
 import { formatCurrency, formatNumber, toDateInputValue } from '../../../utils/format';
+import SearchableSelect from '../../../components/ui/SearchableSelect';
+import AreaInput from '../../../components/ui/AreaInput';
+
+/** Subtasks of a task grouped by area, in first-seen order: [{ area, count, total }]. */
+function subtasksByArea(subtasks = []) {
+  const groups = new Map();
+  for (const st of subtasks) {
+    const area = String(st.areaName || '').trim() || 'No area';
+    const g = groups.get(area.toLowerCase()) || { area, count: 0, total: 0 };
+    g.count += 1;
+    g.total += calcPlan(st).total;
+    groups.set(area.toLowerCase(), g);
+  }
+  return [...groups.values()];
+}
 
 function calcWorkingDays(start, end) {
   if (!start || !end) return 1;
@@ -104,6 +119,7 @@ function createEmptySubtask(parent) {
   return {
     tempId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     name: '',
+    areaName: '',
     description: '',
     status: 'on-track',
     startDate: parent?.startDate || '',
@@ -142,14 +158,18 @@ function daysBetween(start, end) {
 
 /** Planned totals of one plan (a task's direct lines, or one subtask). */
 function calcPlan(t) {
-  const matTotal = (t.materials || []).reduce((sum, m) => sum + Number(m.quantity || 0) * Number(m.costPerUnit || 0), 0);
+  const matTotal = (t.materials || []).reduce((sum, m) => sum + materialLineTotal(m), 0);
   const toolTotal = (t.tools || []).reduce((sum, tl) => sum + machineLineTotal(tl), 0);
   const labourTotal = (t.labour || []).reduce((sum, l) => {
     const days = Number(l.workingDays ?? t.durationDays ?? 0);
-    return sum + Number(l.workerCount ?? 1) * Number(l.dailyWage ?? 0) * days;
+    return sum + Number(l.workerCount ?? 1) * Number(l.dailyWage ?? 0) * days + Number(l.transportCost || 0);
   }, 0);
   const miscTotal = (t.misc || []).reduce((sum, mc) => sum + Number(mc.amount || 0), 0);
-  return { matTotal, toolTotal, labourTotal, miscTotal, total: matTotal + toolTotal + labourTotal + miscTotal };
+  const transportOf = (rows) => (rows || []).reduce((sum, r) => sum + Number(r.transportCost || 0), 0);
+  return {
+    matTotal, toolTotal, labourTotal, miscTotal, total: matTotal + toolTotal + labourTotal + miscTotal,
+    matTransport: transportOf(t.materials), toolTransport: transportOf(t.tools), labourTransfer: transportOf(t.labour),
+  };
 }
 
 /** Saved plan lines (API shape) -> form rows, for a subtask loaded from the server. */
@@ -159,6 +179,7 @@ function toFormPlan(src, fallbackStart, fallbackEnd) {
       materialId: m.materialId || m.material_id || '',
       quantity: Number(m.quantity || 0),
       costPerUnit: Number(m.costPerUnit ?? m.cost_per_unit ?? 0),
+      transportCost: Number(m.transportCost ?? m.transport_cost ?? 0),
     })),
     tools: (src.tools || []).map((tl) => ({
       toolId: tl.toolId || tl.tool_id || '',
@@ -167,6 +188,7 @@ function toFormPlan(src, fallbackStart, fallbackEnd) {
       quantity: Number(tl.quantity || 1),
       cost: Number(tl.cost || 0),
       workingDays: Number(tl.workingDays || tl.working_days || 1),
+      transportCost: Number(tl.transportCost ?? tl.transport_cost ?? 0),
     })),
     labour: (src.labour || []).map((l) => {
       const isCompany = (l.labourType || l.labour_type || l.workerType || '').toLowerCase().includes('company');
@@ -183,6 +205,7 @@ function toFormPlan(src, fallbackStart, fallbackEnd) {
         workerCount: 1,
         dailyWage: isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0),
         workingDays: Number(l.workingDays ?? l.working_days ?? calcWorkingDays(lStart, lEnd)),
+        transportCost: Number(l.transportCost ?? l.transport_cost ?? 0),
         remarks: l.remarks || '',
       };
     }),
@@ -193,7 +216,12 @@ function toFormPlan(src, fallbackStart, fallbackEnd) {
 // Rented machines are budgeted per day (Qty x Rate/Day x Days), like labour; purchases are one-time.
 function machineLineTotal(tl) {
   const days = tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1);
-  return Number(tl.quantity || 1) * Number(tl.cost || 0) * days;
+  return Number(tl.quantity || 1) * Number(tl.cost || 0) * days + Number(tl.transportCost || 0);
+}
+
+// Material line: Qty x Cost/Unit + estimated transport to site.
+function materialLineTotal(m) {
+  return Number(m.quantity || 0) * Number(m.costPerUnit || 0) + Number(m.transportCost || 0);
 }
 
 export default function ProjectFormPage({ mode = 'create' }) {
@@ -238,6 +266,9 @@ export default function ProjectFormPage({ mode = 'create' }) {
   }, []);
 
   const { data: lookups, isLoading: loadingLookups, reload: reloadLookups } = useAsync(() => projectsApi.lookups(), []);
+  // Existing areas of this project, suggested while typing a subtask's area.
+  const { data: areaData } = useAsync(() => (id ? projectsApi.areas(id) : Promise.resolve({ areas: [] })), [id]);
+  const projectAreas = areaData?.areas ?? [];
   const { data: existing, isLoading: loadingProject, error: loadError } = useAsync(
     () => (isEdit ? projectsApi.detail(id) : Promise.resolve(null)),
     [isEdit, id]
@@ -275,6 +306,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
           id: t.id,
           tempId: `task-${t.id || idx}`,
           name: t.name || '',
+          areaName: t.areaName || '',
           siteId: t.siteId ? String(t.siteId) : '',
           description: t.description || '',
           status: t.status || 'on-track',
@@ -291,6 +323,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
               id: st.id,
               tempId: `sub-${st.id}`,
               name: st.name || '',
+              areaName: st.areaName || '',
               description: st.description || '',
               status: st.status || 'on-track',
               progress: Number(st.progress || 0),
@@ -304,6 +337,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
             materialId: m.materialId || m.material_id || '',
             quantity: Number(m.quantity || 0),
             costPerUnit: Number(m.costPerUnit ?? m.cost_per_unit ?? 0),
+            transportCost: Number(m.transportCost ?? m.transport_cost ?? 0),
           })),
           tools: (t.tools || []).map((tl) => ({
             toolId: tl.toolId || tl.tool_id || '',
@@ -312,6 +346,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
             quantity: Number(tl.quantity || 1),
             cost: Number(tl.cost || 0),
             workingDays: Number(tl.workingDays || tl.working_days || 1),
+            transportCost: Number(tl.transportCost ?? tl.transport_cost ?? 0),
           })),
           labour: (t.labour || []).map((l) => {
             const isCompany = (l.labourType || l.labour_type || l.worker_type || '').toLowerCase().includes('company');
@@ -330,6 +365,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
               workerCount: 1,
               dailyWage: wage,
               workingDays: days,
+              transportCost: Number(l.transportCost ?? l.transport_cost ?? 0),
               remarks: l.remarks || '',
             };
           }),
@@ -416,7 +452,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <h4 className="text-xs font-bold uppercase tracking-wider text-ink-subtle">
-                                1. Material Budget (Total: {formatCurrency(calc?.matTotal || 0)})
+                                1. Material Budget (Total: {formatCurrency(calc?.matTotal || 0)}
+                                {calc?.matTransport > 0 && ` incl. ${formatCurrency(calc.matTransport)} transport`})
                               </h4>
                               <Button
                                 type="button"
@@ -445,17 +482,18 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                       <th className="p-2.5">Material</th>
                                       <th className="p-2.5 w-28">Quantity</th>
                                       <th className="p-2.5 w-32">Cost Per Unit (₹)</th>
+                                      <th className="p-2.5 w-32" title="Estimated cost of transporting this material to site">Transport (₹)</th>
                                       <th className="p-2.5 w-32">Total Cost (₹)</th>
                                       <th className="p-2.5 w-12 text-center"></th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-line">
                                     {t.materials.map((m, mIdx) => {
-                                      const lineTotal = Number(m.quantity || 0) * Number(m.costPerUnit || 0);
+                                      const lineTotal = materialLineTotal(m);
                                       return (
                                         <tr key={mIdx}>
                                           <td className="p-2">
-                                            <select
+                                            <SearchableSelect
                                               value={m.materialId}
                                               onChange={(e) => {
                                                 const selId = Number(e.target.value);
@@ -478,7 +516,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                                   {mat.name} ({mat.category} - {mat.unit})
                                                 </option>
                                               ))}
-                                            </select>
+                                            </SearchableSelect>
                                           </td>
                                           <td className="p-2">
                                             <input
@@ -512,6 +550,25 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                               className="w-full rounded-lg border border-line p-1.5 text-xs text-ink"
                                             />
                                           </td>
+                                          <td className="p-2">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="any"
+                                              value={m.transportCost ?? ''}
+                                              placeholder="Transport"
+                                              title="Estimated material transport cost (₹)"
+                                              aria-label="Estimated material transport cost (₹)"
+                                              onChange={(e) =>
+                                                updateTask(t.tempId, (task) => {
+                                                  const copy = [...task.materials];
+                                                  copy[mIdx] = { ...copy[mIdx], transportCost: e.target.value };
+                                                  return { ...task, materials: copy };
+                                                })
+                                              }
+                                              className="w-full text-right rounded-lg border border-amber-300 bg-amber-50/60 p-1.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
+                                            />
+                                          </td>
                                           <td className="p-2 font-semibold text-ink">
                                             {formatCurrency(lineTotal)}
                                           </td>
@@ -542,7 +599,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <h4 className="text-xs font-bold uppercase tracking-wider text-ink-subtle">
-                                2. Machines & Tools Budget (Total: {formatCurrency(calc?.toolTotal || 0)})
+                                2. Machines & Tools Budget (Total: {formatCurrency(calc?.toolTotal || 0)}
+                                {calc?.toolTransport > 0 && ` incl. ${formatCurrency(calc.toolTransport)} transport`})
                               </h4>
                               <Button
                                 type="button"
@@ -573,6 +631,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                       <th className="p-2.5 w-24">Quantity</th>
                                       <th className="p-2.5 w-28">Rate/Day or Cost (₹)</th>
                                       <th className="p-2.5 w-20">Days</th>
+                                      <th className="p-2.5 w-28" title="Estimated machine transport: delivery, shifting and return">Transport (₹)</th>
                                       <th className="p-2.5 w-28">Total Cost (₹)</th>
                                       <th className="p-2.5 w-12 text-center"></th>
                                     </tr>
@@ -583,7 +642,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                       return (
                                         <tr key={tlIdx}>
                                           <td className="p-2">
-                                            <select
+                                            <SearchableSelect
                                               value={tl.toolId}
                                               onChange={(e) => {
                                                 const selId = Number(e.target.value);
@@ -603,10 +662,10 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                                   {toolItem.name} ({toolItem.type})
                                                 </option>
                                               ))}
-                                            </select>
+                                            </SearchableSelect>
                                           </td>
                                           <td className="p-2">
-                                            <select
+                                            <SearchableSelect
                                               value={tl.rentalType}
                                               onChange={(e) =>
                                                 updateTask(t.tempId, (task) => {
@@ -619,7 +678,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                             >
                                               <option value="Rent">Rent</option>
                                               <option value="Purchase">Purchase</option>
-                                            </select>
+                                            </SearchableSelect>
                                           </td>
                                           <td className="p-2">
                                             <input
@@ -670,6 +729,25 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                               />
                                             )}
                                           </td>
+                                          <td className="p-2">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="any"
+                                              value={tl.transportCost ?? ''}
+                                              placeholder="Transport"
+                                              title="Estimated machine transport cost (₹)"
+                                              aria-label="Estimated machine transport cost (₹)"
+                                              onChange={(e) =>
+                                                updateTask(t.tempId, (task) => {
+                                                  const copy = [...task.tools];
+                                                  copy[tlIdx] = { ...copy[tlIdx], transportCost: e.target.value };
+                                                  return { ...task, tools: copy };
+                                                })
+                                              }
+                                              className="w-full text-right rounded-lg border border-amber-300 bg-amber-50/60 p-1.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
+                                            />
+                                          </td>
                                           <td className="p-2 font-semibold text-ink">
                                             {formatCurrency(lineTotal)}
                                           </td>
@@ -701,7 +779,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div>
                                 <h4 className="text-xs font-bold uppercase tracking-wider text-ink-subtle">
-                                  3. Labour Budget (Total: {formatCurrency(calc?.labourTotal || 0)})
+                                  3. Labour Budget (Total: {formatCurrency(calc?.labourTotal || 0)}
+                                  {calc?.labourTransfer > 0 && ` incl. ${formatCurrency(calc.labourTransfer)} internal transfer`})
                                 </h4>
                                 <p className="text-[11px] text-ink-muted mt-0.5">
                                   Task Duration: <strong className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-semibold">{t.durationDays || 14} working days</strong>
@@ -755,6 +834,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                       <th className="p-2.5 w-28 text-right">Workers</th>
                                       <th className="p-2.5 w-28 text-right">Working Days</th>
                                       <th className="p-2.5 w-32 text-right">Daily Wage (₹)</th>
+                                      <th className="p-2.5 w-32 text-right" title="Estimated cost of transferring this labour to the site">Internal Transfer (₹)</th>
                                       <th className="p-2.5 w-36 text-right">Planned Labour Cost (₹)</th>
                                       <th className="p-2.5 min-w-[140px]">Remarks</th>
                                       <th className="p-2.5 w-10 text-center"></th>
@@ -765,7 +845,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                       const wc = Number(l.workerCount || 1);
                                       const wd = Number(l.workingDays || 0);
                                       const dw = Number(l.dailyWage || 0);
-                                      const lineTotal = wc * wd * dw;
+                                      const lineTotal = wc * wd * dw + Number(l.transportCost || 0);
 
                                       return (
                                         <tr key={lIdx} className="hover:bg-canvas-subtle/50 transition-colors">
@@ -832,6 +912,25 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                               className="w-full text-right rounded-lg border border-line p-1.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
                                             />
                                           </td>
+                                          <td className="p-2">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="any"
+                                              value={l.transportCost ?? ''}
+                                              placeholder="Transfer"
+                                              title="Estimated internal transfer cost (₹)"
+                                              aria-label="Estimated internal transfer cost (₹)"
+                                              onChange={(e) =>
+                                                updateTask(t.tempId, (task) => {
+                                                  const copy = [...task.labour];
+                                                  copy[lIdx] = { ...copy[lIdx], transportCost: e.target.value };
+                                                  return { ...task, labour: copy };
+                                                })
+                                              }
+                                              className="w-full text-right rounded-lg border border-amber-300 bg-amber-50/60 p-1.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
+                                            />
+                                          </td>
 
                                           <td className="p-2 text-right font-semibold text-brand-700 tabular-nums">
                                             {formatCurrency(lineTotal)}
@@ -874,7 +973,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                   </tbody>
                                 </table>
                                 <div className="flex items-center justify-between text-[11px] text-ink-subtle px-3 py-2 bg-canvas/30 border-t border-line">
-                                  <span>💡 Formula: <strong className="text-ink font-medium">Labour Cost = Expected Working Days × Daily Wage (₹0 for Company Employee)</strong></span>
+                                  <span>💡 Formula: <strong className="text-ink font-medium">Labour Cost = Expected Working Days × Daily Wage (₹0 for Company Employee) + Internal Transfer</strong></span>
                                 </div>
                               </div>
                             )}
@@ -1087,7 +1186,9 @@ export default function ProjectFormPage({ mode = 'create' }) {
           quantity: Number(m.quantity || 0),
           costPerUnit: Number(m.costPerUnit || 0),
           cost_per_unit: Number(m.costPerUnit || 0),
-          totalCost: Number(m.quantity || 0) * Number(m.costPerUnit || 0),
+          transportCost: Number(m.transportCost || 0),
+          transport_cost: Number(m.transportCost || 0),
+          totalCost: materialLineTotal(m),
         })),
       tools: (t.tools || [])
         .filter((tl) => (tl.toolName || '').trim() || tl.toolId)
@@ -1102,12 +1203,15 @@ export default function ProjectFormPage({ mode = 'create' }) {
           cost: Number(tl.cost || 0),
           workingDays: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
           working_days: tl.rentalType === 'Purchase' ? 1 : Number(tl.workingDays || 1),
+          transportCost: Number(tl.transportCost || 0),
+          transport_cost: Number(tl.transportCost || 0),
           totalCost: machineLineTotal(tl),
         })),
       labour: (t.labour || []).map((l) => {
         const isCompany = l.labourType === 'Company Labour' || l.labourType === 'Company Employee' || l.workerType === 'company_labour';
         const dw = isCompany ? 0 : Number(l.dailyWage || 0);
         const wd = Number(l.workingDays || calcWorkingDays(l.startDate, l.endDate));
+        const transfer = Number(l.transportCost || 0);
         return {
           workerId: l.workerId || null,
           worker_id: l.workerId || null,
@@ -1128,8 +1232,10 @@ export default function ProjectFormPage({ mode = 'create' }) {
           daily_wage: dw,
           workingDays: wd,
           working_days: wd,
-          totalCost: isCompany ? 0 : dw * wd,
-          total_cost: isCompany ? 0 : dw * wd,
+          transportCost: transfer,
+          transport_cost: transfer,
+          totalCost: (isCompany ? 0 : dw * wd) + transfer,
+          total_cost: (isCompany ? 0 : dw * wd) + transfer,
           remarks: (l.remarks || '').trim() || null,
         };
       }),
@@ -1149,6 +1255,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
         return {
           id: t.id ? Number(t.id) : undefined,
           name: t.name.trim(),
+          // Typed area of the main task: reused if it exists, created otherwise.
+          area_name: t.areaName ? t.areaName.trim() : null,
           siteId: t.siteId ? Number(t.siteId) : null,
           site_id: t.siteId ? Number(t.siteId) : null,
           description: t.description ? t.description.trim() : null,
@@ -1163,6 +1271,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
           subtasks: (t.subtasks || []).map((st) => ({
             id: st.id ? Number(st.id) : undefined,
             name: st.name.trim(),
+            // Typed area: the server reuses a matching area or creates it ("Floor > Room" nests).
+            area_name: st.areaName ? st.areaName.trim() : null,
             description: st.description ? st.description.trim() : null,
             status: st.status || 'on-track',
             ...(st.progress !== undefined ? { progress: Number(st.progress) } : {}),
@@ -1628,6 +1738,12 @@ export default function ProjectFormPage({ mode = 'create' }) {
                               />
                             </div>
 
+                            <AreaInput
+                              value={t.areaName}
+                              areas={projectAreas.filter((a) => !t.siteId || !a.siteId || String(a.siteId) === String(t.siteId))}
+                              onChange={(val) => updateTask(t.tempId, (task) => ({ ...task, areaName: val }))}
+                            />
+
                             {availableSites.length > 0 && (
                               <div>
                                 <SelectField
@@ -1758,6 +1874,16 @@ export default function ProjectFormPage({ mode = 'create' }) {
                               </Button>
                             </div>
 
+                            {(t.subtasks || []).some((st) => String(st.areaName || '').trim()) && (
+                              <div className="flex flex-wrap gap-2" aria-label="Subtasks by area">
+                                {subtasksByArea(t.subtasks).map((g) => (
+                                  <span key={g.area} className={`rounded-md border px-2 py-1 text-[11px] font-medium ${g.area === 'No area' ? 'border-line bg-white text-ink-subtle' : 'border-brand-200 bg-white text-brand-900'}`}>
+                                    {g.area}: {g.count} subtask{g.count === 1 ? '' : 's'} · {formatCurrency(g.total)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
                             {(t.subtasks || []).length === 0 ? (
                               <p className="rounded-lg border border-dashed border-brand-200 bg-white px-3 py-4 text-center text-xs text-ink-subtle">
                                 No subtasks yet. Click &ldquo;Add Subtask&rdquo; to plan this task (e.g. Excavation, PCC &amp; Footing, Column Casting).
@@ -1779,6 +1905,11 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                         <span className="truncate text-sm font-semibold text-ink">
                                           {st.name || <span className="italic text-ink-subtle">Subtask #{sIdx + 1} (Untitled)</span>}
                                         </span>
+                                        {st.areaName && (
+                                          <span className="shrink-0 rounded-md border border-brand-200 bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-brand-800">
+                                            {st.areaName}
+                                          </span>
+                                        )}
                                       </button>
                                       <div className="flex items-center gap-2">
                                         <span className="rounded-md bg-canvas px-2 py-0.5 text-xs font-semibold text-ink">{formatCurrency(sCalc.total)}</span>
@@ -1805,6 +1936,12 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                               placeholder="e.g. Column Casting, Slab Shuttering, Wiring Ground Floor"
                                             />
                                           </div>
+                                          <AreaInput
+                                            className="sm:col-span-2"
+                                            value={st.areaName}
+                                            areas={projectAreas}
+                                            onChange={(val) => updateSub(st.tempId, (x) => ({ ...x, areaName: val }))}
+                                          />
                                           <SelectField
                                             label="Status"
                                             value={st.status}

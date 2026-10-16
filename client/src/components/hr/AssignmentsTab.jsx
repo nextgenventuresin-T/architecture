@@ -14,6 +14,7 @@ import { toApiError } from '../../api/axiosClient';
 import { formatDate } from '../../utils/format';
 import { ASSIGNMENT_STATUS_TONE } from '../../utils/hrOptions';
 import { ROLES } from '../../config/roles';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const INITIAL_FILTERS = { status: 'active', page: 1 };
 
@@ -137,7 +138,7 @@ export default function AssignmentsTab({ fixedLabourType, title = 'Assignments' 
             <p className="text-sm text-ink-muted">Who is currently posted where.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
+            <SearchableSelect
               value={filters.status}
               onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value, page: 1 }))}
               className="h-9 rounded-lg border border-line bg-white px-3 text-sm text-ink"
@@ -146,7 +147,7 @@ export default function AssignmentsTab({ fixedLabourType, title = 'Assignments' 
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
               <option value="all">All</option>
-            </select>
+            </SearchableSelect>
             <Button variant="secondary" onClick={reload} aria-label="Refresh">
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             </Button>

@@ -15,7 +15,8 @@ const RECEIVED_ROLLUP = `
   SELECT pr.procurement_request_id,
          COALESCE(SUM(pr.received_quantity), 0) AS received_qty,
          COUNT(*)                               AS receipt_count,
-         MAX(pr.receiving_date)                 AS last_received
+         MAX(pr.receiving_date)                 AS last_received,
+         COALESCE(SUM(pr.transport_cost), 0)    AS transport_paid
   FROM procurement_receipts pr
   GROUP BY pr.procurement_request_id
 `;
@@ -58,7 +59,16 @@ const LIST_SELECT = `
     r.amount_paid, r.amount_due, r.payment_status,
     r.tool_unit_id, tu.serial_number AS tool_unit_serial, r.usage_charge_total, r.usage_charge_days, r.usage_charge_policy,
     r.requester_role, r.contractor_id, rc.name AS responsible_contractor_name,
-    r.received_by, r.received_vehicle_number
+    r.received_by, r.received_vehicle_number,
+    r.area_id, pa.name AS area_name, pa.area_type, r.transport_cost,
+    r.batch_id, pb.batch_number,
+    COALESCE((
+      SELECT SUM(te.amount) FROM expenses te
+      WHERE te.status NOT IN ('rejected', 'cancelled') AND (
+        (te.source_type = 'material_transport' AND te.source_id IN (SELECT tmm.id FROM material_movements tmm WHERE tmm.procurement_request_id = r.id))
+        OR (te.source_type = 'procurement_transport' AND te.source_id IN (SELECT trc.id FROM procurement_receipts trc WHERE trc.procurement_request_id = r.id))
+        OR (te.source_type = 'machine_transport' AND te.source_id = r.id)
+      )), 0) AS transport_paid
   FROM procurement_requests r
   LEFT JOIN projects p ON p.id = r.project_id
   LEFT JOIN sites s ON s.id = r.site_id
@@ -77,6 +87,8 @@ const LIST_SELECT = `
   LEFT JOIN vendors v ON v.id = r.vendor_id
   LEFT JOIN tool_units tu ON tu.id = r.tool_unit_id
   LEFT JOIN contractors rc ON rc.id = r.contractor_id
+  LEFT JOIN project_areas pa ON pa.id = r.area_id
+  LEFT JOIN procurement_batches pb ON pb.id = r.batch_id
 `;
 
 const COUNT_FROM = `
@@ -87,9 +99,14 @@ const COUNT_FROM = `
   LEFT JOIN tools t ON t.id = r.tool_id
 `;
 
-function buildFilters({ search, status, projectId, siteId, materialId, toolId, itemType, supplier, priority, kind, contractorId, userId, pmProjectIds }) {
+function buildFilters({ search, status, projectId, siteId, materialId, toolId, itemType, supplier, priority, kind, contractorId, userId, pmProjectIds, areaId, deliveryMode, batchId }) {
   const where = [];
   const params = [];
+
+  if (batchId) {
+    where.push('r.batch_id = ?');
+    params.push(Number(batchId));
+  }
 
   if (search) {
     where.push('(r.request_number LIKE ? OR r.po_number LIKE ? OR m.name LIKE ? OR t.name LIKE ? OR r.supplier LIKE ? OR p.name LIKE ?)');
@@ -130,6 +147,19 @@ function buildFilters({ search, status, projectId, siteId, materialId, toolId, i
   if (kind && kind !== 'all') {
     where.push('r.procurement_kind = ?');
     params.push(kind);
+  }
+  if (areaId) {
+    where.push('r.area_id = ?');
+    params.push(Number(areaId));
+  }
+  // Direct to site = an outside vendor delivers straight to the project site / its contractor;
+  // via warehouse = bought into, or issued from, the central warehouse.
+  if (deliveryMode === 'direct_site') {
+    where.push("(r.procurement_kind = 'project_site' OR (r.procurement_kind = 'contractor_supply' AND r.source_type = 'supplier'))");
+  } else if (deliveryMode === 'warehouse') {
+    where.push("(r.procurement_kind = 'central_purchase' OR r.source_type = 'central_warehouse')");
+  } else if (deliveryMode === 'transfer') {
+    where.push("r.procurement_kind = 'internal_transfer'");
   }
   if (contractorId) {
     where.push('(r.requested_by = ? OR p.contractor_id = ? OR s.contractor_id = ? OR r.source_contractor_id = ? OR r.destination_contractor_id = ?)');
@@ -241,7 +271,54 @@ const WRITABLE = [
   'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'tool_unit_id', 'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'requester_role', 'contractor_id',
+  'area_id', 'transport_cost', 'batch_id',
 ];
+
+// ---------------------------------------------------------------- batches
+
+/** Highest PB- number in play, so a generated batch number cannot collide. */
+async function nextBatchNumber() {
+  const [[row]] = await pool.query(
+    `SELECT COALESCE(MAX(CASE WHEN batch_number REGEXP '^PB-[0-9]+$'
+                              THEN CAST(SUBSTRING(batch_number, 4) AS UNSIGNED) END), 0) AS max_num
+     FROM procurement_batches`
+  );
+  return `PB-${String(Number(row.max_num || 0) + 1).padStart(4, '0')}`;
+}
+
+async function createBatch({ flow, requestedBy, requesterRole, notes }) {
+  const batchNumber = await nextBatchNumber();
+  const [res] = await pool.query(
+    'INSERT INTO procurement_batches (batch_number, flow, requested_by, requester_role, notes) VALUES (?, ?, ?, ?, ?)',
+    [batchNumber, flow || null, requestedBy || null, requesterRole || null, notes || null]
+  );
+  return { id: res.insertId, batchNumber };
+}
+
+async function findBatchById(id) {
+  const [[row]] = await pool.query(
+    `SELECT pb.*, u.full_name AS requested_by_name FROM procurement_batches pb
+     LEFT JOIN users u ON u.id = pb.requested_by WHERE pb.id = ? LIMIT 1`,
+    [id]
+  );
+  return row || null;
+}
+
+/**
+ * Undoes a batch whose items could not all be created. Only ever called straight after
+ * creation, before anything is ordered, moved or received, so the items have no stock,
+ * movement or finance rows yet - just the request rows and their alerts.
+ */
+async function discardBatch(batchId, requestIds) {
+  if (requestIds.length) {
+    await pool.query(
+      `DELETE FROM notifications WHERE CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.procurementRequestId')) AS UNSIGNED) IN (?)`,
+      [requestIds]
+    ).catch(() => {});
+    await pool.query('DELETE FROM procurement_requests WHERE id IN (?) AND batch_id = ?', [requestIds, batchId]);
+  }
+  await pool.query('DELETE FROM procurement_batches WHERE id = ?', [batchId]);
+}
 
 async function create(payload) {
   const columns = WRITABLE.filter((key) => payload[key] !== undefined);
@@ -262,6 +339,7 @@ const UPDATABLE = [
   'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'tool_unit_id',
+  'area_id', 'transport_cost',
 ];
 
 async function update(id, payload) {
@@ -302,7 +380,7 @@ async function markOrdered(id, { poNumber, orderedQuantity, orderDate, expectedD
 async function findReceipts(requestId) {
   const [rows] = await pool.query(
     `SELECT id, procurement_request_id, received_quantity, receiving_date, notes,
-            received_by, material_entry_id, created_at
+            received_by, material_entry_id, created_at, transport_cost, transport_expense_id
      FROM procurement_receipts
      WHERE procurement_request_id = ?
      ORDER BY receiving_date DESC, id DESC`,
@@ -419,4 +497,5 @@ module.exports = {
   nextRequestNumber, nextPoNumber, create, update, updateStatus, updatePayment, markOrdered,
   findReceipts, findReceiptById, totalReceived, createReceipt, updateReceipt,
   findSuppliers, findSummary, updateFulfilment, updateBillFile,
+  createBatch, findBatchById, discardBatch,
 };

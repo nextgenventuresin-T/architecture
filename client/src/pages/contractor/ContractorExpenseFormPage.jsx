@@ -570,22 +570,7 @@ export default function ContractorExpenseFormPage() {
                 error={fieldErrors.remarks}
               />
 
-              {/* Financial Calculation Note */}
-              {selectedMaterial &&
-                Number(materialValues.quantity_used) > 0 &&
-                Number(materialValues.quantity_used) <= Number(selectedMaterial.availableStock) && (
-                  <div className="rounded-lg bg-canvas p-3 border border-line text-xs text-ink-subtle flex items-center justify-between">
-                    <span>
-                      Expense logged against project budget:
-                    </span>
-                    <strong className="text-ink font-semibold text-sm">
-                      {formatCurrency(
-                        Number(materialValues.quantity_used) *
-                          Number(selectedMaterial.defaultRate || 0)
-                      )}
-                    </strong>
-                  </div>
-                )}
+              {/* Material cost is calculated by the company from internal rates and is not shown to contractors. */}
 
               {/* Actions */}
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-line">

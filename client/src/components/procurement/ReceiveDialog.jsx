@@ -21,6 +21,7 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
     vehicle_number: '',
     challan_number: '',
     driver_name: '',
+    transport_cost: '',
     notes: '',
   });
   const [fieldErrors, setFieldErrors] = useState({});
@@ -38,6 +39,7 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
       vehicle_number: '',
       challan_number: request.challanNumber || '',
       driver_name: request.driverName || '',
+      transport_cost: '',
       notes: '',
     });
   }, [request]);
@@ -68,6 +70,7 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
     if ((isCentral || request.vehicleNumber) && !values.vehicle_number?.trim()) {
       errors.vehicle_number = 'Enter the arriving vehicle number - it is verified against the recorded dispatch.';
     }
+    if (values.transport_cost !== '' && !(Number(values.transport_cost) >= 0)) errors.transport_cost = 'Enter a valid amount.';
     if (!values.receiving_date) errors.receiving_date = 'Enter the receiving date.';
     else if (new Date(values.receiving_date) > new Date()) {
       errors.receiving_date = 'The receiving date cannot be in the future.';
@@ -97,6 +100,7 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
         vehicle_number: values.vehicle_number ? values.vehicle_number.trim() : null,
         challan_number: values.challan_number ? values.challan_number.trim() : null,
         driver_name: values.driver_name ? values.driver_name.trim() : null,
+        transport_cost: values.transport_cost !== '' ? Number(values.transport_cost) : null,
         notes: combinedNotes || null,
       });
       const isFull = remaining !== null && Number(values.received_quantity) >= remaining;
@@ -174,6 +178,20 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
           value={values.driver_name}
           onChange={set('driver_name')}
           placeholder="Driver full name"
+          className="sm:col-span-2"
+        />
+        <InputField
+          label="Transport cost for this delivery (optional)"
+          type="number"
+          min="0"
+          step="0.01"
+          value={values.transport_cost}
+          onChange={set('transport_cost')}
+          error={fieldErrors.transport_cost}
+          placeholder="0.00"
+          hint={request.project
+            ? `Freight actually paid. Booked once as ${request.transportCategory || 'Material Transport'} on ${request.project.name}${request.area ? ` (${request.area.name})` : ''} - not added to the item rate.`
+            : 'No project to charge (warehouse restock) - kept on the delivery record only.'}
           className="sm:col-span-2"
         />
         <TextAreaField

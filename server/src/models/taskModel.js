@@ -2,6 +2,9 @@
 
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
+const {
+  MATERIAL_EXPENSE_CATEGORIES, MACHINE_EXPENSE_CATEGORIES, MISC_EXPENSE_CATEGORIES, NON_MISC_CATEGORIES, TRANSPORT_CATEGORIES,
+} = require('../config/costBuckets');
 
 /**
  * Task Data Access Model.
@@ -22,6 +25,11 @@ function inclusiveDays(start, end) {
  * quantity x rate per day x days; a purchased one is a one-time quantity x cost.
  * The total is always recomputed here, never taken from the client.
  */
+/** Estimated transport on a plan line (material / machine transport, labour internal transfer). */
+function transportOf(row) {
+  return Math.max(0, Number(row.transport_cost ?? row.transportCost ?? 0) || 0);
+}
+
 function normalizeToolRow(t, fallbackDays) {
   const rentalType = t.rental_type || t.rentalType || 'Rent';
   const isPurchase = String(rentalType).toLowerCase() === 'purchase';
@@ -32,7 +40,8 @@ function normalizeToolRow(t, fallbackDays) {
   let days = Number(t.working_days ?? t.workingDays ?? 0);
   if (!(days > 0)) days = inclusiveDays(startDate, endDate) || Number(fallbackDays || 0) || 1;
   if (isPurchase) days = 1;
-  const total = Number((qty * cost * days).toFixed(2));
+  const transport = transportOf(t);
+  const total = Number((qty * cost * days + transport).toFixed(2));
   return {
     toolId: t.tool_id || t.toolId || null,
     toolName: (t.tool_name || t.toolName || t.name || '').trim(),
@@ -40,6 +49,7 @@ function normalizeToolRow(t, fallbackDays) {
     qty,
     cost,
     days,
+    transport,
     total,
     startDate: isPurchase ? null : startDate,
     endDate: isPurchase ? null : endDate,
@@ -119,9 +129,9 @@ async function findPlannedTools(taskId, conn = pool, subtaskId = undefined) {
 
 async function insertToolRow(connection, taskId, projectId, siteId, r, subtaskId = null) {
   await connection.query(
-    `INSERT INTO task_tools (task_id, subtask_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, working_days, total_cost, start_date, end_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [taskId, subtaskId, projectId, siteId, r.toolId, r.toolName, r.rentalType, r.qty, r.cost, r.days, r.total, r.startDate, r.endDate]
+    `INSERT INTO task_tools (task_id, subtask_id, project_id, site_id, tool_id, tool_name, rental_type, quantity, cost, working_days, transport_cost, total_cost, start_date, end_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [taskId, subtaskId, projectId, siteId, r.toolId, r.toolName, r.rentalType, r.qty, r.cost, r.days, r.transport, r.total, r.startDate, r.endDate]
   );
 }
 
@@ -156,6 +166,8 @@ async function refreshProjectEstimate(conn, projectId, { allowZero = false } = {
   }
 }
 
+const isCountedExpense = (e) => !['rejected', 'cancelled'].includes(e.status);
+
 function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], workerLogs = [], expenses = []) {
   // 1. Materials
   const budgetedMaterial = Number(task.material_budget || task.materialBudget || 0);
@@ -173,6 +185,12 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
       actualMaterial += qtyUsed * unitRate;
     }
   });
+  // Freight on material deliveries is booked once as 'Material Transport' and counts as material.
+  let transportMaterial = 0;
+  expenses.forEach((e) => {
+    if (MATERIAL_EXPENSE_CATEGORIES.includes(e.category) && isCountedExpense(e)) transportMaterial += Number(e.amount || 0);
+  });
+  actualMaterial += transportMaterial;
   actualMaterial = Number(actualMaterial.toFixed(2));
   const remainingMaterial = Math.max(0, Number((budgetedMaterial - actualMaterial).toFixed(2)));
   const utilizationMaterial = budgetedMaterial > 0 ? Number(((actualMaterial / budgetedMaterial) * 100).toFixed(1)) : 0;
@@ -181,7 +199,7 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
 
   // 2. Tools / Machines
   const budgetedTools = Number(task.tool_budget || task.toolBudget || 0);
-  const toolExpenseCategories = new Set(['Equipment Rental', 'Tools', 'Machinery', 'Equipment', 'Tools & Equipment', 'Machine / Tool']);
+  const toolExpenseCategories = new Set(['Equipment', ...MACHINE_EXPENSE_CATEGORIES]);
   let actualTools = 0;
   dailyWork.forEach((dw) => {
     if (dw.tool_cost || dw.toolCost) {
@@ -214,6 +232,15 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
       }
     });
   }
+  // Moving workers to / between sites is a labour cost.
+  let transportLabour = 0;
+  expenses.forEach((e) => {
+    if (e.category === TRANSPORT_CATEGORIES.labour && isCountedExpense(e)) transportLabour += Number(e.amount || 0);
+  });
+  actualLabour += transportLabour;
+  const transportTools = expenses
+    .filter((e) => e.category === TRANSPORT_CATEGORIES.machine && isCountedExpense(e))
+    .reduce((s, e) => s + Number(e.amount || 0), 0);
   actualLabour = Number(actualLabour.toFixed(2));
   const remainingLabour = Math.max(0, Number((budgetedLabour - actualLabour).toFixed(2)));
   const utilizationLabour = budgetedLabour > 0 ? Number(((actualLabour / budgetedLabour) * 100).toFixed(1)) : 0;
@@ -228,9 +255,10 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
       actualMisc += Number(dw.misc_amount || dw.miscAmount || 0);
     }
   });
-  const miscCategories = ['Miscellaneous', 'Misc', 'Operational Misc', 'Material Transport'];
-  // Categories already measured elsewhere: material via consumption, labour via worker logs.
-  const notMiscCategories = new Set(['Material Consumption', 'material', 'labour', 'Labour Expense', 'Advance Wages', 'Labour Conveyance']);
+  const miscCategories = MISC_EXPENSE_CATEGORIES;
+  // Categories already measured elsewhere: material via consumption, labour via worker logs,
+  // and transport under the bucket of what was transported.
+  const notMiscCategories = new Set(['material', 'labour', ...NON_MISC_CATEGORIES]);
   expenses.forEach((e) => {
     if (miscCategories.includes(e.category)) {
       if (!e.reference?.startsWith('DWU-MISC-')) {
@@ -266,6 +294,7 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
     materials: {
       budgeted: budgetedMaterial,
       actual: actualMaterial,
+      transport: Number(transportMaterial.toFixed(2)), // already inside actual
       remaining: remainingMaterial,
       utilization: utilizationMaterial,
       isExceeded: isExceededMaterial,
@@ -274,6 +303,7 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
     tools: {
       budgeted: budgetedTools,
       actual: actualTools,
+      transport: Number(transportTools.toFixed(2)), // already inside actual
       remaining: remainingTools,
       utilization: utilizationTools,
       isExceeded: isExceededTools,
@@ -282,6 +312,7 @@ function computeTaskBudgetUtilization(task, materials = [], dailyWork = [], work
     labour: {
       budgeted: budgetedLabour,
       actual: actualLabour,
+      transport: Number(transportLabour.toFixed(2)), // already inside actual
       remaining: remainingLabour,
       utilization: utilizationLabour,
       isExceeded: isExceededLabour,
@@ -351,6 +382,102 @@ async function getTaskBudgetApprovals(taskId) {
   }));
 }
 
+/** Area + assigned Project Manager of a task / subtask row, in the API shape. */
+function areaAndManager(row) {
+  return {
+    areaId: row.area_id || null,
+    areaName: row.area_id ? (row.area_parent_name ? `${row.area_parent_name} › ${row.area_name}` : row.area_name) : null,
+    areaType: row.area_id ? row.area_type || null : null,
+    assignedManagerId: row.assigned_manager_id || null,
+    assignedManagerName: row.assigned_manager_id ? row.assigned_manager_name || null : null,
+  };
+}
+
+const pickOpt = (payload, a, b) => (payload[a] !== undefined ? payload[a] : payload[b]);
+
+/**
+ * Sets the site area and the assigned Project Manager on a task or subtask, when
+ * the payload carries them (absent = unchanged, empty = cleared). Validated here so
+ * every write path - task form, project form, subtask panel - applies the same rules.
+ */
+/**
+ * Finds - or creates - one level of area by name in a project. Matching ignores
+ * case and spacing; an area on the row's site or a project-wide area is reused.
+ */
+async function findOrCreateArea(conn, projectId, siteId, parentId, name, areaType) {
+  const [rows] = await conn.query(
+    `SELECT id, site_id FROM project_areas
+     WHERE project_id = ? AND parent_id <=> ? AND LOWER(TRIM(name)) = LOWER(?)
+       AND (site_id IS NULL OR site_id <=> ?)
+     ORDER BY site_id IS NULL, id LIMIT 1`,
+    [projectId, parentId, name, siteId]
+  );
+  if (rows.length) return Number(rows[0].id);
+  const [res] = await conn.query(
+    'INSERT INTO project_areas (project_id, site_id, parent_id, name, area_type) VALUES (?, ?, ?, ?, ?)',
+    [projectId, siteId, parentId, name.slice(0, 150), areaType]
+  );
+  return res.insertId;
+}
+
+const guessAreaType = (name, fallback) => {
+  const n = name.toLowerCase();
+  if (/\b(floor|level|basement|terrace|roof|storey|story)\b/.test(n)) return 'floor';
+  if (/\b(zone)\b/.test(n)) return 'zone';
+  if (/\b(block|tower)\b/.test(n)) return 'block';
+  if (/\b(wing)\b/.test(n)) return 'wing';
+  if (/\b(flat|unit|apartment)\b/.test(n)) return 'unit';
+  return fallback;
+};
+
+/**
+ * A typed area name -> area id. "Ground Floor > Kitchen" (or "›", "/") nests the
+ * room inside the floor; each part is reused when it already exists, created otherwise.
+ */
+async function resolveAreaName(conn, table, id, projectId, typed) {
+  const parts = String(typed).split(/\s*(?:>|›|\/)\s*/).map((p) => p.trim()).filter(Boolean).slice(0, 2);
+  if (!parts.length) return null;
+  const [[row]] = await conn.query(`SELECT site_id FROM ${table} WHERE id = ?`, [id]);
+  const siteId = row?.site_id || null;
+  if (parts.length === 1) return findOrCreateArea(conn, projectId, siteId, null, parts[0], guessAreaType(parts[0], 'area'));
+  const parentId = await findOrCreateArea(conn, projectId, siteId, null, parts[0], guessAreaType(parts[0], 'floor'));
+  return findOrCreateArea(conn, projectId, siteId, parentId, parts[1], guessAreaType(parts[1], 'room'));
+}
+
+async function applyAreaAndManager(conn, table, id, projectId, payload = {}) {
+  const sets = [];
+  const params = [];
+  // A typed area name (free text) wins over an id: found or created in this project.
+  const typedArea = pickOpt(payload, 'area_name', 'areaName');
+  if (typedArea !== undefined) {
+    sets.push('area_id = ?');
+    params.push(String(typedArea || '').trim() ? await resolveAreaName(conn, table, id, projectId, typedArea) : null);
+  }
+  const area = typedArea !== undefined ? undefined : pickOpt(payload, 'area_id', 'areaId');
+  if (area !== undefined) {
+    const areaId = area ? Number(area) : null;
+    if (areaId) {
+      const [[row]] = await conn.query('SELECT project_id FROM project_areas WHERE id = ?', [areaId]);
+      if (!row || Number(row.project_id) !== Number(projectId)) {
+        throw ApiError.badRequest('Check the highlighted fields.', { area_id: 'That area does not belong to this project.' });
+      }
+    }
+    sets.push('area_id = ?');
+    params.push(areaId);
+  }
+  const manager = pickOpt(payload, 'assigned_manager_id', 'assignedManagerId');
+  if (manager !== undefined) {
+    const managerId = manager ? Number(manager) : null;
+    if (managerId) {
+      const [[row]] = await conn.query('SELECT id FROM employees WHERE id = ?', [managerId]);
+      if (!row) throw ApiError.badRequest('Check the highlighted fields.', { assigned_manager_id: 'That project manager does not exist.' });
+    }
+    sets.push('assigned_manager_id = ?');
+    params.push(managerId);
+  }
+  if (sets.length) await conn.query(`UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
+}
+
 async function createTask(payload) {
   const connection = await pool.getConnection();
   try {
@@ -378,7 +505,7 @@ async function createTask(payload) {
     for (const m of materials) {
       const qty = Number(m.quantity || 0);
       const rate = Number(m.cost_per_unit || m.costPerUnit || 0);
-      const total = m.total_cost != null ? Number(m.total_cost) : qty * rate;
+      const total = m.total_cost != null ? Number(m.total_cost) : qty * rate + transportOf(m);
       materialBudget += total;
     }
 
@@ -394,7 +521,7 @@ async function createTask(payload) {
       const workers = Number(l.worker_count || l.workerCount || 1);
       const wage = Number(l.daily_wage || l.dailyWage || 0);
       const days = Number(l.working_days || l.workingDays || durationDays || 0);
-      const total = l.total_cost != null ? Number(l.total_cost) : workers * wage * days;
+      const total = l.total_cost != null ? Number(l.total_cost) : workers * wage * days + transportOf(l);
       labourBudget += total;
     }
 
@@ -436,17 +563,18 @@ async function createTask(payload) {
     );
 
     const taskId = taskResult.insertId;
+    await applyAreaAndManager(connection, 'project_tasks', taskId, projectId, payload);
 
     // Insert budget breakdown rows
     for (const m of materials) {
       if (m.material_id || m.materialId) {
         const qty = Number(m.quantity || 0);
         const rate = Number(m.cost_per_unit || m.costPerUnit || 0);
-        const total = m.total_cost != null ? Number(m.total_cost) : qty * rate;
+        const total = m.total_cost != null ? Number(m.total_cost) : qty * rate + transportOf(m);
         await connection.query(
-          `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, cost_per_unit, total_cost)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [taskId, projectId, siteId, m.material_id || m.materialId, qty, rate, total]
+          `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, cost_per_unit, transport_cost, total_cost)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [taskId, projectId, siteId, m.material_id || m.materialId, qty, rate, transportOf(m), total]
         );
       }
     }
@@ -472,16 +600,16 @@ async function createTask(payload) {
       const workers = Number(l.worker_count || l.workerCount || 1);
       const wage = Number(l.daily_wage || l.dailyWage || 0);
       const days = Number(l.working_days || l.workingDays || durationDays || 0);
-      const total = l.total_cost != null ? Number(l.total_cost) : workers * wage * days;
+      const total = l.total_cost != null ? Number(l.total_cost) : workers * wage * days + transportOf(l);
       await connection.query(
         `INSERT INTO task_labour (
            task_id, project_id, site_id, labour_name, labour_type, worker_count,
-           daily_wage, working_days, total_cost, worker_id, worker_type,
+           daily_wage, working_days, transport_cost, total_cost, worker_id, worker_type,
            start_date, end_date, remarks, skill_trade
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           taskId, projectId, siteId, lName || null, lType, workers,
-          wage, days, total, workerId, workerType,
+          wage, days, transportOf(l), total, workerId, workerType,
           startDate, endDate, remarks, skillTrade
         ]
       );
@@ -558,12 +686,12 @@ async function updateTask(taskId, payload) {
         if (m.material_id || m.materialId) {
           const qty = Number(m.quantity || 0);
           const rate = Number(m.cost_per_unit || m.costPerUnit || 0);
-          const total = m.total_cost != null ? Number(m.total_cost) : qty * rate;
+          const total = m.total_cost != null ? Number(m.total_cost) : qty * rate + transportOf(m);
           materialBudget += total;
           await connection.query(
-            `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, cost_per_unit, total_cost)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [taskId, projectId, siteId, m.material_id || m.materialId, qty, rate, total]
+            `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, cost_per_unit, transport_cost, total_cost)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [taskId, projectId, siteId, m.material_id || m.materialId, qty, rate, transportOf(m), total]
           );
         }
       }
@@ -603,17 +731,17 @@ async function updateTask(taskId, payload) {
         const workers = Number(l.worker_count || l.workerCount || 1);
         const wage = Number(l.daily_wage || l.dailyWage || 0);
         const days = Number(l.working_days || l.workingDays || durationDays || 0);
-        const total = l.total_cost != null ? Number(l.total_cost) : workers * wage * days;
+        const total = l.total_cost != null ? Number(l.total_cost) : workers * wage * days + transportOf(l);
         labourBudget += total;
         await connection.query(
           `INSERT INTO task_labour (
              task_id, project_id, site_id, labour_name, labour_type, worker_count,
-             daily_wage, working_days, total_cost, worker_id, worker_type,
+             daily_wage, working_days, transport_cost, total_cost, worker_id, worker_type,
              start_date, end_date, remarks, skill_trade
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             taskId, projectId, siteId, lName || null, lType, workers,
-            wage, days, total, workerId, workerType,
+            wage, days, transportOf(l), total, workerId, workerType,
             startDate, endDate, remarks, skillTrade
           ]
         );
@@ -675,6 +803,8 @@ async function updateTask(taskId, payload) {
       ]
     );
 
+    await applyAreaAndManager(connection, 'project_tasks', taskId, projectId, payload);
+
     // Subtasks always sit on their main task's site.
     if (String(siteId ?? '') !== String(task.site_id ?? '')) {
       await connection.query('UPDATE task_subtasks SET site_id = ? WHERE task_id = ?', [siteId, taskId]);
@@ -719,12 +849,17 @@ async function findTaskById(taskId) {
             p.name AS project_name, p.code AS project_code, p.status AS project_status,
             s.name AS site_name, s.address AS site_address, s.contractor_id AS site_contractor_id,
             u.full_name AS created_by_name,
-            c.name AS contractor_name
+            c.name AS contractor_name,
+            a.name AS area_name, a.area_type, pa.name AS area_parent_name,
+            em.full_name AS assigned_manager_name
      FROM project_tasks t
      JOIN projects p ON p.id = t.project_id
      LEFT JOIN sites s ON s.id = t.site_id
      LEFT JOIN contractors c ON c.id = s.contractor_id OR c.id = p.contractor_id
      LEFT JOIN users u ON u.id = t.created_by
+     LEFT JOIN project_areas a ON a.id = t.area_id
+     LEFT JOIN project_areas pa ON pa.id = a.parent_id
+     LEFT JOIN employees em ON em.id = t.assigned_manager_id
      WHERE t.id = ? LIMIT 1`,
     [taskId]
   );
@@ -888,7 +1023,14 @@ async function findTaskById(taskId) {
     `SELECT r.id, r.request_number, r.subtask_id, st.name AS subtask_name, r.item_type, r.material_id, r.tool_id,
             m.name AS material_name, m.unit AS material_unit, tl.name AS tool_name, r.quantity, r.unit, r.status,
             r.is_excess, r.total_amount, r.estimated_rate, r.vehicle_number, r.received_vehicle_number,
-            u.full_name AS requested_by_name, r.created_at
+            u.full_name AS requested_by_name, r.created_at,
+            COALESCE((
+      SELECT SUM(te.amount) FROM expenses te
+      WHERE te.status NOT IN ('rejected', 'cancelled') AND (
+        (te.source_type = 'material_transport' AND te.source_id IN (SELECT tmm.id FROM material_movements tmm WHERE tmm.procurement_request_id = r.id))
+        OR (te.source_type = 'procurement_transport' AND te.source_id IN (SELECT trc.id FROM procurement_receipts trc WHERE trc.procurement_request_id = r.id))
+        OR (te.source_type = 'machine_transport' AND te.source_id = r.id)
+      )), 0) AS transport_paid
      FROM procurement_requests r
      LEFT JOIN task_subtasks st ON st.id = r.subtask_id
      LEFT JOIN materials m ON m.id = r.material_id
@@ -927,6 +1069,9 @@ async function findTaskById(taskId) {
     site_address: task.site_address,
     contractorName: task.contractor_name,
     contractor_name: task.contractor_name,
+    ...areaAndManager(task),
+    area_id: task.area_id || null,
+    assigned_manager_id: task.assigned_manager_id || null,
     createdBy: task.created_by,
     created_by: task.created_by,
     createdByName: task.created_by_name,
@@ -993,6 +1138,7 @@ async function findTaskById(taskId) {
       workingDays: Number(t.working_days || 1),
       startDate: t.start_date || null,
       endDate: t.end_date || null,
+      transportCost: Number(t.transport_cost || 0),
       totalCost: Number(t.total_cost || 0),
     })),
     assignedWorkers: assignedWorkers.map((w) => ({
@@ -1022,6 +1168,7 @@ async function findTaskById(taskId) {
       workerCount: Number(l.worker_count || 1),
       dailyWage: Number(l.daily_wage || 0),
       workingDays: Number(l.working_days || 0),
+      transportCost: Number(l.transport_cost || 0),
       totalCost: Number(l.total_cost || 0),
       // Needed so editing the plan keeps the chosen worker and dates.
       workerId: l.worker_id || null,
@@ -1121,9 +1268,26 @@ async function findTaskById(taskId) {
   };
 }
 
-async function findAllTasks({ projectId, siteId, contractorId, status, search } = {}) {
+async function findAllTasks({ projectId, siteId, contractorId, status, search, areaId, managerId, pmProjectIds } = {}) {
   const where = [];
   const params = [];
+
+  if (areaId === 'none') {
+    where.push('t.area_id IS NULL');
+  } else if (areaId) {
+    // An area also matches the rooms inside it.
+    where.push('(t.area_id = ? OR t.area_id IN (SELECT id FROM project_areas WHERE parent_id = ?))');
+    params.push(Number(areaId), Number(areaId));
+  }
+  if (managerId) {
+    where.push('(t.assigned_manager_id = ? OR EXISTS (SELECT 1 FROM task_subtasks sx WHERE sx.task_id = t.id AND sx.assigned_manager_id = ?))');
+    params.push(Number(managerId), Number(managerId));
+  }
+  // Project Manager: assigned projects, plus any task / subtask assigned to them directly.
+  if (Array.isArray(pmProjectIds)) {
+    where.push(pmProjectIds.length ? `t.project_id IN (${pmProjectIds.map(() => '?').join(',')})` : '1 = 0');
+    params.push(...pmProjectIds.map(Number));
+  }
 
   if (projectId) {
     where.push('t.project_id = ?');
@@ -1157,6 +1321,8 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
             p.name AS project_name, p.code AS project_code,
             s.name AS site_name, s.contractor_id AS site_contractor_id,
             c.name AS contractor_name,
+            a.name AS area_name, a.area_type, pa.name AS area_parent_name,
+            em.full_name AS assigned_manager_name,
             (SELECT COUNT(*) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS worker_entries_count,
             (SELECT COUNT(DISTINCT twl.worker_name) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS unique_workers_count,
             (SELECT COALESCE(SUM(CASE WHEN twl.worker_type IN ('company_labour', 'company_employee') OR LOWER(COALESCE(twl.labour_type, '')) LIKE '%company%' THEN 0 ELSE twl.daily_wage * (twl.hours_worked / 8) END), 0) FROM task_worker_logs twl WHERE twl.task_id = t.id) AS actual_labour_cost,
@@ -1166,6 +1332,9 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
      JOIN projects p ON p.id = t.project_id
      LEFT JOIN sites s ON s.id = t.site_id
      LEFT JOIN contractors c ON c.id = s.contractor_id OR c.id = p.contractor_id
+     LEFT JOIN project_areas a ON a.id = t.area_id
+     LEFT JOIN project_areas pa ON pa.id = a.parent_id
+     LEFT JOIN employees em ON em.id = t.assigned_manager_id
      ${whereSql}
      ORDER BY t.start_date ASC, t.id ASC`,
     params
@@ -1224,6 +1393,7 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search } 
       siteId: r.site_id,
       siteName: r.site_name,
       contractorName: r.contractor_name,
+      ...areaAndManager(r),
       name: r.name,
       description: r.description,
       status: r.status,
@@ -1269,14 +1439,15 @@ async function addWorkerLog({
   daily_wage = 0.0,
   work_performed,
   created_by,
+  area_id = null,
 }) {
   const [result] = await pool.query(
     `INSERT INTO task_worker_logs
       (task_id, subtask_id, project_id, site_id, contractor_id, daily_work_id,
        worker_id, worker_type,
        worker_name, worker_code, labour_type, work_date,
-       hours_worked, daily_wage, work_performed, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       hours_worked, daily_wage, work_performed, created_by, area_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       task_id,
       subtask_id ? Number(subtask_id) : null,
@@ -1294,6 +1465,7 @@ async function addWorkerLog({
       (worker_type === 'company_labour' || worker_type === 'company_employee' || String(labour_type || '').toLowerCase().includes('company')) ? 0.0 : Number(daily_wage || 0.0),
       work_performed ? work_performed.trim() : null,
       created_by || null,
+      area_id ? Number(area_id) : null,
     ]
   );
   return result.insertId;
@@ -1431,14 +1603,14 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
       materials.forEach((m) => {
         const qty = Number(m.quantity || 0);
         const rate = Number(m.costPerUnit || m.cost_per_unit || 0);
-        materialBudget += Number(m.totalCost != null ? m.totalCost : qty * rate);
+        materialBudget += Number(m.totalCost != null ? m.totalCost : qty * rate + transportOf(m));
       });
       tools.forEach((r) => { toolBudget += r.total; });
       labour.forEach((l) => {
         const wc = Number(l.workerCount || l.worker_count || 1);
         const dw = Number(l.dailyWage || l.daily_wage || 0);
         const wd = Number(l.workingDays || l.working_days || durationDays || 0);
-        labourBudget += Number(l.totalCost != null ? l.totalCost : wc * dw * wd);
+        labourBudget += Number(l.totalCost != null ? l.totalCost : wc * dw * wd + transportOf(l));
       });
       misc.forEach((mc) => {
         miscBudget += Number(mc.amount || 0);
@@ -1493,16 +1665,17 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
         );
         taskId = res.insertId;
       }
+      await applyAreaAndManager(connection, 'project_tasks', taskId, projectId, t);
 
       for (const m of materials) {
         if (m.materialId || m.material_id) {
           const qty = Number(m.quantity || 0);
           const rate = Number(m.costPerUnit || m.cost_per_unit || 0);
-          const total = m.totalCost != null ? Number(m.totalCost) : qty * rate;
+          const total = m.totalCost != null ? Number(m.totalCost) : qty * rate + transportOf(m);
           await connection.query(
-            `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, cost_per_unit, total_cost)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [taskId, projectId, siteId, m.materialId || m.material_id, qty, rate, total]
+            `INSERT INTO task_materials (task_id, project_id, site_id, material_id, quantity, cost_per_unit, transport_cost, total_cost)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [taskId, projectId, siteId, m.materialId || m.material_id, qty, rate, transportOf(m), total]
           );
         }
       }
@@ -1527,16 +1700,16 @@ async function saveProjectTasks(projectId, tasksData, userId = 1) {
         const wc = Number(l.workerCount || l.worker_count || 1);
         const dw = Number(l.dailyWage || l.daily_wage || 0);
         const wd = Number(l.workingDays || l.working_days || durationDays || 0);
-        const total = l.totalCost != null ? Number(l.totalCost) : wc * dw * wd;
+        const total = l.totalCost != null ? Number(l.totalCost) : wc * dw * wd + transportOf(l);
         await connection.query(
           `INSERT INTO task_labour (
              task_id, project_id, site_id, labour_name, labour_type, worker_count,
-             daily_wage, working_days, total_cost, worker_id, worker_type,
+             daily_wage, working_days, transport_cost, total_cost, worker_id, worker_type,
              start_date, end_date, remarks, skill_trade
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             taskId, projectId, siteId, lName || null, lType, wc,
-            dw, wd, total, workerId, workerType,
+            dw, wd, transportOf(l), total, workerId, workerType,
             startDate, endDate, remarks, skillTrade
           ]
         );
@@ -1912,9 +2085,9 @@ async function writeSubtaskPlanning(conn, { taskId, subtaskId, projectId, siteId
       const qty = Math.max(0, Number(m.quantity || 0));
       const rate = Math.max(0, Number(m.cost_per_unit ?? m.costPerUnit ?? 0));
       await conn.query(
-        `INSERT INTO task_materials (task_id, subtask_id, project_id, site_id, material_id, quantity, cost_per_unit, total_cost)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [taskId, subtaskId, projectId, siteId, Number(materialId), qty, rate, Number((qty * rate).toFixed(2))]
+        `INSERT INTO task_materials (task_id, subtask_id, project_id, site_id, material_id, quantity, cost_per_unit, transport_cost, total_cost)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [taskId, subtaskId, projectId, siteId, Number(materialId), qty, rate, transportOf(m), Number((qty * rate + transportOf(m)).toFixed(2))]
       );
     }
   }
@@ -1945,11 +2118,11 @@ async function writeSubtaskPlanning(conn, { taskId, subtaskId, projectId, siteId
       await conn.query(
         `INSERT INTO task_labour (
            task_id, subtask_id, project_id, site_id, labour_name, labour_type, worker_count,
-           daily_wage, working_days, total_cost, worker_id, worker_type, start_date, end_date, remarks, skill_trade
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           daily_wage, working_days, transport_cost, total_cost, worker_id, worker_type, start_date, end_date, remarks, skill_trade
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           taskId, subtaskId, projectId, siteId, lName || null, lType, workers,
-          wage, days, Number((workers * wage * days).toFixed(2)), workerId, workerType,
+          wage, days, transportOf(l), Number((workers * wage * days + transportOf(l)).toFixed(2)), workerId, workerType,
           l.start_date || l.startDate || null, l.end_date || l.endDate || null,
           String(l.remarks || '').trim() || null,
           String(l.skill_trade || l.skillTrade || l.trade || '').trim() || null,
@@ -2142,6 +2315,7 @@ async function syncTaskSubtasks(conn, { id: taskId, projectId, siteId }, subtask
       );
       subtaskId = res.insertId;
     }
+    await applyAreaAndManager(conn, 'task_subtasks', subtaskId, projectId, st);
     const b = await writeSubtaskPlanning(conn, { taskId, subtaskId, projectId, siteId, durationDays: f.durationDays }, {
       materials: st.materials || [], tools: st.tools || [], labour: st.labour || [], misc: st.misc || [],
     });
@@ -2177,6 +2351,7 @@ async function createSubtask(taskId, payload, userId) {
         f.startDate, f.endDate, f.durationDays, f.sortOrder || nextOrder, userId || null]
     );
     const subtaskId = res.insertId;
+    await applyAreaAndManager(conn, 'task_subtasks', subtaskId, task.project_id, payload);
 
     const budgets = await writeSubtaskPlanning(conn, {
       taskId, subtaskId, projectId: task.project_id, siteId: task.site_id, durationDays: f.durationDays,
@@ -2219,6 +2394,7 @@ async function updateSubtask(subtaskId, payload, { progressOnly = false } = {}) 
          duration_days = ?, sort_order = ? WHERE id = ?`,
       [f.name || st.name, f.description, f.status, f.progress, f.startDate, f.endDate, f.durationDays, f.sortOrder, subtaskId]
     );
+    if (!progressOnly) await applyAreaAndManager(conn, 'task_subtasks', subtaskId, st.project_id, payload);
 
     if (!progressOnly && PLAN_CATEGORIES.some((k) => Array.isArray(payload[k]))) {
       await writeSubtaskPlanning(conn, {
@@ -2315,6 +2491,7 @@ function mapPlannedMaterial(m) {
     revisedApproved,
     quantity: revisedApproved,
     costPerUnit: Number(m.cost_per_unit || 0),
+    transportCost: Number(m.transport_cost || 0),
     totalCost: Number(m.total_cost || 0),
     procured,
     used,
@@ -2340,7 +2517,15 @@ const sameSub = (row, subtaskId) => (subtaskId == null ? row.subtask_id == null 
  */
 async function buildSubtaskBreakdown(task, { allMaterials, dailyWork, workerLogs, expenses, assignedWorkers, procurements }) {
   const taskId = task.id;
-  const [subs] = await pool.query('SELECT * FROM task_subtasks WHERE task_id = ? ORDER BY sort_order ASC, id ASC', [taskId]);
+  const [subs] = await pool.query(
+    `SELECT st.*, a.name AS area_name, a.area_type, pa.name AS area_parent_name, em.full_name AS assigned_manager_name
+       FROM task_subtasks st
+       LEFT JOIN project_areas a ON a.id = st.area_id
+       LEFT JOIN project_areas pa ON pa.id = a.parent_id
+       LEFT JOIN employees em ON em.id = st.assigned_manager_id
+       WHERE st.task_id = ? ORDER BY st.sort_order ASC, st.id ASC`,
+    [taskId]
+  );
 
   const [planMaterials, planTools, planLabour, planMisc] = await Promise.all([
     pool.query(
@@ -2395,6 +2580,7 @@ async function buildSubtaskBreakdown(task, { allMaterials, dailyWork, workerLogs
       endDate: st.end_date,
       durationDays: Number(st.duration_days || 0),
       sortOrder: Number(st.sort_order || 0),
+      ...areaAndManager(st),
       budget: {
         material: Number(st.material_budget || 0),
         tool: Number(st.tool_budget || 0),
@@ -2412,14 +2598,15 @@ async function buildSubtaskBreakdown(task, { allMaterials, dailyWork, workerLogs
       tools: planTools.filter((t) => Number(t.subtask_id) === sid).map((t) => ({
         id: t.id, toolId: t.tool_id, toolName: t.tool_name, toolCode: t.tool_code, rentalType: t.rental_type,
         quantity: Number(t.quantity || 1), cost: Number(t.cost || 0), workingDays: Number(t.working_days || 1),
-        startDate: t.start_date || null, endDate: t.end_date || null, totalCost: Number(t.total_cost || 0),
+        startDate: t.start_date || null, endDate: t.end_date || null,
+        transportCost: Number(t.transport_cost || 0), totalCost: Number(t.total_cost || 0),
       })),
       labour: planLabour.filter((l) => Number(l.subtask_id) === sid).map((l) => ({
         id: l.id, labourName: l.person_name || l.labour_name || '', labourType: l.labour_type,
         workerId: l.worker_id, workerType: l.worker_type, skillTrade: l.person_trade || l.skill_trade || null,
         workerCount: Number(l.worker_count || 1), dailyWage: Number(l.daily_wage || 0),
         workingDays: Number(l.working_days || 0), startDate: l.start_date, endDate: l.end_date,
-        totalCost: Number(l.total_cost || 0), remarks: l.remarks,
+        transportCost: Number(l.transport_cost || 0), totalCost: Number(l.total_cost || 0), remarks: l.remarks,
       })),
       misc: planMisc.filter((mc) => Number(mc.subtask_id) === sid).map((mc) => ({
         id: mc.id, description: mc.description, amount: Number(mc.amount || 0),
@@ -2504,6 +2691,7 @@ function mapProcurementRow(p) {
     isExcess: Boolean(p.is_excess),
     amount: Number(p.total_amount != null ? p.total_amount : Number(p.quantity || 0) * Number(p.estimated_rate || 0)),
     vehicleNumber: p.received_vehicle_number || p.vehicle_number || null,
+    transportPaid: Number(p.transport_paid || 0),
     requestedByName: p.requested_by_name || null,
     createdAt: p.created_at,
   };
@@ -2515,7 +2703,12 @@ async function findSubtaskSummaries(taskIds) {
   if (!taskIds.length) return out;
   const ph = taskIds.map(() => '?').join(',');
   const [subs] = await pool.query(
-    `SELECT * FROM task_subtasks WHERE task_id IN (${ph}) ORDER BY sort_order ASC, id ASC`, taskIds
+    `SELECT st.*, a.name AS area_name, a.area_type, pa.name AS area_parent_name, em.full_name AS assigned_manager_name
+       FROM task_subtasks st
+       LEFT JOIN project_areas a ON a.id = st.area_id
+       LEFT JOIN project_areas pa ON pa.id = a.parent_id
+       LEFT JOIN employees em ON em.id = st.assigned_manager_id
+       WHERE st.task_id IN (${ph}) ORDER BY st.sort_order ASC, st.id ASC`, taskIds
   );
   if (!subs.length) return out;
   const subIds = subs.map((s) => s.id);
@@ -2544,6 +2737,7 @@ async function findSubtaskSummaries(taskIds) {
       startDate: st.start_date,
       endDate: st.end_date,
       durationDays: Number(st.duration_days || 0),
+      ...areaAndManager(st),
       plannedBudget: util.total.effectiveBudget,
       actualCost: util.total.actual,
       remainingBudget: Number((util.total.effectiveBudget - util.total.actual).toFixed(2)),
@@ -2557,12 +2751,15 @@ async function findSubtaskSummaries(taskIds) {
 /** Subtasks of a task for pickers (procurement, daily work, expenses, labour). */
 async function listSubtasksForTask(taskId) {
   const [rows] = await pool.query(
-    `SELECT id, task_id, name, status, progress, start_date, end_date, total_budget, approved_additional_budget
+    `SELECT id, task_id, name, status, progress, start_date, end_date, total_budget, approved_additional_budget,
+            area_id, assigned_manager_id
      FROM task_subtasks WHERE task_id = ? ORDER BY sort_order ASC, id ASC`,
     [taskId]
   );
   return rows.map((r) => ({
     id: r.id,
+    areaId: r.area_id || null,
+    assignedManagerId: r.assigned_manager_id || null,
     taskId: r.task_id,
     name: r.name,
     status: r.status,

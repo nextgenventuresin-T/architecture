@@ -27,6 +27,7 @@ import Badge from '../../../components/ui/Badge';
 import ClientModal from '../../../components/clients/ClientModal';
 import { clientApi } from '../../../api/clientApi';
 import { formatNumber, formatCurrency, formatDate } from '../../../utils/format';
+import SearchableSelect from '../../../components/ui/SearchableSelect';
 
 export default function ClientListPage() {
   const navigate = useNavigate();
@@ -111,7 +112,7 @@ export default function ClientListPage() {
               className="w-full rounded-xl border border-line bg-white pl-9 pr-4 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none"
             />
           </div>
-          <select
+          <SearchableSelect
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-none"
@@ -119,7 +120,7 @@ export default function ClientListPage() {
             <option value="all">All Statuses</option>
             <option value="active">Active Only</option>
             <option value="inactive">Inactive Only</option>
-          </select>
+          </SearchableSelect>
         </div>
         <p className="text-sm text-ink-muted">Total: {formatNumber(clients.length)} clients</p>
       </div>

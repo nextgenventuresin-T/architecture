@@ -22,6 +22,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import { pmApi } from '../../api/pmApi';
 import { projectsApi } from '../../api/projectsApi';
 import { formatNumber } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 export default function PmSiteWarehousePage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -88,7 +89,7 @@ export default function PmSiteWarehousePage() {
       <div className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-surface p-4 rounded-2xl border border-line">
         <div>
           <label className="block text-xs font-semibold text-ink-muted mb-1">Project</label>
-          <select
+          <SearchableSelect
             value={selectedProjectId}
             onChange={(e) => {
               setSelectedProjectId(e.target.value);
@@ -102,7 +103,7 @@ export default function PmSiteWarehousePage() {
                 {p.code} — {p.name}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
 
         <div>

@@ -618,6 +618,33 @@ async function ensureContractorWarehouses() {
   );
 }
 
+/**
+ * The Site Store of a site run directly by its Project Manager (no contractor),
+ * created on first use. Returns the warehouse row.
+ */
+async function ensureSiteStore(siteId, conn = pool) {
+  const [[existing]] = await conn.query("SELECT * FROM warehouses WHERE site_id = ? AND type = 'site' LIMIT 1", [siteId]);
+  if (existing) return existing;
+  const [[site]] = await conn.query(
+    'SELECT s.id, s.name, s.address, p.name AS project_name FROM sites s JOIN projects p ON p.id = s.project_id WHERE s.id = ?',
+    [siteId]
+  );
+  if (!site) return null;
+  await conn.query(
+    `INSERT IGNORE INTO warehouses (code, name, location, description, status, type, site_id)
+     VALUES (?, ?, ?, ?, 'active', 'site', ?)`,
+    [
+      `WH-S${String(site.id).padStart(3, '0')}`,
+      `${site.name} Site Store`,
+      site.address || site.project_name || 'Project site',
+      `Stock held on site ${site.name} (${site.project_name}), managed by its Project Manager`,
+      site.id,
+    ]
+  );
+  const [[created]] = await conn.query("SELECT * FROM warehouses WHERE site_id = ? AND type = 'site' LIMIT 1", [siteId]);
+  return created || null;
+}
+
 /** Central warehouses and contractor warehouses, for the top-of-page switcher. */
 async function findScopes() {
   const [central] = await pool.query(
@@ -814,5 +841,5 @@ module.exports = {
   findTransactions, findRecentTransactions, findTransactionById,
   findTransactionByReceipt, averageUnitCost, nextTransactionNumber, createTransaction,
   findSummary, findAlerts,
-  ensureCentralWarehouse, ensureContractorWarehouses, findScopes, findCentralOverview, findContractorTransactions,
+  ensureCentralWarehouse, ensureContractorWarehouses, ensureSiteStore, findScopes, findCentralOverview, findContractorTransactions,
 };

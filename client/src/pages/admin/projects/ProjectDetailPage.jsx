@@ -21,6 +21,7 @@ import DocumentsTab from '../../../components/projects/DocumentsTab';
 import ReportsTab from '../../../components/projects/ReportsTab';
 import TasksBudgetTab from '../../../components/projects/TasksBudgetTab';
 import DailyWorkTab from '../../../components/projects/DailyWorkTab';
+import AreasTab from '../../../components/projects/AreasTab';
 import useAsync from '../../../hooks/useAsync';
 import { projectsApi } from '../../../api/projectsApi';
 
@@ -71,6 +72,7 @@ export default function ProjectDetailPage() {
     { id: 'tasks', label: 'Tasks & Planning', count: detail.tasks?.length || 0 },
     { id: 'daily-work', label: 'Daily Work Updates', count: detail.dailyWorkUpdates?.length || 0 },
     { id: 'sites', label: 'Sites', count: detail.sites.length },
+    { id: 'areas', label: 'Areas' },
     { id: 'progress', label: 'Progress' },
     { id: 'materials', label: 'Materials', count: detail.materials.length },
     { id: 'labour', label: 'Labour', count: detail.labour.length },
@@ -88,6 +90,7 @@ export default function ProjectDetailPage() {
     phases: <TasksBudgetTab detail={detail} projectId={id} onReload={reload} />,
     'daily-work': <DailyWorkTab detail={detail} />,
     sites: <SitesTab detail={detail} projectId={id} lookups={lookups} onChanged={reload} />,
+    areas: <AreasTab detail={detail} projectId={id} />,
     progress: <ProgressTab detail={detail} />,
     materials: <MaterialsTab detail={detail} projectId={id} />,
     labour: <LabourTab detail={detail} projectId={id} lookups={lookups} onChanged={reload} />,

@@ -49,7 +49,14 @@ const CONTRACTOR_EXPENSE_CATEGORIES = [
   'Consumable Material',
   'Labour Expense',
   'Labour Conveyance',
+  'Labour Transport',
 ];
+
+/**
+ * Transport is allocated to what is transported, so it lands in the right cost
+ * bucket (config/costBuckets): Material, Machines / Tools or Labour.
+ */
+const TRANSPORT_EXPENSE_CATEGORIES = ['Material Transport', 'Machine Transport', 'Labour Transport'];
 
 const LEGACY_EXPENSE_CATEGORIES = [
   'material', 'labour', 'contractor', 'transport', 'equipment',
@@ -58,6 +65,7 @@ const LEGACY_EXPENSE_CATEGORIES = [
 
 const EXPENSE_CATEGORIES = [
   ...CONTRACTOR_EXPENSE_CATEGORIES,
+  ...TRANSPORT_EXPENSE_CATEGORIES.filter((c) => !CONTRACTOR_EXPENSE_CATEGORIES.includes(c)),
   ...LEGACY_EXPENSE_CATEGORIES,
 ];
 

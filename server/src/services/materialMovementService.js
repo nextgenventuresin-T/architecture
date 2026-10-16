@@ -72,6 +72,14 @@ function contractorId(hrScope) {
   return hrScope?.role === ROLES.CONTRACTOR ? Number(hrScope.contractorId) : null;
 }
 
+/** Site Store warehouse ids of the PM-run sites this Project Manager is assigned to. */
+async function pmSiteStoreIds(hrScope) {
+  const siteIds = hrScope?.pmSiteIds || [];
+  if (!siteIds.length) return [];
+  const [rows] = await pool.query("SELECT id FROM warehouses WHERE type = 'site' AND site_id IN (?)", [siteIds]);
+  return rows.map((r) => Number(r.id));
+}
+
 /** Resolves the warehouse row for a contractor (provisioning if needed). */
 async function contractorWarehouse(cId) {
   await warehouseModel.ensureContractorWarehouses();
@@ -96,6 +104,11 @@ async function listMovements(query, hrScope, userId) {
 async function listIncoming(hrScope) {
   const cId = contractorId(hrScope);
   const rows = await movementModel.findAll(cId ? { incomingForContractorId: cId } : { status: 'in_transit' });
+  // A Project Manager sees only shipments heading to the Site Store of a site they run.
+  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+    const stores = await pmSiteStoreIds(hrScope);
+    return rows.filter((r) => stores.includes(Number(r.destination_warehouse_id))).map(toMovement);
+  }
   return rows.map(toMovement);
 }
 
@@ -375,6 +388,13 @@ async function receiveMaterial(id, payload, hrScope, userId) {
         throw ApiError.forbidden('Only the receiving contractor can receive this shipment.');
       }
     }
+    // A Project Manager receives only shipments into the Site Store of a site they run.
+    if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+      const storeIds = await pmSiteStoreIds(hrScope);
+      if (!storeIds.includes(Number(row.destination_warehouse_id))) {
+        throw ApiError.forbidden('You can only receive a shipment to a site you manage.');
+      }
+    }
     if (locked.status !== 'in_transit') {
       throw ApiError.badRequest(`This shipment is already ${String(locked.status).replace('_', ' ')} - it cannot be received again.`);
     }
@@ -477,8 +497,11 @@ async function lookupByVehicle(vehicleNumber, hrScope) {
   }
 
   const cId = contractorId(hrScope);
+  const isPm = hrScope?.role === ROLES.PROJECT_MANAGER;
+  const pmStores = isPm ? await pmSiteStoreIds(hrScope) : null;
   const movementRows = await movementModel.findAll(cId ? { incomingForContractorId: cId } : { status: 'in_transit' });
   const shipments = movementRows
+    .filter((r) => !isPm || pmStores.includes(Number(r.destination_warehouse_id)))
     .filter((r) => r.status === 'in_transit' && vehiclesMatch(r.vehicle_number, vehicleNumber))
     .map((r) => {
       const m = toMovement(r);
@@ -506,7 +529,8 @@ async function lookupByVehicle(vehicleNumber, hrScope) {
       };
     });
 
-  if (!cId) {
+  // Central-warehouse vendor purchases are Admin/Warehouse's to receive, never a PM's.
+  if (!cId && !isPm) {
     const [pending] = await pool.query(
       `SELECT r.id, r.request_number, r.po_number, r.quantity, r.ordered_quantity, r.unit, r.purchase_rate, r.total_amount,
               r.vehicle_number, r.driver_name, r.driver_phone, r.order_date, r.purchase_date, r.created_at, r.status,

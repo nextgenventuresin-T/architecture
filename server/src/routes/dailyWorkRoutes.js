@@ -35,6 +35,13 @@ router.get(
   controller.taskMaterials
 );
 
+router.get(
+  '/task-tools',
+  [query('taskId').isInt({ min: 1 }), query('subtaskId').optional({ checkFalsy: true }).isInt({ min: 1 })],
+  validate,
+  controller.taskTools
+);
+
 router.get('/photos/:photoId', [param('photoId').isInt({ min: 1 })], validate, controller.getPhoto);
 
 router.get('/:id', [param('id').isInt({ min: 1 })], validate, controller.detail);
@@ -50,6 +57,7 @@ router.post(
     body('site_id').optional({ nullable: true }).isInt({ min: 1 }),
     body('task_id').optional({ nullable: true }).isInt({ min: 1 }),
     body('subtask_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    body('area_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
     body('phase_number').optional({ nullable: true }).isInt({ min: 1, max: 8 }),
     body('subcategory').optional({ nullable: true }).trim(),
     body('work_done').optional({ nullable: true }).trim(),

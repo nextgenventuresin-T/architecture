@@ -23,6 +23,7 @@ import Skeleton from '../../components/ui/Skeleton';
 import EmptyState from '../../components/ui/EmptyState';
 import { pmApi } from '../../api/pmApi';
 import { formatNumber, formatDate, formatCurrency } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 export default function PmProcurementPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -81,8 +82,11 @@ export default function PmProcurementPage() {
         description="Detailed record of all materials and machinery procured by contractors across your sites, costs, delivery logistics and status."
         actions={
           <div className="flex items-center gap-2">
+            <Link to="/pm/procurement/new-batch">
+              <Button>New multi-item request</Button>
+            </Link>
             <Link to="/pm/procurement/new">
-              <Button>New material / machine request</Button>
+              <Button variant="secondary">Single item</Button>
             </Link>
             <Button variant="secondary" onClick={load} isLoading={loading}>
               <RefreshCw className="h-4 w-4 mr-1.5" />
@@ -132,7 +136,7 @@ export default function PmProcurementPage() {
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          <select
+          <SearchableSelect
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="px-3 py-2 text-sm rounded-xl border border-line bg-surface text-ink focus:outline-none focus:border-brand-500"
@@ -142,7 +146,7 @@ export default function PmProcurementPage() {
             <option value="ordered">Ordered</option>
             <option value="in_transit">In Transit</option>
             <option value="received">Received</option>
-          </select>
+          </SearchableSelect>
           {(initialContractorId || initialSiteId) && (
             <Button size="sm" variant="ghost" onClick={() => setSearchParams({})}>
               Clear Context

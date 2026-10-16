@@ -19,7 +19,10 @@ import { tasksApi } from '../../api/tasksApi';
 import { materialsApi } from '../../api/materialsApi';
 import { toolApi } from '../../api/toolApi';
 import { hrApi } from '../../api/hrApi';
+import { projectsApi } from '../../api/projectsApi';
+import AreaInput from '../ui/AreaInput';
 import { formatCurrency, toDateInputValue } from '../../utils/format';
+import SearchableSelect from '../ui/SearchableSelect';
 
 function calcWorkingDays(start, end) {
   if (!start || !end) return 1;
@@ -48,7 +51,26 @@ function toolRowTotal(row) {
   const qty = Number(row.quantity || 0);
   const cost = Number(row.cost || 0);
   const days = row.rental_type === 'Purchase' ? 1 : Number(row.working_days || 0);
-  return Number((qty * cost * days).toFixed(2));
+  return Number((qty * cost * days + Number(row.transport_cost || 0)).toFixed(2));
+}
+
+// Estimated transport on a plan line; it is part of the line's total.
+const sumTransport = (rows) => rows.reduce((s, r) => s + Number(r.transport_cost || 0), 0);
+
+function TransportInput({ value, onChange, title, placeholder = 'Transport' }) {
+  return (
+    <input
+      type="number"
+      min="0"
+      step="any"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      title={title}
+      aria-label={title}
+      className="w-full rounded border border-amber-300 bg-amber-50/60 px-2 py-1 text-xs text-right text-ink focus:border-brand-500 focus:outline-none"
+    />
+  );
 }
 
 const LABOUR_TYPE_OPTIONS = ['Labour', 'Company Labour'];
@@ -96,6 +118,10 @@ export default function TaskFormModal({
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [durationDays, setDurationDays] = useState(14);
+  const [areaName, setAreaName] = useState('');
+  const [managerId, setManagerId] = useState('');
+  const [areas, setAreas] = useState([]);
+  const [managers, setManagers] = useState([]);
 
   // Budget Breakdown State
   const [activeBudgetTab, setActiveBudgetTab] = useState('materials');
@@ -133,9 +159,18 @@ export default function TaskFormModal({
       });
   }, []);
 
+  // Areas of this project and the Project Managers a task can be assigned to.
+  useEffect(() => {
+    if (!isOpen || !projectId) return;
+    projectsApi.areas(projectId).then((d) => setAreas(d.areas || [])).catch(() => setAreas([]));
+    projectsApi.lookups().then((d) => setManagers(d.projectManagers || [])).catch(() => setManagers([]));
+  }, [isOpen, projectId]);
+
   // Initialize or reset form
   useEffect(() => {
     if (initialData) {
+      setAreaName(initialData.areaName || '');
+      setManagerId(initialData.assignedManagerId ? String(initialData.assignedManagerId) : '');
       setName(initialData.name || '');
       setSiteId(initialData.siteId ? String(initialData.siteId) : '');
       setDescription(initialData.description || '');
@@ -154,6 +189,7 @@ export default function TaskFormModal({
           unit: m.unit,
           quantity: Number(m.quantity || 0),
           cost_per_unit: Number(m.costPerUnit || m.cost_per_unit || 0),
+          transport_cost: Number(m.transportCost || m.transport_cost || 0),
           total_cost: Number(m.totalCost || m.total_cost || 0),
         }))
       );
@@ -168,6 +204,7 @@ export default function TaskFormModal({
           start_date: toDateInputValue(t.startDate || t.start_date) || tStart,
           end_date: toDateInputValue(t.endDate || t.end_date) || tEnd,
           working_days: Number(t.workingDays || t.working_days || 1),
+          transport_cost: Number(t.transportCost || t.transport_cost || 0),
           total_cost: Number(t.totalCost || t.total_cost || 0),
         }))
       );
@@ -179,6 +216,7 @@ export default function TaskFormModal({
           const days = Number(l.workingDays || l.working_days || calcWorkingDays(lStart, lEnd));
           const isCompany = (l.labourType || l.labour_type || l.worker_type || '').toLowerCase().includes('company');
           const wage = isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0);
+          const transport = Number(l.transportCost ?? l.transport_cost ?? 0);
           return {
             worker_id: l.worker_id || l.workerId || null,
             worker_type: l.worker_type || l.workerType || (isCompany ? 'company_labour' : 'labour'),
@@ -190,7 +228,8 @@ export default function TaskFormModal({
             worker_count: 1,
             daily_wage: wage,
             working_days: days,
-            total_cost: isCompany ? 0 : Number(l.totalCost || l.total_cost || wage * days),
+            transport_cost: transport,
+            total_cost: isCompany ? transport : Number(l.totalCost || l.total_cost || wage * days + transport),
             remarks: l.remarks || '',
           };
         })
@@ -203,7 +242,9 @@ export default function TaskFormModal({
         }))
       );
     } else {
-      // New Task defaults
+      // New Task defaults (a new subtask starts in its main task's area, with its manager)
+      setAreaName(isSubtask && parentTask?.areaName ? parentTask.areaName : '');
+      setManagerId(isSubtask && parentTask?.assignedManagerId ? String(parentTask.assignedManagerId) : '');
       setName('');
       setSiteId(initialSiteId ? String(initialSiteId) : sites[0]?.id ? String(sites[0].id) : '');
       setDescription('');
@@ -252,6 +293,7 @@ export default function TaskFormModal({
         unit: first ? first.unit : 'unit',
         quantity: '',
         cost_per_unit: '',
+        transport_cost: '',
         total_cost: 0,
       },
     ]);
@@ -273,7 +315,7 @@ export default function TaskFormModal({
 
       const qty = Number(row.quantity || 0);
       const rate = Number(row.cost_per_unit || 0);
-      row.total_cost = Number((qty * rate).toFixed(2));
+      row.total_cost = Number((qty * rate + Number(row.transport_cost || 0)).toFixed(2));
       updated[idx] = row;
       return updated;
     });
@@ -298,6 +340,7 @@ export default function TaskFormModal({
         start_date: sDate,
         end_date: eDate,
         working_days: calcMachineDays(sDate, eDate),
+        transport_cost: '',
         total_cost: 0,
       },
     ]);
@@ -338,6 +381,7 @@ export default function TaskFormModal({
         working_days: days,
         daily_wage: 750,
         worker_count: 1,
+        transport_cost: '',
         total_cost: 750 * days,
         remarks: '',
       },
@@ -376,7 +420,7 @@ export default function TaskFormModal({
       const days = Number(row.working_days || 0);
       const isComp = row.labour_type === 'Company Labour' || row.worker_type === 'company_labour';
       const wage = isComp ? 0 : Number(row.daily_wage || 0);
-      row.total_cost = Number((wc * days * wage).toFixed(2));
+      row.total_cost = Number((wc * days * wage + Number(row.transport_cost || 0)).toFixed(2));
 
       updated[idx] = row;
       return updated;
@@ -416,6 +460,10 @@ export default function TaskFormModal({
   const totalLabourCost = useMemo(() => labour.reduce((s, l) => s + Number(l.total_cost || 0), 0), [labour]);
   const totalMiscCost = useMemo(() => misc.reduce((s, mc) => s + Number(mc.amount || 0), 0), [misc]);
   const grandTotalBudget = totalMaterialCost + totalToolCost + totalLabourCost + totalMiscCost;
+  const materialTransport = useMemo(() => sumTransport(materials), [materials]);
+  const toolTransport = useMemo(() => sumTransport(tools), [tools]);
+  const labourTransfer = useMemo(() => sumTransport(labour), [labour]);
+  const totalTransport = materialTransport + toolTransport + labourTransfer;
 
   // Handle Submit
   const handleSubmit = async (e) => {
@@ -442,10 +490,14 @@ export default function TaskFormModal({
       start_date: startDate || null,
       end_date: endDate || null,
       duration_days: Number(durationDays || 0),
+      // Typed area: reused if it exists, created otherwise ("Floor > Room" nests).
+      area_name: areaName.trim() || null,
+      assigned_manager_id: managerId ? Number(managerId) : null,
       materials: materials.map((m) => ({
         material_id: m.material_id,
         quantity: Number(m.quantity || 0),
         cost_per_unit: Number(m.cost_per_unit || 0),
+        transport_cost: Number(m.transport_cost || 0),
         total_cost: Number(m.total_cost || 0),
       })),
       tools: tools.map((t) => ({
@@ -457,6 +509,7 @@ export default function TaskFormModal({
         start_date: t.rental_type === 'Purchase' ? null : t.start_date || null,
         end_date: t.rental_type === 'Purchase' ? null : t.end_date || null,
         working_days: t.rental_type === 'Purchase' ? 1 : Number(t.working_days || 1),
+        transport_cost: Number(t.transport_cost || 0),
         total_cost: toolRowTotal(t),
       })),
       labour: labour.map((l) => ({
@@ -470,6 +523,7 @@ export default function TaskFormModal({
         worker_count: Number(l.worker_count || 1),
         daily_wage: Number(l.daily_wage || 0),
         working_days: Number(l.working_days || 0),
+        transport_cost: Number(l.transport_cost || 0),
         total_cost: Number(l.total_cost || 0),
         remarks: (l.remarks || '').trim() || null,
       })),
@@ -554,7 +608,7 @@ export default function TaskFormModal({
             {!isSubtask && (
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Assigned Site</label>
-              <select
+              <SearchableSelect
                 value={siteId}
                 onChange={(e) => setSiteId(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
@@ -565,15 +619,41 @@ export default function TaskFormModal({
                     {s.name}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </div>
             )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <AreaInput
+              compact
+              value={areaName}
+              onChange={setAreaName}
+              areas={areas.filter((a) => {
+                const sid = isSubtask ? (parentTask?.siteId || parentTask?.site_id) : siteId;
+                return !sid || !a.siteId || String(a.siteId) === String(sid);
+              })}
+            />
+            <div>
+              <label className="block text-xs font-medium text-ink mb-1">Assigned Project Manager</label>
+              <SearchableSelect
+                value={managerId}
+                onChange={(e) => setManagerId(e.target.value)}
+                aria-label="Assigned project manager"
+                className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
+              >
+                <option value="">Unassigned</option>
+                {managers.map((m) => (
+                  <option key={m.id} value={m.id}>{m.full_name}{m.employee_code ? ` (${m.employee_code})` : ''}</option>
+                ))}
+              </SearchableSelect>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Status</label>
-              <select
+              <SearchableSelect
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
@@ -582,7 +662,7 @@ export default function TaskFormModal({
                 <option value="attention">Needs Attention</option>
                 <option value="delayed">Delayed</option>
                 <option value="completed">Completed</option>
-              </select>
+              </SearchableSelect>
             </div>
 
             {isSubtask && isEdit && (
@@ -717,7 +797,10 @@ export default function TaskFormModal({
           {activeBudgetTab === 'materials' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-ink-muted">Specify material requirements for this task</span>
+                <span className="text-xs text-ink-muted">
+                  Qty × Cost/Unit + estimated transport to site.
+                  {materialTransport > 0 && <> Transport: <strong className="text-ink">{formatCurrency(materialTransport)}</strong></>}
+                </span>
                 <Button type="button" size="sm" variant="secondary" onClick={addMaterialRow}>
                   <Plus className="h-3.5 w-3.5" />
                   Add Material
@@ -733,7 +816,7 @@ export default function TaskFormModal({
                   {materials.map((m, idx) => (
                     <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-white p-2 text-xs">
                       <div className="flex-1 min-w-[140px]">
-                        <select
+                        <SearchableSelect
                           value={m.material_id}
                           onChange={(e) => updateMaterialRow(idx, 'material_id', e.target.value)}
                           className="w-full rounded border border-line bg-white px-2 py-1 text-xs"
@@ -744,7 +827,7 @@ export default function TaskFormModal({
                               {mat.name} ({mat.unit})
                             </option>
                           ))}
-                        </select>
+                        </SearchableSelect>
                       </div>
 
                       <div className="w-24">
@@ -772,6 +855,14 @@ export default function TaskFormModal({
                         />
                       </div>
 
+                      <div className="w-24">
+                        <TransportInput
+                          value={m.transport_cost}
+                          onChange={(v) => updateMaterialRow(idx, 'transport_cost', v)}
+                          title="Estimated material transport cost (₹) for this line"
+                        />
+                      </div>
+
                       <div className="w-24 font-semibold text-ink text-right tabular-nums">
                         {formatCurrency(m.total_cost)}
                       </div>
@@ -795,7 +886,10 @@ export default function TaskFormModal({
           {activeBudgetTab === 'tools' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-ink-muted">Rent: Qty × Rate/Day × Days. Purchase: Qty × Cost.</span>
+                <span className="text-xs text-ink-muted">
+                  Rent: Qty × Rate/Day × Days. Purchase: Qty × Cost. Plus estimated machine transport.
+                  {toolTransport > 0 && <> Transport: <strong className="text-ink">{formatCurrency(toolTransport)}</strong></>}
+                </span>
                 <Button type="button" size="sm" variant="secondary" onClick={addToolRow}>
                   <Plus className="h-3.5 w-3.5" />
                   Add Tool / Machine
@@ -821,14 +915,14 @@ export default function TaskFormModal({
                       </div>
 
                       <div className="w-24">
-                        <select
+                        <SearchableSelect
                           value={t.rental_type}
                           onChange={(e) => updateToolRow(idx, 'rental_type', e.target.value)}
                           className="w-full rounded border border-line bg-white px-2 py-1 text-xs"
                         >
                           <option value="Rent">Rent</option>
                           <option value="Purchase">Purchase</option>
-                        </select>
+                        </SearchableSelect>
                       </div>
 
                       <div className="w-20">
@@ -886,6 +980,14 @@ export default function TaskFormModal({
                         </>
                       )}
 
+                      <div className="w-24">
+                        <TransportInput
+                          value={t.transport_cost}
+                          onChange={(v) => updateToolRow(idx, 'transport_cost', v)}
+                          title="Estimated machine transport cost (₹): delivery, shifting and return"
+                        />
+                      </div>
+
                       <div className="w-24 font-semibold text-ink text-right tabular-nums">
                         {formatCurrency(t.total_cost)}
                       </div>
@@ -912,7 +1014,9 @@ export default function TaskFormModal({
                 <div>
                   <span className="text-xs font-semibold text-ink">Assigned Labour & Workforce Planning</span>
                   <p className="text-[11px] text-ink-muted">
-                    Select labour/employees from directory, set dates to auto-calculate working days and budget
+                    Select labour/employees from directory, set dates to auto-calculate working days and budget.
+                    Add an internal transfer estimate for moving workers to this site.
+                    {labourTransfer > 0 && <> Internal transfer: <strong className="text-ink">{formatCurrency(labourTransfer)}</strong></>}
                   </p>
                 </div>
                 <Button type="button" size="sm" variant="secondary" onClick={addLabourRow}>
@@ -936,6 +1040,7 @@ export default function TaskFormModal({
                         <th className="p-2 w-32">Expected End</th>
                         <th className="p-2 w-20 text-center">Days</th>
                         <th className="p-2 w-24 text-right">Rate / Day (₹)</th>
+                        <th className="p-2 w-28 text-right" title="Estimated cost of transferring this labour to the site">Internal Transfer (₹)</th>
                         <th className="p-2 w-28 text-right">Total (₹)</th>
                         <th className="p-2 min-w-[140px]">Remarks</th>
                         <th className="p-2 w-10 text-center"></th>
@@ -948,7 +1053,7 @@ export default function TaskFormModal({
                         return (
                           <tr key={idx} className="hover:bg-canvas-subtle/40 transition-colors">
                             <td className="p-2">
-                              <select
+                              <SearchableSelect
                                 value={compoundValue}
                                 onChange={(e) => updateLabourRow(idx, 'worker_selection', e.target.value)}
                                 className="w-full rounded border border-line bg-white px-2 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
@@ -959,7 +1064,7 @@ export default function TaskFormModal({
                                     {w.name} ({w.trade}) — {w.workerType === 'company_labour' || w.workerType === 'company_employee' || w.isCompanyLabour ? 'Company Labour (In-House)' : (w.contractorName || 'Daily Wage')}
                                   </option>
                                 ))}
-                              </select>
+                              </SearchableSelect>
                               {l.skill_trade && (
                                 <span className="text-[10px] text-ink-subtle mt-0.5 block">
                                   Trade: <strong className="text-ink-muted">{l.skill_trade}</strong>
@@ -968,7 +1073,7 @@ export default function TaskFormModal({
                             </td>
 
                             <td className="p-2">
-                              <select
+                              <SearchableSelect
                                 value={l.labour_type}
                                 onChange={(e) => updateLabourRow(idx, 'labour_type', e.target.value)}
                                 className="w-full rounded border border-line bg-white px-2 py-1.5 text-xs text-ink focus:border-brand-500"
@@ -978,7 +1083,7 @@ export default function TaskFormModal({
                                     {opt}
                                   </option>
                                 ))}
-                              </select>
+                              </SearchableSelect>
                             </td>
 
                             <td className="p-2">
@@ -1021,8 +1126,17 @@ export default function TaskFormModal({
                               )}
                             </td>
 
+                            <td className="p-2">
+                              <TransportInput
+                                value={l.transport_cost}
+                                onChange={(v) => updateLabourRow(idx, 'transport_cost', v)}
+                                title="Estimated internal transfer cost (₹) for this labour"
+                                placeholder="Transfer"
+                              />
+                            </td>
+
                             <td className="p-2 text-right font-semibold text-ink tabular-nums">
-                              {isCompany ? <span className="text-blue-700 font-semibold font-mono">₹0</span> : formatCurrency(l.total_cost)}
+                              {formatCurrency(l.total_cost)}
                             </td>
 
                             <td className="p-2">
@@ -1123,6 +1237,12 @@ export default function TaskFormModal({
                 Materials ({formatCurrency(totalMaterialCost)}) + Tools ({formatCurrency(totalToolCost)}) + Labour (
                 {formatCurrency(totalLabourCost)}) + Misc ({formatCurrency(totalMiscCost)})
               </p>
+              {totalTransport > 0 && (
+                <p className="text-[11px] text-brand-700 mt-0.5">
+                  Includes estimated transport {formatCurrency(totalTransport)}: material {formatCurrency(materialTransport)}
+                  {' '}· machine {formatCurrency(toolTransport)} · labour internal transfer {formatCurrency(labourTransfer)}
+                </p>
+              )}
             </div>
             <div className="text-right">
               <span className="text-2xl font-bold text-brand-900 tabular-nums">

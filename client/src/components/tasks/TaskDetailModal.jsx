@@ -29,6 +29,8 @@ import AssignWorkerModal from './AssignWorkerModal';
 import QuickAddWorkerModal from './QuickAddWorkerModal';
 import TaskFormModal from './TaskFormModal';
 import SubtasksPanel, { SubtaskSummaryTable } from './SubtasksPanel';
+import SearchableSelect from '../ui/SearchableSelect';
+import CostSplitRows from './CostSplitRows';
 
 const STATUS_TONES = {
   'on-track': 'success',
@@ -477,6 +479,8 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                             </td>
                           </tr>
 
+                          <CostSplitRows bucket="materials" util={util} columns={6} cellClass="py-1.5 px-3" />
+
                           {/* Machines / Tools */}
                           <tr className={util.tools.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
                             <td className="py-2.5 px-3 font-semibold text-ink flex items-center gap-2">
@@ -508,6 +512,8 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                             </td>
                           </tr>
 
+                          <CostSplitRows bucket="tools" util={util} columns={6} cellClass="py-1.5 px-3" />
+
                           {/* Labour */}
                           <tr className={util.labour.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
                             <td className="py-2.5 px-3 font-semibold text-ink flex items-center gap-2">
@@ -538,6 +544,8 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                               )}
                             </td>
                           </tr>
+
+                          <CostSplitRows bucket="labour" util={util} columns={6} cellClass="py-1.5 px-3" />
 
                           {/* Miscellaneous */}
                           <tr className={util.misc.isExceeded ? "bg-rose-50/30" : "hover:bg-canvas/30"}>
@@ -1124,14 +1132,14 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                         {hasSubtasks && (
                           <div>
                             <label className="block text-[11px] font-medium text-ink mb-1">Subtask</label>
-                            <select
+                            <SearchableSelect
                               value={workerSubtaskId}
                               onChange={(e) => setWorkerSubtaskId(e.target.value)}
                               className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500"
                             >
                               <option value="">Main task (not a specific subtask)</option>
                               {subtasks.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
-                            </select>
+                            </SearchableSelect>
                           </div>
                         )}
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1158,7 +1166,7 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                           </div>
                           <div>
                             <label className="block text-[11px] font-medium text-ink mb-1">Labour Type</label>
-                            <select
+                            <SearchableSelect
                               value={workerForm.labourType}
                               onChange={(e) => setWorkerForm({ ...workerForm, labourType: e.target.value })}
                               className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500"
@@ -1172,7 +1180,7 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                               <option value="Painter">Painter</option>
                               <option value="Supervisor">Supervisor</option>
                               <option value="Machine Operator">Machine Operator</option>
-                            </select>
+                            </SearchableSelect>
                           </div>
                           <div>
                             <label className="block text-[11px] font-medium text-ink mb-1">Date</label>

@@ -17,6 +17,9 @@ import {
   Settings,
   ShieldCheck,
   Store,
+  UserCheck,
+  CalendarCheck,
+  CalendarClock,
 } from 'lucide-react';
 
 /**
@@ -26,9 +29,11 @@ import {
  */
 export const ADMIN_NAV = [
   { label: 'Dashboard', path: '/admin', icon: LayoutDashboard, end: true },
+  { label: 'My Portal', path: '/admin/my-portal', icon: CalendarCheck },
   { label: 'Projects / Sites', path: '/admin/projects', icon: Building2 },
   { label: 'Clients', path: '/admin/clients', icon: Briefcase },
   { label: 'Contractors', path: '/admin/contractors', icon: HardHat },
+  { label: 'Project Managers', path: '/admin/project-managers', icon: UserCheck },
   { label: 'Employees', path: '/admin/employees', icon: Users },
   { label: 'Labour Directory', path: '/admin/labour', icon: Hammer },
   { label: 'Vendors', path: '/admin/vendors', icon: Store },
@@ -38,6 +43,7 @@ export const ADMIN_NAV = [
   { label: 'Material Movements', path: '/admin/material-movements', icon: Truck },
   { label: 'Finance', path: '/admin/finance', icon: Wallet },
   { label: 'HR', path: '/admin/hr', icon: UserCog },
+  { label: 'Staff Attendance', path: '/admin/staff-attendance', icon: CalendarClock },
   { label: 'Approvals', path: '/admin/approvals', icon: ClipboardCheck, badgeKey: 'pendingApprovals' },
   { label: 'Reports', path: '/admin/reports', icon: FileBarChart },
   { label: 'Notifications', path: '/admin/notifications', icon: Bell, badgeKey: 'unreadNotifications' },

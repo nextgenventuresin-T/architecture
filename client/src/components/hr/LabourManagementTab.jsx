@@ -32,6 +32,7 @@ import { contractorsApi } from '../../api/contractorsApi';
 import { projectsApi } from '../../api/projectsApi';
 import { formatCurrency, formatDate } from '../../utils/format';
 import { ROLES } from '../../config/roles';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const TRADES = [
   'Mason',
@@ -300,7 +301,7 @@ export default function LabourManagementTab() {
         {/* Trade Filter */}
         <div className="flex items-center gap-1.5">
           <Filter className="h-3.5 w-3.5 text-ink-subtle" />
-          <select
+          <SearchableSelect
             value={selectedTrade}
             onChange={(e) => {
               setSelectedTrade(e.target.value);
@@ -314,11 +315,11 @@ export default function LabourManagementTab() {
                 {t}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
 
         {/* Contractor Filter */}
-        <select
+        <SearchableSelect
           value={selectedContractor}
           onChange={(e) => {
             setSelectedContractor(e.target.value);
@@ -332,10 +333,10 @@ export default function LabourManagementTab() {
               {c.name}
             </option>
           ))}
-        </select>
+        </SearchableSelect>
 
         {/* Status Filter */}
-        <select
+        <SearchableSelect
           value={selectedStatus}
           onChange={(e) => {
             setSelectedStatus(e.target.value);
@@ -347,7 +348,7 @@ export default function LabourManagementTab() {
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
           <option value="on-leave">On Leave</option>
-        </select>
+        </SearchableSelect>
       </div>
 
       {/* Main Labour Table */}

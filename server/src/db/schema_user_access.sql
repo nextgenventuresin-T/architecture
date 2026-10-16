@@ -87,24 +87,6 @@ SET @stmt := IF(@exists = 0,
   'DO 0');
 PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
 
--- `has_custom_permissions`
-SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
-  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'has_custom_permissions');
-SET @stmt := IF(@exists = 0,
-  'ALTER TABLE `users` ADD COLUMN `has_custom_permissions` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_active`',
-  'DO 0');
-PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
-
-CREATE TABLE IF NOT EXISTS `user_permissions` (
-  `user_id`       BIGINT UNSIGNED NOT NULL,
-  `permission_id` INT UNSIGNED    NOT NULL,
-  `created_at`    TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`user_id`, `permission_id`),
-  KEY `idx_up_permission` (`permission_id`),
-  CONSTRAINT `fk_up_user`       FOREIGN KEY (`user_id`)       REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_up_permission` FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- ================================================================== roles
 
 -- `is_active` — a role can be retired without deleting it, which would orphan

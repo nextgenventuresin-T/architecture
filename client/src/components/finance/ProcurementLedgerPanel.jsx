@@ -7,6 +7,7 @@ import Skeleton from '../ui/Skeleton';
 import Alert from '../ui/Alert';
 import { financeApi } from '../../api/financeApi';
 import { toApiError } from '../../api/axiosClient';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -103,7 +104,7 @@ export default function ProcurementLedgerPanel() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <SearchableSelect
           value={type}
           onChange={(e) => { setType(e.target.value); setPage(1); }}
           className="h-8 rounded border border-slate-300 bg-white px-2 text-xs"
@@ -111,7 +112,7 @@ export default function ProcurementLedgerPanel() {
         >
           <option value="all">All transaction types</option>
           {(data.types || []).map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-        </select>
+        </SearchableSelect>
         <input
           type="search"
           value={search}

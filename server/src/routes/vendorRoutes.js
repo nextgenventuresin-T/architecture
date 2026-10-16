@@ -17,12 +17,16 @@ router.get(
   [
     query('search').optional().trim(),
     query('status').optional().trim(),
+    query('city').optional().trim(),
     query('page').optional().isInt({ min: 1 }),
     query('pageSize').optional().isInt({ min: 1, max: 200 }),
   ],
   validate,
   controller.list
 );
+
+// Declared before '/:id' so the literal path is not swallowed by the id rule.
+router.get('/cities', controller.cities);
 
 router.get(
   '/:id',

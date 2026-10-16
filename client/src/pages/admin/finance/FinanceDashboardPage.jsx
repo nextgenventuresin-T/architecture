@@ -34,6 +34,7 @@ import GroupedBudgetVsActualModal from '../../../components/finance/GroupedBudge
 import GroupedProcurementLedgerModal from '../../../components/finance/GroupedProcurementLedgerModal';
 import ProcurementLedgerPanel from '../../../components/finance/ProcurementLedgerPanel';
 import GroupedVendorPayablesModal from '../../../components/finance/GroupedVendorPayablesModal';
+import { CostSplitLine } from '../../../components/tasks/CostSplitRows';
 
 export default function FinanceDashboardPage({ initialTab = 'project-costs' }) {
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -456,6 +457,7 @@ export default function FinanceDashboardPage({ initialTab = 'project-costs' }) {
                         title="Click to view material transactions"
                       >
                         ₹{r.materialCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        <CostSplitLine bucket="materials" total={r.materialCost} transport={r.materialTransport} />
                       </td>
                       <td
                         onClick={() =>
@@ -482,6 +484,7 @@ export default function FinanceDashboardPage({ initialTab = 'project-costs' }) {
                         title="Click to view machine/tool logs"
                       >
                         ₹{r.machineToolCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        <CostSplitLine bucket="tools" total={r.machineToolCost} transport={r.machineTransport} />
                       </td>
                       <td
                         onClick={() =>
@@ -1039,6 +1042,7 @@ export default function FinanceDashboardPage({ initialTab = 'project-costs' }) {
                         className="px-2.5 py-2 text-right text-blue-700 cursor-pointer hover:underline font-semibold"
                       >
                         ₹{r.materialActual.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        <CostSplitLine bucket="materials" total={r.materialActual} transport={r.materialTransport} />
                       </td>
                       <td className="px-2.5 py-2 text-right text-slate-700">
                         ₹{Number(r.materialRemaining ?? r.materialBudget - r.materialActual).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -1076,6 +1080,7 @@ export default function FinanceDashboardPage({ initialTab = 'project-costs' }) {
                         className="px-2.5 py-2 text-right text-blue-700 cursor-pointer hover:underline font-semibold"
                       >
                         ₹{r.machineActual.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        <CostSplitLine bucket="tools" total={r.machineActual} transport={r.machineTransport} />
                       </td>
                       <td className="px-2.5 py-2 text-right text-slate-600">
                         ₹{r.miscBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}

@@ -15,13 +15,13 @@ services:
       - key: DB_HOST
         sync: false
       - key: DB_PORT
-        value: "4000"
+        value: "3306"
       - key: DB_USER
         sync: false
       - key: DB_PASSWORD
         sync: false
       - key: DB_NAME
-        value: architecture_erp
+        sync: false
       - key: DB_SSL
         value: "true"
       - key: SEED_ADMIN_EMAIL

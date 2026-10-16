@@ -4,6 +4,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const projectService = require('../services/projectService');
 const phaseBudgetService = require('../services/phaseBudgetService');
 const lookupModel = require('../models/lookupModel');
+const areaService = require('../services/areaService');
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
@@ -78,7 +79,19 @@ const logLabour = asyncHandler(async (req, res) =>
   ok(res, { record: await projectService.logLabour(req.params.id, req.body) }, 201)
 );
 
+/** Site areas (area / floor / room) of a project. */
+const listAreas = asyncHandler(async (req, res) => ok(res, { areas: await areaService.list(req.params.id, { siteId: req.query.siteId }), areaTypes: areaService.AREA_TYPES }));
+const areaSummary = asyncHandler(async (req, res) => ok(res, await areaService.summary(req.params.id)));
+const createArea = asyncHandler(async (req, res) => ok(res, { area: await areaService.create(req.params.id, req.body, req.user?.id) }, 201));
+const updateArea = asyncHandler(async (req, res) => ok(res, { area: await areaService.update(req.params.id, req.params.areaId, req.body) }));
+const deleteArea = asyncHandler(async (req, res) => ok(res, await areaService.remove(req.params.id, req.params.areaId)));
+
 module.exports = {
+  listAreas,
+  areaSummary,
+  createArea,
+  updateArea,
+  deleteArea,
   list,
   lookups,
   detail,

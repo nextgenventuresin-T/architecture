@@ -10,11 +10,14 @@ const list = asyncHandler(async (req, res) => {
   const result = await vendorModel.findAll({
     search: req.query.search,
     status: req.query.status,
+    city: req.query.city,
     page: req.query.page,
     pageSize: req.query.pageSize,
   });
   ok(res, { vendors: result.rows, total: result.total });
 });
+
+const cities = asyncHandler(async (req, res) => ok(res, { cities: await vendorModel.findCities() }));
 
 const getById = asyncHandler(async (req, res) => {
   const vendor = await vendorModel.findById(req.params.id);
@@ -46,6 +49,7 @@ const remove = asyncHandler(async (req, res) => {
 
 module.exports = {
   list,
+  cities,
   getById,
   create,
   update,

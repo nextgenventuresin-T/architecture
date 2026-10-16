@@ -3,6 +3,7 @@ import { X, HardHat, Phone, CreditCard, DollarSign, Wrench } from 'lucide-react'
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import tasksApi from '../../api/tasksApi';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const DEFAULT_TRADES = [
   'General Labour',
@@ -191,7 +192,7 @@ export default function QuickAddWorkerModal({ isOpen, onClose, onCreated, defaul
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Trade / Skill Category</label>
-              <select
+              <SearchableSelect
                 value={skillCategory}
                 onChange={(e) => setSkillCategory(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500"
@@ -201,7 +202,7 @@ export default function QuickAddWorkerModal({ isOpen, onClose, onCreated, defaul
                     {t}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </div>
 
             <div>

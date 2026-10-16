@@ -8,6 +8,7 @@ import { procurementApi } from '../../api/procurementApi';
 import { vendorApi } from '../../api/vendorApi';
 import { toApiError } from '../../api/axiosClient';
 import { formatCurrency } from '../../utils/format';
+import { isPmRunSite, receivingContractorName } from '../../utils/procurementOptions';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -65,6 +66,11 @@ export default function ToolFulfilDialog({ request, onClose, onSaved }) {
   if (!request) return null;
 
   const set = (k) => (e) => { setV((c) => ({ ...c, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })); setErrors((c) => ({ ...c, [k]: undefined })); };
+  // Going to a contractor (raised by them or by a PM for their site): the machine is
+  // dispatched with a vehicle and driver, and the contractor receives it like material.
+  // A site with no contractor is run by its Project Manager, who receives it into the Site Store.
+  const receiverName = receivingContractorName(request);
+  const toContractor = Boolean(request.responsibleContractor?.id || request.destination?.contractorId) || isPmRunSite(request);
   const free = availability?.availableUnits ?? [];
   const held = availability?.holders ?? [];
   const selectedHeld = held.find((h) => String(h.unitId) === String(v.unit_id));
@@ -97,9 +103,25 @@ export default function ToolFulfilDialog({ request, onClose, onSaved }) {
         expected_return_date: v.expected_return_date || undefined, health: v.health,
       });
     }
+    // Freight to bring the machine to site - booked once under Machines.
+    if (v.transport_cost !== undefined && v.transport_cost !== '') body.transport_cost = Number(v.transport_cost);
+    if (toContractor) {
+      if (!String(v.vehicle_number || '').trim()) {
+        setErrors((c) => ({ ...c, vehicle_number: 'Enter the vehicle bringing the machine - the contractor verifies it on arrival.' }));
+        setSaving(false);
+        return;
+      }
+      Object.assign(body, {
+        vehicle_number: v.vehicle_number.trim(),
+        driver_name: (v.driver_name || '').trim() || null,
+        driver_phone: (v.driver_phone || '').trim() || null,
+        challan_number: (v.challan_number || '').trim() || null,
+      });
+    }
     try {
       await procurementApi.toolFulfil(request.id, body);
-      onSaved(type === 'purchased_owned' ? 'Machine allocated.' : type === 'to_be_purchased' ? 'Machine registered as a company asset and allocated.' : 'Rental registered and machine allocated.');
+      const done = type === 'purchased_owned' ? 'Machine allocated' : type === 'to_be_purchased' ? 'Machine registered as a company asset' : 'Rental registered';
+      onSaved(toContractor ? `${done} and dispatched - ${receiverName || 'the contractor'} has been notified to receive it.` : `${done}.`);
     } catch (caught) {
       const e = toApiError(caught);
       if (e.details) setErrors(e.details);
@@ -112,7 +134,8 @@ export default function ToolFulfilDialog({ request, onClose, onSaved }) {
     ...free.map((u) => ({ value: String(u.id), label: `${u.serialNumber} — available (${u.health})` })),
     ...held.map((h) => ({ value: String(h.unitId), label: `${h.serialNumber} — with ${h.contractor?.name ?? 'another holder'}${h.project ? ` @ ${h.project.name}` : ''} (needs reassignment)` })),
   ];
-  const title = type === 'purchased_owned' ? 'Allocate machine' : type === 'to_be_purchased' ? 'Register purchased machine' : 'Register rented machine';
+  const title = (type === 'purchased_owned' ? 'Allocate machine' : type === 'to_be_purchased' ? 'Register purchased machine' : 'Register rented machine')
+    + (toContractor ? ' & dispatch' : '');
 
   return (
     <Modal isOpen onClose={onClose} title={title} description={`${request.requestNumber} · ${request.tool?.name ?? 'Machine'}`}
@@ -175,6 +198,36 @@ export default function ToolFulfilDialog({ request, onClose, onSaved }) {
               hint={v.rate_per_day && v.rental_start_date && v.expected_return_date
                 ? `Planned: ${formatCurrency(Number(v.rate_per_day) * (Math.round((Date.parse(v.expected_return_date) - Date.parse(v.rental_start_date)) / 86400000) + 1))}`
                 : 'Actual rent is calculated from the days it is really used.'} />
+          </>
+        )}
+
+        <InputField
+          className="sm:col-span-2"
+          label="Transport cost to site (optional)"
+          type="number"
+          min="0"
+          step="0.01"
+          value={v.transport_cost ?? ''}
+          onChange={set('transport_cost')}
+          error={errors.transport_cost}
+          hint={request.project
+            ? `Freight to deliver this machine. Booked once as Machine Transport on ${request.project.name} - counted under Machines, not Miscellaneous.`
+            : 'No project on this request - freight cannot be charged to a project.'}
+        />
+
+        {toContractor && (
+          <>
+            <div className="sm:col-span-2 rounded-lg border border-brand-200 bg-brand-50/60 p-3 text-xs text-brand-900">
+              <p className="font-semibold">Dispatch to {receiverName || 'the contractor'}</p>
+              <p className="mt-0.5 text-brand-800">
+                Enter the vehicle and driver bringing the machine. The contractor is notified, verifies the vehicle number when it
+                arrives and receives it. It can be used on the task only after it is received.
+              </p>
+            </div>
+            <InputField label="Vehicle number" required value={v.vehicle_number ?? ''} onChange={set('vehicle_number')} error={errors.vehicle_number} placeholder="e.g. MH-12-AB-1234" />
+            <InputField label="Delivery challan no." value={v.challan_number ?? ''} onChange={set('challan_number')} error={errors.challan_number} placeholder="e.g. DC-9988" />
+            <InputField label="Driver name" value={v.driver_name ?? ''} onChange={set('driver_name')} error={errors.driver_name} placeholder="Driver full name" />
+            <InputField label="Driver phone" value={v.driver_phone ?? ''} onChange={set('driver_phone')} error={errors.driver_phone} placeholder="e.g. 98765 43210" />
           </>
         )}
       </div>

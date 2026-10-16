@@ -46,14 +46,26 @@ export const CONTRACTOR_EXPENSE_CATEGORY_OPTIONS = [
   { value: 'Consumable Material', label: 'Consumable Material' },
   { value: 'Labour Expense', label: 'Labour Expense' },
   { value: 'Labour Conveyance', label: 'Labour Conveyance' },
+  { value: 'Labour Transport', label: 'Transport → Labour (moving workers)' },
+];
+
+/**
+ * Transport is allocated to what is carried, so it is counted in the right total
+ * (server config/costBuckets.js): Material, Machines / Tools or Labour - never twice.
+ */
+export const TRANSPORT_CATEGORY_OPTIONS = [
+  { value: 'Material Transport', label: 'Transport → Materials (freight on material)', bucket: 'Material' },
+  { value: 'Machine Transport', label: 'Transport → Machines / Tools (shifting equipment)', bucket: 'Machines / Tools' },
+  { value: 'Labour Transport', label: 'Transport → Labour (moving workers)', bucket: 'Labour' },
 ];
 
 export const EXPENSE_CATEGORY_OPTIONS = [
   ...CONTRACTOR_EXPENSE_CATEGORY_OPTIONS,
+  ...TRANSPORT_CATEGORY_OPTIONS.filter((t) => t.value !== 'Labour Transport').map(({ value, label }) => ({ value, label })),
   { value: 'material', label: 'Material' },
   { value: 'labour', label: 'Labour' },
   { value: 'contractor', label: 'Contractor' },
-  { value: 'transport', label: 'Transport' },
+  { value: 'transport', label: 'Transport (unallocated → Miscellaneous)' },
   { value: 'equipment', label: 'Equipment' },
   { value: 'site', label: 'Site expense' },
   { value: 'office', label: 'Office' },

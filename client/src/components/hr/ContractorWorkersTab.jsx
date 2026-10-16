@@ -23,6 +23,7 @@ import { hrApi } from '../../api/hrApi';
 import { contractorsApi } from '../../api/contractorsApi';
 import { formatCurrency, formatDate } from '../../utils/format';
 import { ROLES } from '../../config/roles';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const INITIAL_FILTERS = { status: 'all', search: '', contractorId: 'all', page: 1 };
 
@@ -224,7 +225,7 @@ export default function ContractorWorkersTab() {
             {!isContractor && (
               <div className="flex items-center gap-1.5">
                 <Filter className="h-3.5 w-3.5 text-ink-subtle" />
-                <select
+                <SearchableSelect
                   value={filters.contractorId}
                   onChange={(e) => setFilters((f) => ({ ...f, contractorId: e.target.value, page: 1 }))}
                   className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -235,11 +236,11 @@ export default function ContractorWorkersTab() {
                       {c.name}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </div>
             )}
 
-            <select
+            <SearchableSelect
               value={filters.status}
               onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value, page: 1 }))}
               className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -247,7 +248,7 @@ export default function ContractorWorkersTab() {
               <option value="all">All Statuses</option>
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
-            </select>
+            </SearchableSelect>
           </div>
         </div>
 

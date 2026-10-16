@@ -167,7 +167,20 @@ async function getDetail(id, hrScope) {
 
   const subtaskMap = await taskModel.findSubtaskSummaries(taskIds);
 
+  // Area and assigned Project Manager names for the task list.
+  const areaIds = [...new Set(tasks.map((t) => t.area_id).filter(Boolean))];
+  const managerIds = [...new Set(tasks.map((t) => t.assigned_manager_id).filter(Boolean))];
+  const [areaRows, managerRows] = await Promise.all([
+    areaIds.length
+      ? pool.query('SELECT a.id, a.name, a.area_type, pa.name AS parent_name FROM project_areas a LEFT JOIN project_areas pa ON pa.id = a.parent_id WHERE a.id IN (?)', [areaIds]).then(([r]) => r)
+      : [],
+    managerIds.length ? pool.query('SELECT id, full_name FROM employees WHERE id IN (?)', [managerIds]).then(([r]) => r) : [],
+  ]);
+  const areaById = new Map(areaRows.map((a) => [Number(a.id), a]));
+  const managerById = new Map(managerRows.map((m) => [Number(m.id), m.full_name]));
+
   const formattedTasks = tasks.map((t) => {
+    const area = t.area_id ? areaById.get(Number(t.area_id)) : null;
     const subtasks = subtaskMap.get(t.id) || [];
     const tMaterials = taskMaterials.filter((m) => m.task_id === t.id);
     const tTools = taskTools.filter((tl) => tl.task_id === t.id);
@@ -184,6 +197,11 @@ async function getDetail(id, hrScope) {
       projectId: t.project_id,
       siteId: t.site_id,
       siteName: t.site_name,
+      areaId: t.area_id || null,
+      areaName: area ? (area.parent_name ? `${area.parent_name} › ${area.name}` : area.name) : null,
+      areaType: area?.area_type || null,
+      assignedManagerId: t.assigned_manager_id || null,
+      assignedManagerName: t.assigned_manager_id ? managerById.get(Number(t.assigned_manager_id)) || null : null,
       name: t.name,
       description: t.description,
       status: t.status,
@@ -217,16 +235,16 @@ async function getDetail(id, hrScope) {
         materials: taskMaterials.filter((m) => m.subtask_id === st.id).map((m) => ({
           id: m.id, materialId: m.material_id, materialName: m.material_name, unit: m.material_unit,
           quantity: Number(m.quantity || 0) + Number(m.approved_additional_quantity || 0),
-          costPerUnit: Number(m.cost_per_unit || 0), totalCost: Number(m.total_cost || 0),
+          costPerUnit: Number(m.cost_per_unit || 0), transportCost: Number(m.transport_cost || 0), totalCost: Number(m.total_cost || 0),
         })),
         tools: taskTools.filter((tl) => tl.subtask_id === st.id).map((tl) => ({
           id: tl.id, toolId: tl.tool_id, toolName: tl.tool_name, rentalType: tl.rental_type,
-          quantity: Number(tl.quantity || 1), cost: Number(tl.cost || 0), workingDays: Number(tl.working_days || 1),
+          quantity: Number(tl.quantity || 1), cost: Number(tl.cost || 0), workingDays: Number(tl.working_days || 1), transportCost: Number(tl.transport_cost || 0),
           totalCost: Number(tl.total_cost || 0),
         })),
         labour: taskLabour.filter((l) => l.subtask_id === st.id).map((l) => ({
           id: l.id, labourName: l.labour_name || '', labourType: l.labour_type, workerCount: Number(l.worker_count || 1),
-          dailyWage: Number(l.daily_wage || 0), workingDays: Number(l.working_days || 0), totalCost: Number(l.total_cost || 0),
+          dailyWage: Number(l.daily_wage || 0), workingDays: Number(l.working_days || 0), transportCost: Number(l.transport_cost || 0), totalCost: Number(l.total_cost || 0),
           workerId: l.worker_id || null, workerType: l.worker_type || null, skillTrade: l.skill_trade || null,
           startDate: l.start_date || null, endDate: l.end_date || null, remarks: l.remarks || null,
         })),
@@ -244,6 +262,7 @@ async function getDetail(id, hrScope) {
         category: m.material_category,
         quantity: Number(m.quantity || 0),
         costPerUnit: Number(m.cost_per_unit || 0),
+        transportCost: Number(m.transport_cost || 0),
         totalCost: Number(m.total_cost || 0),
       })),
     tools: taskTools
@@ -258,6 +277,7 @@ async function getDetail(id, hrScope) {
         workingDays: Number(tl.working_days || 1),
         startDate: tl.start_date || null,
         endDate: tl.end_date || null,
+        transportCost: Number(tl.transport_cost || 0),
         totalCost: Number(tl.total_cost || 0),
       })),
     labour: taskLabour
@@ -269,6 +289,7 @@ async function getDetail(id, hrScope) {
         workerCount: Number(l.worker_count || 1),
         dailyWage: Number(l.daily_wage || 0),
         workingDays: Number(l.working_days || 0),
+        transportCost: Number(l.transport_cost || 0),
         totalCost: Number(l.total_cost || 0),
         workerId: l.worker_id || null,
         workerType: l.worker_type || null,

@@ -10,7 +10,7 @@ const { pool } = require('../config/db');
 const LIST_SELECT = `
   SELECT
     p.id, p.code, p.name, p.project_type, p.location, p.description,
-    p.start_date, p.expected_completion, p.estimated_budget, p.client_contract_value,
+    p.start_date, p.expected_completion, p.is_archived, p.estimated_budget, p.client_contract_value,
     p.status, p.progress, p.current_phase,
     c.id  AS client_id,     c.name AS client_name,
     pm.id AS project_manager_id, pm.full_name AS project_manager_name,
@@ -80,13 +80,22 @@ async function findAll({ search, status, contractorId, clientId, page = 1, pageS
 }
 
 async function findById(id) {
-  // Automatically evaluate and mark delayed status server-side
-  await pool.query(
-    "UPDATE projects SET status = 'delayed' WHERE id = ? AND expected_completion < CURDATE() AND status NOT IN ('completed', 'delayed', 'on-hold') AND is_archived = 0",
-    [id]
-  );
   const [rows] = await pool.query(`${LIST_SELECT} WHERE p.id = ? LIMIT 1`, [id]);
-  return rows[0] || null;
+  const row = rows[0] || null;
+  // Automatically mark an overdue project as delayed. This lookup is also used inside
+  // other transactions (e.g. receiving stock, which may already hold a lock on this
+  // project row), so the write is never awaited here - awaiting it on a separate
+  // connection would wait on that very transaction and dead-lock until timeout.
+  const overdue = row && row.expected_completion && new Date(row.expected_completion) < new Date(new Date().toDateString())
+    && !['completed', 'delayed', 'on-hold'].includes(row.status) && !Number(row.is_archived);
+  if (overdue) {
+    row.status = 'delayed';
+    pool.query(
+      "UPDATE projects SET status = 'delayed' WHERE id = ? AND expected_completion < CURDATE() AND status NOT IN ('completed', 'delayed', 'on-hold') AND is_archived = 0",
+      [id]
+    ).catch((e) => console.error('Could not mark project delayed:', e.message));
+  }
+  return row;
 }
 
 async function findByCode(code) {
@@ -285,13 +294,14 @@ const relatedQueries = {
            (SELECT COUNT(*) FROM approval_requests a WHERE a.project_id = p.id AND a.status = 'pending') AS pending_approvals,
            (SELECT COALESCE(AVG(s.progress), 0) FROM sites s WHERE s.project_id = p.id AND s.contractor_id = c.id) AS work_progress
     FROM contractors c
-    JOIN projects p ON p.id = ?
-    LEFT JOIN contractor_payments cp ON cp.contractor_id = c.id AND cp.project_id = p.id
-    WHERE (
-      c.id = p.contractor_id
-      OR c.id IN (SELECT s2.contractor_id FROM sites s2 WHERE s2.project_id = p.id AND s2.contractor_id IS NOT NULL)
-      OR c.id IN (SELECT cp2.contractor_id FROM contractor_payments cp2 WHERE cp2.project_id = p.id)
+    JOIN projects p ON (
+      p.id = ? AND (
+        c.id = p.contractor_id
+        OR c.id IN (SELECT s2.contractor_id FROM sites s2 WHERE s2.project_id = p.id AND s2.contractor_id IS NOT NULL)
+        OR c.id IN (SELECT cp2.contractor_id FROM contractor_payments cp2 WHERE cp2.project_id = p.id)
+      )
     )
+    LEFT JOIN contractor_payments cp ON cp.contractor_id = c.id AND cp.project_id = p.id
     GROUP BY c.id, cp.id`,
 
   activities: `

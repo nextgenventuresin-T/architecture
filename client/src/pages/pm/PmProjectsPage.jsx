@@ -21,6 +21,7 @@ import Skeleton from '../../components/ui/Skeleton';
 import EmptyState from '../../components/ui/EmptyState';
 import { pmApi } from '../../api/pmApi';
 import { formatNumber, formatDate, formatCurrency } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 export default function PmProjectsPage() {
   const navigate = useNavigate();
@@ -81,7 +82,7 @@ export default function PmProjectsPage() {
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          <select
+          <SearchableSelect
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="px-3 py-2 text-sm rounded-xl border border-line bg-surface text-ink focus:outline-none focus:border-brand-500"
@@ -91,7 +92,7 @@ export default function PmProjectsPage() {
             <option value="delayed">Delayed</option>
             <option value="attention">Attention</option>
             <option value="completed">Completed</option>
-          </select>
+          </SearchableSelect>
         </div>
       </div>
 

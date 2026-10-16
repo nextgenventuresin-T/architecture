@@ -248,7 +248,8 @@ async function create(payload, actorId) {
       },
       actorId
     );
-    userIdToLink = newUserId;
+    // createUser returns the created user record, not its id.
+    userIdToLink = newUserId && typeof newUserId === 'object' ? Number(newUserId.id) : Number(newUserId);
   }
 
   if (userIdToLink) {
@@ -316,7 +317,8 @@ async function update(id, payload, actorId) {
       },
       actorId
     );
-    userIdToLink = newUserId;
+    // createUser returns the created user record, not its id.
+    userIdToLink = newUserId && typeof newUserId === 'object' ? Number(newUserId.id) : Number(newUserId);
   }
 
   if (userIdToLink) {

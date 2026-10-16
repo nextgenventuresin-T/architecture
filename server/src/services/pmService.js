@@ -2,7 +2,6 @@
 
 const { pool } = require('../config/db');
 const { ROLES } = require('../config/roles');
-const employeeModel = require('../models/employeeModel');
 
 /**
  * Resolves project IDs accessible by the current Project Manager.
@@ -11,28 +10,12 @@ const employeeModel = require('../models/employeeModel');
 async function resolvePmProjectIds(userId, role) {
   if (role === ROLES.ADMIN) return null;
 
-  const projectIds = new Set();
-
-  // 1. Check if user is linked to an employee record assigned as project_manager_id
-  try {
-    const employee = await employeeModel.findByUserId(userId);
-    if (employee?.id) {
-      const [pmProjects] = await pool.query(
-        'SELECT id FROM projects WHERE project_manager_id = ? AND is_archived = 0',
-        [employee.id]
-      );
-      pmProjects.forEach((p) => projectIds.add(p.id));
-    }
-  } catch (_) {}
-
-  // 2. Check user_project_access table
-  try {
-    const [upa] = await pool.query(
-      'SELECT project_id FROM user_project_access WHERE user_id = ?',
-      [userId]
-    );
-    upa.forEach((u) => projectIds.add(u.project_id));
-  } catch (_) {}
+  // The same assignment rules as every PM write and scoped read (pmScopeService): the
+  // project's Project Manager, a task / subtask assigned to them, or granted access.
+  // (This used to check only the project's PM field, so a PM assigned to just a task
+  // never saw that project on their pages.)
+  const { projectIds: assigned } = await require('./pmScopeService').resolve(userId);
+  const projectIds = new Set(assigned);
 
   if (projectIds.size === 0) {
     // A Project Manager with no assigned project sees nothing (deny-by-default).
@@ -715,7 +698,7 @@ async function getSiteWarehouse(query, userId, role) {
         projectId: site.project_id,
         projectName: site.project_name,
         projectCode: site.project_code,
-        contractorName: site.contractor_name || 'Unassigned',
+        contractorName: site.contractor_name || 'Project Manager (Site Store)',
         materialId: r.material_id,
         materialName: mat.name,
         materialCategory: mat.category,
@@ -743,7 +726,7 @@ async function getSiteWarehouse(query, userId, role) {
           projectId: site.project_id,
           projectName: site.project_name,
           projectCode: site.project_code,
-          contractorName: site.contractor_name || 'Unassigned',
+          contractorName: site.contractor_name || 'Project Manager (Site Store)',
           materialId: c.material_id,
           materialName: mat.name,
           materialCategory: mat.category,

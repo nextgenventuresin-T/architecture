@@ -14,6 +14,7 @@ import { toApiError } from '../../api/axiosClient';
 import { formatDate } from '../../utils/format';
 import { LEAVE_STATUS_TONE } from '../../utils/hrOptions';
 import { ROLES } from '../../config/roles';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const INITIAL_FILTERS = { status: 'all', page: 1 };
 
@@ -216,7 +217,7 @@ export default function LeaveTab({ employeeOnly = false }) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
+            <SearchableSelect
               value={filters.status}
               onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value, page: 1 }))}
               className="h-9 rounded-lg border border-line bg-white px-3 text-sm text-ink"
@@ -226,7 +227,7 @@ export default function LeaveTab({ employeeOnly = false }) {
               <option value="APPROVED">Approved</option>
               <option value="REJECTED">Rejected</option>
               <option value="CANCELLED">Cancelled</option>
-            </select>
+            </SearchableSelect>
             <Button variant="secondary" onClick={reload} aria-label="Refresh">
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             </Button>

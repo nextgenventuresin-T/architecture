@@ -13,6 +13,16 @@ import SiteActivityFormPage from '../pages/admin/projects/SiteActivityFormPage';
 import ContractorListPage from '../pages/admin/contractors/ContractorListPage';
 import ContractorFormPage from '../pages/admin/contractors/ContractorFormPage';
 import ContractorDetailPage from '../pages/admin/contractors/ContractorDetailPage';
+import ProjectManagerListPage from '../pages/admin/projectManagers/ProjectManagerListPage';
+import ProjectManagerFormPage from '../pages/admin/projectManagers/ProjectManagerFormPage';
+import { Navigate as RedirectTo, useParams as useRouteParams } from 'react-router-dom';
+
+/** A Project Manager's details live on their employee record. */
+function EditManagerRedirect() {
+  const { id } = useRouteParams();
+  return <RedirectTo to={`/admin/employees/${id}/edit`} replace />;
+}
+import ProjectManagerDetailPage from '../pages/admin/projectManagers/ProjectManagerDetailPage';
 import EmployeeListPage from '../pages/admin/employees/EmployeeListPage';
 import EmployeeFormPage from '../pages/admin/employees/EmployeeFormPage';
 import EmployeeDetailPage from '../pages/admin/employees/EmployeeDetailPage';
@@ -24,6 +34,10 @@ import MaterialDetailPage from '../pages/admin/materials/MaterialDetailPage';
 import ProcurementListPage from '../pages/admin/procurement/ProcurementListPage';
 import ProcurementFormPage from '../pages/admin/procurement/ProcurementFormPage';
 import ProcurementDetailPage from '../pages/admin/procurement/ProcurementDetailPage';
+import ProcurementBatchFormPage from '../pages/admin/procurement/ProcurementBatchFormPage';
+import ProcurementBatchPage from '../pages/admin/procurement/ProcurementBatchPage';
+import MyPortalPage from '../pages/portal/MyPortalPage';
+import StaffAttendancePage from '../pages/portal/StaffAttendancePage';
 import WarehouseListPage from '../pages/admin/warehouse/WarehouseListPage';
 import WarehouseFormPage from '../pages/admin/warehouse/WarehouseFormPage';
 import WarehouseDetailPage from '../pages/admin/warehouse/WarehouseDetailPage';
@@ -85,6 +99,8 @@ export default function AppRoutes() {
         }
       >
         <Route index element={<AdminDashboardPage />} />
+        <Route path="my-portal" element={<MyPortalPage />} />
+        <Route path="staff-attendance" element={<StaffAttendancePage />} />
 
         {/* Interface 3 — Projects & Sites. Declared before the placeholder
             loop so these paths win over the generic module screen. */}
@@ -103,6 +119,10 @@ export default function AppRoutes() {
         <Route path="contractors/new" element={<ContractorFormPage mode="create" />} />
         <Route path="contractors/:id" element={<ContractorDetailPage />} />
         <Route path="contractors/:id/edit" element={<ContractorFormPage mode="edit" />} />
+        <Route path="project-managers" element={<ProjectManagerListPage />} />
+        <Route path="project-managers/new" element={<ProjectManagerFormPage />} />
+        <Route path="project-managers/:id" element={<ProjectManagerDetailPage />} />
+        <Route path="project-managers/:id/edit" element={<EditManagerRedirect />} />
 
         {/* Interface 5 — Employee Management. Declared before the placeholder
             loop so these paths win over the generic module screen. */}
@@ -129,6 +149,8 @@ export default function AppRoutes() {
             module screen. */}
         <Route path="procurement" element={<ProcurementListPage />} />
         <Route path="procurement/new" element={<ProcurementFormPage mode="create" />} />
+        <Route path="procurement/new-batch" element={<ProcurementBatchFormPage />} />
+        <Route path="procurement/batch/:batchId" element={<ProcurementBatchPage />} />
         <Route path="procurement/:id" element={<ProcurementDetailPage />} />
         <Route path="procurement/:id/edit" element={<ProcurementFormPage mode="edit" />} />
 
@@ -178,8 +200,11 @@ export default function AppRoutes() {
         {ADMIN_MODULES.filter(
           (m) =>
             m.path !== '/admin/projects' &&
+            m.path !== '/admin/my-portal' &&
+            m.path !== '/admin/staff-attendance' &&
             m.path !== '/admin/clients' &&
             m.path !== '/admin/contractors' &&
+            m.path !== '/admin/project-managers' &&
             m.path !== '/admin/employees' &&
             m.path !== '/admin/materials' &&
             m.path !== '/admin/procurement' &&
@@ -206,6 +231,7 @@ export default function AppRoutes() {
         element={<ProtectedRoute allowedRoles={[ROLES.FINANCE]} requiredPermission="finance:view"><RoleWorkspaceLayout /></ProtectedRoute>}
       >
         <Route index element={<FinanceDashboardPage basePath="/finance" />} />
+        <Route path="my-portal" element={<MyPortalPage />} />
         <Route path="expenses" element={<FinanceDashboardPage initialTab="expenses" basePath="/finance" />} />
         <Route path="expenses/new" element={<ExpenseFormPage mode="create" basePath="/finance" />} />
         <Route path="expenses/:id" element={<ExpenseDetailPage basePath="/finance" />} />
@@ -219,9 +245,12 @@ export default function AppRoutes() {
         element={<ProtectedRoute allowedRoles={[ROLES.PROCUREMENT]} requiredPermission="procurement:view"><RoleWorkspaceLayout /></ProtectedRoute>}
       >
         <Route index element={<ProcurementListPage basePath="/procurement" />} />
+        <Route path="my-portal" element={<MyPortalPage />} />
         <Route path="approvals" element={<ApprovalsPage basePath="/procurement" />} />
         <Route path=":id" element={<ProcurementDetailPage basePath="/procurement" />} />
         <Route path="new" element={<ProcurementFormPage mode="create" basePath="/procurement" />} />
+        <Route path="new-batch" element={<ProcurementBatchFormPage basePath="/procurement" />} />
+        <Route path="batch/:batchId" element={<ProcurementBatchPage basePath="/procurement" />} />
         <Route path=":id/edit" element={<ProcurementFormPage mode="edit" basePath="/procurement" />} />
         <Route path="reports" element={<ReportsDashboardPage basePath="/procurement" />} />
       </Route>
@@ -231,6 +260,7 @@ export default function AppRoutes() {
         element={<ProtectedRoute allowedRoles={[ROLES.WAREHOUSE]} requiredPermission="warehouse:view"><RoleWorkspaceLayout /></ProtectedRoute>}
       >
         <Route index element={<WarehouseListPage basePath="/warehouse" />} />
+        <Route path="my-portal" element={<MyPortalPage />} />
         <Route path="material-movements" element={<MaterialMovementsPage />} />
         <Route path=":id" element={<WarehouseDetailPage basePath="/warehouse" />} />
         <Route path="new" element={<WarehouseFormPage mode="create" basePath="/warehouse" />} />
@@ -244,12 +274,17 @@ export default function AppRoutes() {
         element={<ProtectedRoute allowedRoles={[ROLES.PROJECT_MANAGER, ROLES.ADMIN]}><RoleWorkspaceLayout /></ProtectedRoute>}
       >
         <Route index element={<PmDashboardPage />} />
+        <Route path="my-portal" element={<MyPortalPage />} />
         <Route path="projects" element={<PmProjectsPage />} />
         <Route path="contractors" element={<PmContractorsPage />} />
         <Route path="daily-work" element={<PmDailyWorkPage />} />
+        {/* Sites the PM runs directly (no contractor): log daily work, material and machine use. */}
+        <Route path="daily-work/log" element={<ContractorDailyWorkPage workspace="pm" />} />
         <Route path="site-warehouse" element={<PmSiteWarehousePage />} />
         <Route path="procurement" element={<PmProcurementPage />} />
         <Route path="procurement/new" element={<ProcurementFormPage mode="create" basePath="/pm/procurement" />} />
+        <Route path="procurement/new-batch" element={<ProcurementBatchFormPage basePath="/pm/procurement" />} />
+        <Route path="procurement/batch/:batchId" element={<ProcurementBatchPage basePath="/pm/procurement" />} />
         <Route path="procurement/:id" element={<ProcurementDetailPage basePath="/pm/procurement" />} />
         <Route path="procurement/:id/edit" element={<ProcurementFormPage mode="edit" basePath="/pm/procurement" />} />
         <Route path="attendance" element={<PmAttendancePage />} />
@@ -271,14 +306,20 @@ export default function AppRoutes() {
           element={<ProtectedRoute allowedRoles={[role]}><RoleWorkspaceLayout /></ProtectedRoute>}
         >
           <Route index element={IndexPage ? <IndexPage /> : <RoleLandingPage />} />
+          {/* Every login: own attendance (check in / out) and leave. */}
+          <Route path="my-portal" element={<MyPortalPage />} />
+          {role === ROLES.HR && <Route path="staff-attendance" element={<StaffAttendancePage />} />}
           {role === ROLES.CONTRACTOR && (
             <>
               <Route path="projects" element={<ContractorProjectsPage />} />
               <Route path="daily-work" element={<ContractorDailyWorkPage />} />
+              <Route path="labour" element={<ContractorHrPage />} />
               <Route path="site-warehouse" element={<ContractorSiteWarehousePage />} />
               <Route path="tools" element={<ContractorToolsPage />} />
               <Route path="procurement" element={<ProcurementListPage basePath="/contractor/procurement" />} />
               <Route path="procurement/new" element={<ProcurementFormPage mode="create" basePath="/contractor/procurement" />} />
+              <Route path="procurement/new-batch" element={<ProcurementBatchFormPage basePath="/contractor/procurement" />} />
+              <Route path="procurement/batch/:batchId" element={<ProcurementBatchPage basePath="/contractor/procurement" />} />
               <Route path="procurement/:id" element={<ProcurementDetailPage basePath="/contractor/procurement" />} />
               <Route path="procurement/:id/edit" element={<ProcurementFormPage mode="edit" basePath="/contractor/procurement" />} />
               <Route path="purchase-orders" element={<ProcurementListPage basePath="/contractor/purchase-orders" />} />

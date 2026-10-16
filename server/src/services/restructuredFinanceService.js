@@ -3,6 +3,16 @@
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
 const { getActualMaterialRate } = require('../utils/materialPricing');
+const {
+  MATERIAL_EXPENSE_CATEGORIES, LABOUR_EXPENSE_CATEGORIES, MACHINE_EXPENSE_CATEGORIES,
+  MISC_EXPENSE_CATEGORIES, NON_MISC_CATEGORIES, TRANSPORT_CATEGORIES, sqlList,
+} = require('../config/costBuckets');
+
+const LABOUR_CATS = sqlList(LABOUR_EXPENSE_CATEGORIES);
+const MACHINE_CATS = sqlList(MACHINE_EXPENSE_CATEGORIES);
+const MATERIAL_CATS = sqlList(MATERIAL_EXPENSE_CATEGORIES);
+const MISC_CATS = sqlList(MISC_EXPENSE_CATEGORIES);
+const NON_MISC_CATS = sqlList(NON_MISC_CATEGORIES);
 
 /**
  * Helper to ensure numeric values
@@ -45,6 +55,11 @@ function materialActualSql(dwuWhere, expenseWhere) {
           WHERE e2.category = 'Material Consumption' AND e2.status NOT IN ('rejected', 'cancelled')
             AND NOT EXISTS (SELECT 1 FROM daily_work_updates d2 WHERE d2.expense_id = e2.id)
             AND ${expenseWhere}
+        ), 0) + COALESCE((
+          -- Freight on material deliveries is part of the material cost (booked once, as its own expense)
+          SELECT SUM(e2.amount) FROM expenses e2
+          WHERE e2.category IN (${MATERIAL_CATS}) AND e2.status NOT IN ('rejected', 'cancelled')
+            AND ${expenseWhere}
         ), 0)
       )`;
 }
@@ -85,7 +100,7 @@ async function getProjectCosts({ projectId, siteId } = {}) {
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
         WHERE e.project_id = p.id AND (s.id IS NULL OR e.site_id = s.id)
-          AND e.category IN ('Labour Expense', 'Advance Wages', 'Labour Room Rent', 'Labour Conveyance')
+          AND e.category IN (${LABOUR_CATS})
           AND e.status NOT IN ('rejected', 'cancelled')
       ), 0) AS labour_cost,
 
@@ -97,7 +112,7 @@ async function getProjectCosts({ projectId, siteId } = {}) {
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
         WHERE e.project_id = p.id AND (s.id IS NULL OR e.site_id = s.id)
-          AND e.category IN ('Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment')
+          AND e.category IN (${MACHINE_CATS})
           AND e.status NOT IN ('rejected', 'cancelled')
           AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-TOOL-%')
       ), 0) AS machine_tool_cost,
@@ -110,13 +125,20 @@ async function getProjectCosts({ projectId, siteId } = {}) {
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
         WHERE e.project_id = p.id AND (s.id IS NULL OR e.site_id = s.id)
-          AND e.category NOT IN (
-            'Material Consumption', 'Labour Expense', 'Advance Wages', 'Labour Room Rent',
-            'Labour Conveyance', 'Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment'
-          )
+          AND e.category NOT IN (${NON_MISC_CATS})
           AND e.status NOT IN ('rejected', 'cancelled')
           AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-MISC-%')
-      ), 0) AS misc_cost
+      ), 0) AS misc_cost,
+
+      -- Transport shown separately; it is ALREADY inside material_cost / machine_tool_cost above.
+      COALESCE((
+        SELECT SUM(e.amount) FROM expenses e
+        WHERE e.project_id = p.id AND (s.id IS NULL OR e.site_id = s.id) AND e.category = '${TRANSPORT_CATEGORIES.material}' AND e.status NOT IN ('rejected', 'cancelled')
+      ), 0) AS material_transport,
+      COALESCE((
+        SELECT SUM(e.amount) FROM expenses e
+        WHERE e.project_id = p.id AND (s.id IS NULL OR e.site_id = s.id) AND e.category = '${TRANSPORT_CATEGORIES.machine}' AND e.status NOT IN ('rejected', 'cancelled')
+      ), 0) AS machine_transport
 
     FROM projects p
     LEFT JOIN sites s ON s.project_id = p.id
@@ -146,6 +168,9 @@ async function getProjectCosts({ projectId, siteId } = {}) {
       labourCost,
       machineToolCost,
       miscCost,
+      // Breakdown only - already included in materialCost / machineToolCost.
+      materialTransport: Number(num(r.material_transport).toFixed(2)),
+      machineTransport: Number(num(r.machine_transport).toFixed(2)),
       totalActualCost,
       budget,
       remainingBudget,
@@ -281,16 +306,18 @@ async function getActualExpenses({ projectId, siteId, taskId, category, dateFrom
 
     SELECT
       CASE
-        WHEN e.category = 'Material Consumption' THEN 'material'
-        WHEN e.category IN ('Labour Expense', 'Advance Wages', 'Labour Room Rent', 'Labour Conveyance') THEN 'labour'
-        WHEN e.category IN ('Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment') THEN 'machines_tools'
+        WHEN e.category = 'Material Consumption' OR e.category IN (${MATERIAL_CATS}) THEN 'material'
+        WHEN e.category IN (${LABOUR_CATS}) THEN 'labour'
+        WHEN e.category IN (${MACHINE_CATS}) THEN 'machines_tools'
         ELSE 'miscellaneous'
       END AS category_type,
       CASE
+        WHEN e.category = '${TRANSPORT_CATEGORIES.material}' THEN 'Material (Transport)'
+        WHEN e.category = '${TRANSPORT_CATEGORIES.machine}' THEN 'Machines/Tools (Transport)'
+        WHEN e.category = '${TRANSPORT_CATEGORIES.labour}' THEN 'Labour (Transport)'
         WHEN e.category = 'Material Consumption' THEN 'Material'
-        WHEN e.category IN ('Labour Expense', 'Advance Wages', 'Labour Room Rent', 'Labour Conveyance') THEN 'Labour'
-        WHEN e.category IN ('Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment') THEN 'Machines/Tools'
-        WHEN e.category = 'Material Transport' THEN 'Miscellaneous (Transport)'
+        WHEN e.category IN (${LABOUR_CATS}) THEN 'Labour'
+        WHEN e.category IN (${MACHINE_CATS}) THEN 'Machines/Tools'
         ELSE 'Miscellaneous'
       END AS category,
       e.expense_date,
@@ -430,6 +457,10 @@ async function getBudgetVsActual({ projectId, siteId, taskId } = {}) {
         SELECT SUM((twl.hours_worked / 8.0) * twl.daily_wage)
         FROM task_worker_logs twl
         WHERE twl.task_id = pt.id AND COALESCE(twl.worker_type, 'daily_wage') NOT IN ('company_labour', 'company_employee') AND LOWER(COALESCE(twl.labour_type, '')) NOT LIKE '%company%'
+      ), 0) + COALESCE((
+        SELECT SUM(e.amount) FROM expenses e
+        WHERE e.task_id = pt.id AND e.category = '${TRANSPORT_CATEGORIES.labour}'
+          AND e.status NOT IN ('rejected', 'cancelled')
       ), 0) AS labour_actual,
 
       -- Actual Machine/Tool
@@ -439,7 +470,7 @@ async function getBudgetVsActual({ projectId, siteId, taskId } = {}) {
         WHERE dwu.task_id = pt.id AND dwu.tool_cost > 0
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
-        WHERE e.task_id = pt.id AND e.category IN ('Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment')
+        WHERE e.task_id = pt.id AND e.category IN (${MACHINE_CATS})
           AND e.status NOT IN ('rejected', 'cancelled') AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-TOOL-%')
       ), 0) AS machine_actual,
 
@@ -450,9 +481,19 @@ async function getBudgetVsActual({ projectId, siteId, taskId } = {}) {
         WHERE dwu.task_id = pt.id AND dwu.misc_amount > 0
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
-        WHERE e.task_id = pt.id AND e.category IN ('Miscellaneous', 'Misc', 'Operational Misc', 'Material Transport')
+        WHERE e.task_id = pt.id AND e.category IN (${MISC_CATS})
           AND e.status NOT IN ('rejected', 'cancelled') AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-MISC-%')
-      ), 0) AS misc_actual
+      ), 0) AS misc_actual,
+
+      -- Transport shown separately; it is ALREADY inside material_actual / machine_actual above.
+      COALESCE((
+        SELECT SUM(e.amount) FROM expenses e
+        WHERE e.task_id = pt.id AND e.category = '${TRANSPORT_CATEGORIES.material}' AND e.status NOT IN ('rejected', 'cancelled')
+      ), 0) AS material_transport,
+      COALESCE((
+        SELECT SUM(e.amount) FROM expenses e
+        WHERE e.task_id = pt.id AND e.category = '${TRANSPORT_CATEGORIES.machine}' AND e.status NOT IN ('rejected', 'cancelled')
+      ), 0) AS machine_transport
 
     FROM project_tasks pt
     JOIN projects p ON p.id = pt.project_id
@@ -508,6 +549,9 @@ async function getBudgetVsActual({ projectId, siteId, taskId } = {}) {
       materialBudget,
       materialActual,
       materialRemaining: Number((materialBudget - materialActual).toFixed(2)),
+      // Breakdown only - already included in materialActual / machineActual.
+      materialTransport: Number(num(r.material_transport).toFixed(2)),
+      machineTransport: Number(num(r.machine_transport).toFixed(2)),
       materialVariance: Number((materialBudget - materialActual).toFixed(2)),
       labourBudget,
       labourActual,
@@ -1366,7 +1410,7 @@ async function getProfitabilitySummary({ clientId, projectId, search } = {}) {
         WHERE twl.project_id = p.id AND COALESCE(twl.worker_type, 'daily_wage') NOT IN ('company_labour', 'company_employee') AND LOWER(COALESCE(twl.labour_type, '')) NOT LIKE '%company%'
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
-        WHERE e.project_id = p.id AND e.category IN ('Labour Expense', 'Advance Wages', 'Labour Room Rent', 'Labour Conveyance')
+        WHERE e.project_id = p.id AND e.category IN (${LABOUR_CATS})
           AND e.status NOT IN ('rejected', 'cancelled')
       ), 0) AS actual_labour,
 
@@ -1377,7 +1421,7 @@ async function getProfitabilitySummary({ clientId, projectId, search } = {}) {
         WHERE dwu.project_id = p.id AND dwu.tool_cost > 0
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
-        WHERE e.project_id = p.id AND e.category IN ('Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment')
+        WHERE e.project_id = p.id AND e.category IN (${MACHINE_CATS})
           AND e.status NOT IN ('rejected', 'cancelled') AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-TOOL-%')
       ), 0) AS actual_machine,
 
@@ -1388,10 +1432,7 @@ async function getProfitabilitySummary({ clientId, projectId, search } = {}) {
         WHERE dwu.project_id = p.id AND dwu.misc_amount > 0
       ), 0) + COALESCE((
         SELECT SUM(e.amount) FROM expenses e
-        WHERE e.project_id = p.id AND e.category NOT IN (
-          'Material Consumption', 'Labour Expense', 'Advance Wages', 'Labour Room Rent',
-          'Labour Conveyance', 'Machine / Tool', 'Equipment Rental', 'Tools', 'Machinery', 'Tools & Equipment'
-        )
+        WHERE e.project_id = p.id AND e.category NOT IN (${NON_MISC_CATS})
         AND e.status NOT IN ('rejected', 'cancelled') AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-MISC-%')
       ), 0) AS actual_misc,
 
@@ -1501,9 +1542,21 @@ async function getDrilldownTransactions({ type, projectId, siteId, taskId, categ
       LEFT JOIN contractors c ON c.id = dwu.contractor_id
       LEFT JOIN expenses mex ON mex.id = dwu.expense_id
       WHERE dwu.quantity_used > 0 AND (mex.id IS NULL OR mex.status NOT IN ('rejected', 'cancelled')) ${where.length ? `AND ${where.join(' AND ')}` : ''}
-      ORDER BY dwu.work_date DESC, dwu.id DESC
+
+      UNION ALL
+
+      SELECT e.expense_date, e.expense_number, 'Material Transport', e.description, 1, 'trip', e.amount, e.amount,
+             c.name, e.notes
+      FROM expenses e
+      JOIN projects p ON p.id = e.project_id
+      LEFT JOIN sites s ON s.id = e.site_id
+      LEFT JOIN project_tasks pt ON pt.id = e.task_id
+      LEFT JOIN contractors c ON c.id = e.contractor_id
+      WHERE e.category = '${TRANSPORT_CATEGORIES.material}' AND e.status NOT IN ('rejected', 'cancelled')
+        ${where.length ? `AND ${where.join(' AND ')}` : ''}
+      ORDER BY date DESC
     `;
-    const [rows] = await pool.query(query, params);
+    const [rows] = await pool.query(query, [...params, ...params]);
     return rows;
   }
 
@@ -1527,9 +1580,21 @@ async function getDrilldownTransactions({ type, projectId, siteId, taskId, categ
       LEFT JOIN project_tasks pt ON pt.id = twl.task_id
       LEFT JOIN contractors c ON c.id = twl.contractor_id
       WHERE COALESCE(twl.worker_type, 'daily_wage') NOT IN ('company_labour', 'company_employee') AND LOWER(COALESCE(twl.labour_type, '')) NOT LIKE '%company%' ${where.length ? `AND ${where.join(' AND ')}` : ''}
-      ORDER BY twl.work_date DESC, twl.id DESC
+
+      UNION ALL
+
+      SELECT e.expense_date, e.expense_number, 'Labour Transport', e.description, 1, 'trip', e.amount, e.amount,
+             c.name, e.notes
+      FROM expenses e
+      JOIN projects p ON p.id = e.project_id
+      LEFT JOIN sites s ON s.id = e.site_id
+      LEFT JOIN project_tasks pt ON pt.id = e.task_id
+      LEFT JOIN contractors c ON c.id = e.contractor_id
+      WHERE e.category = '${TRANSPORT_CATEGORIES.labour}' AND e.status NOT IN ('rejected', 'cancelled')
+        ${where.length ? `AND ${where.join(' AND ')}` : ''}
+      ORDER BY date DESC
     `;
-    const [rows] = await pool.query(query, params);
+    const [rows] = await pool.query(query, [...params, ...params]);
     return rows;
   }
 
@@ -1553,9 +1618,21 @@ async function getDrilldownTransactions({ type, projectId, siteId, taskId, categ
       LEFT JOIN project_tasks pt ON pt.id = dwu.task_id
       LEFT JOIN contractors c ON c.id = dwu.contractor_id
       WHERE dwu.tool_cost > 0 ${where.length ? `AND ${where.join(' AND ')}` : ''}
-      ORDER BY dwu.work_date DESC, dwu.id DESC
+
+      UNION ALL
+
+      SELECT e.expense_date, e.expense_number, 'Machine Transport', e.description, 1, 'trip', e.amount, e.amount,
+             c.name, e.notes
+      FROM expenses e
+      JOIN projects p ON p.id = e.project_id
+      LEFT JOIN sites s ON s.id = e.site_id
+      LEFT JOIN project_tasks pt ON pt.id = e.task_id
+      LEFT JOIN contractors c ON c.id = e.contractor_id
+      WHERE e.category = '${TRANSPORT_CATEGORIES.machine}' AND e.status NOT IN ('rejected', 'cancelled')
+        ${where.length ? `AND ${where.join(' AND ')}` : ''}
+      ORDER BY date DESC
     `;
-    const [rows] = await pool.query(query, params);
+    const [rows] = await pool.query(query, [...params, ...params]);
     return rows;
   }
 
@@ -1589,7 +1666,7 @@ async function getDrilldownTransactions({ type, projectId, siteId, taskId, categ
       LEFT JOIN sites s ON s.id = e.site_id
       LEFT JOIN project_tasks pt ON pt.id = e.task_id
       LEFT JOIN contractors c ON c.id = e.contractor_id
-      WHERE e.category IN ('Miscellaneous', 'Misc', 'Operational Misc', 'Material Transport')
+      WHERE e.category IN (${MISC_CATS})
         AND e.status NOT IN ('rejected', 'cancelled')
         AND (e.reference IS NULL OR e.reference NOT LIKE 'DWU-MISC-%')
         ${where.length ? `AND ${where.join(' AND ')}` : ''}

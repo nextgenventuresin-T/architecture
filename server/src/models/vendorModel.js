@@ -2,7 +2,7 @@
 
 const { pool } = require('../config/db');
 
-async function findAll({ search = '', status = 'all', page = 1, pageSize = 50 } = {}) {
+async function findAll({ search = '', status = 'all', city = '', page = 1, pageSize = 50 } = {}) {
   const where = [];
   const params = [];
 
@@ -11,10 +11,18 @@ async function findAll({ search = '', status = 'all', page = 1, pageSize = 50 } 
     params.push(status);
   }
 
+  if (city && city.trim()) {
+    where.push('v.city = ?');
+    params.push(city.trim());
+  }
+
   if (search && search.trim()) {
-    where.push('(v.name LIKE ? OR v.contact_person LIKE ? OR v.phone LIKE ? OR v.email LIKE ? OR v.gst_number LIKE ?)');
-    const q = `%${search.trim()}%`;
-    params.push(q, q, q, q, q);
+    // Every word must match somewhere, so "steel pune" finds a Pune steel supplier.
+    for (const word of search.trim().split(/\s+/).slice(0, 6)) {
+      where.push('(v.name LIKE ? OR v.contact_person LIKE ? OR v.city LIKE ? OR v.phone LIKE ? OR v.email LIKE ? OR v.gst_number LIKE ? OR v.address LIKE ?)');
+      const q = `%${word}%`;
+      params.push(q, q, q, q, q, q, q);
+    }
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -47,6 +55,7 @@ async function findAll({ search = '', status = 'all', page = 1, pageSize = 50 } 
       gstNumber: r.gst_number,
       panNumber: r.pan_number,
       address: r.address,
+      city: r.city || null,
       billingAddress: r.billing_address,
       bankName: r.bank_name,
       bankAccountNumber: r.bank_account_number,
@@ -89,6 +98,7 @@ async function findById(id) {
     gstNumber: r.gst_number,
     panNumber: r.pan_number,
     address: r.address,
+    city: r.city || null,
     billingAddress: r.billing_address,
     bankName: r.bank_name,
     bankAccountNumber: r.bank_account_number,
@@ -118,9 +128,9 @@ async function create(payload) {
   const [res] = await pool.query(
     `INSERT INTO vendors (
       name, contact_person, phone, email, gst_number, pan_number,
-      address, billing_address, bank_name, bank_account_number, bank_ifsc,
+      address, city, billing_address, bank_name, bank_account_number, bank_ifsc,
       status, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       payload.name.trim(),
       payload.contact_person ? payload.contact_person.trim() : null,
@@ -129,6 +139,7 @@ async function create(payload) {
       payload.gst_number ? payload.gst_number.trim() : null,
       payload.pan_number ? payload.pan_number.trim() : null,
       payload.address ? payload.address.trim() : null,
+      payload.city ? String(payload.city).trim() : null,
       payload.billing_address ? payload.billing_address.trim() : null,
       payload.bank_name ? payload.bank_name.trim() : null,
       payload.bank_account_number ? payload.bank_account_number.trim() : null,
@@ -155,6 +166,7 @@ async function update(id, payload) {
     panNumber: 'pan_number',
     pan_number: 'pan_number',
     address: 'address',
+    city: 'city',
     billingAddress: 'billing_address',
     billing_address: 'billing_address',
     bankName: 'bank_name',
@@ -182,6 +194,15 @@ async function update(id, payload) {
   return findById(id);
 }
 
+/** Distinct vendor cities, with how many vendors are in each - for the city filter. */
+async function findCities() {
+  const [rows] = await pool.query(
+    `SELECT city, COUNT(*) AS vendors FROM vendors
+     WHERE city IS NOT NULL AND city <> '' GROUP BY city ORDER BY city`
+  );
+  return rows.map((r) => ({ city: r.city, vendors: Number(r.vendors) }));
+}
+
 async function remove(id) {
   const [res] = await pool.query('DELETE FROM vendors WHERE id = ?', [id]);
   return res.affectedRows > 0;
@@ -190,6 +211,7 @@ async function remove(id) {
 module.exports = {
   findAll,
   findById,
+  findCities,
   create,
   update,
   remove,

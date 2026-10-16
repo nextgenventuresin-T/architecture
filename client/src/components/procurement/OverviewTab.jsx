@@ -5,7 +5,7 @@ import { Card, CardHeader, CardBody } from '../ui/Card';
 import Badge from '../ui/Badge';
 import InfoList from '../projects/InfoList';
 import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
-import { PRIORITY_LABELS, PRIORITY_TONE, PROCUREMENT_KIND_LABELS, procurementFlowLabel } from '../../utils/procurementOptions';
+import { PRIORITY_LABELS, PRIORITY_TONE, PROCUREMENT_KIND_LABELS, procurementFlowLabel, DELIVERY_MODE_LABELS } from '../../utils/procurementOptions';
 
 /** Project/site, material, supplier and the request's own quantity/cost details. */
 export default function OverviewTab({ request, movement }) {
@@ -19,6 +19,8 @@ export default function OverviewTab({ request, movement }) {
             items={[
               { label: 'Type', value: PROCUREMENT_KIND_LABELS[request.kind] || 'Project / site' },
               { label: 'Flow', value: procurementFlowLabel(request) },
+              ...(request.deliveryMode ? [{ label: 'Delivery', value: DELIVERY_MODE_LABELS[request.deliveryMode] }] : []),
+              ...(request.area ? [{ label: 'Area', value: <span className="font-semibold text-brand-700">{request.area.name}</span> }] : []),
               { label: 'Source', value: request.source?.name || request.supplier || '—' },
               { label: 'Destination', value: request.destination?.name || (request.project ? `${request.project.name}${request.site ? ` · ${request.site.name}` : ''}` : '—') },
               {
@@ -94,13 +96,15 @@ export default function OverviewTab({ request, movement }) {
         </CardBody>
       </Card>
 
-      {(request.vehicleNumber || request.driverName || request.challanNumber || request.invoiceNumber || request.remarks) && (
+      {(request.vehicleNumber || request.driverName || request.challanNumber || request.invoiceNumber || request.remarks || request.transportCost != null || request.transportPaid > 0) && (
         <Card>
           <CardHeader title="Transport & Delivery Challan" description="Vehicle, driver, challan and tax invoice details." />
           <CardBody>
             <InfoList
               columns={2}
               items={[
+                ...(request.transportCost != null ? [{ label: 'Transport (quoted)', value: formatCurrency(request.transportCost) }] : []),
+                ...(request.transportPaid > 0 ? [{ label: 'Transport paid', value: <span>{formatCurrency(request.transportPaid)} <span className="text-xs text-ink-subtle">· booked as {request.transportCategory}</span></span> }] : []),
                 ...(request.vehicleNumber ? [{ label: 'Vehicle Number', value: <span className="font-mono font-bold text-ink">{request.vehicleNumber}</span> }] : []),
                 ...(request.driverName ? [{ label: 'Driver', value: `${request.driverName}${request.driverPhone ? ` (${request.driverPhone})` : ''}` }] : []),
                 ...(request.challanNumber ? [{ label: 'Delivery Challan No', value: <span className="font-mono">{request.challanNumber}</span> }] : []),
@@ -122,6 +126,11 @@ export default function OverviewTab({ request, movement }) {
             items={[
               { label: 'Requested by', value: request.requestedBy?.name ?? 'Not recorded' },
               { label: 'Required by', value: formatDate(request.requiredDate) },
+              // A machine is requested for a period: from a date, for N days.
+              ...(request.itemType === 'tool' && request.rentalDays ? [{
+                label: 'Machine needed for',
+                value: `${request.rentalDays} day(s)${request.rentalStartDate ? ` · ${formatDate(request.rentalStartDate)} to ${formatDate(request.rentalEndDate)}` : ''}`,
+              }] : []),
               { label: 'Raised on', value: formatDate(request.createdAt) },
               { label: 'Last updated', value: formatDate(request.updatedAt) },
             ]}

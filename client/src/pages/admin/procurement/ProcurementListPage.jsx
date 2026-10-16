@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Eye, Pencil, PackageCheck, ShoppingCart, LayoutGrid, Table as TableIcon } from 'lucide-react';
+import { Plus, Eye, Pencil, PackageCheck, ShoppingCart, LayoutGrid, Table as TableIcon, Layers } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
 import DataTable from '../../../components/ui/DataTable';
@@ -15,6 +15,7 @@ import Pagination from '../../../components/projects/Pagination';
 import useAsync from '../../../hooks/useAsync';
 import { procurementApi } from '../../../api/procurementApi';
 import ReceiveMovementDialog from '../../../components/procurement/ReceiveMovementDialog';
+import PendingAuthorisationAlert from '../../../components/procurement/PendingAuthorisationAlert';
 import { formatCurrency, formatNumber, formatDate } from '../../../utils/format';
 import {
   PROCUREMENT_STATUS_LABELS,
@@ -26,6 +27,9 @@ import {
   PROCUREMENT_KIND_TONE,
   PROCUREMENT_KIND_OPTIONS,
   EDITABLE_STATUSES,
+  DELIVERY_MODE_OPTIONS,
+  DELIVERY_MODE_LABELS,
+  DELIVERY_MODE_TONE,
 } from '../../../utils/procurementOptions';
 
 const INITIAL_FILTERS = {
@@ -33,6 +37,7 @@ const INITIAL_FILTERS = {
   status: 'all',
   priority: 'all',
   kind: 'all',
+  deliveryMode: 'all',
   projectId: 'all',
   siteId: 'all',
   supplier: 'all',
@@ -77,13 +82,14 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
         status: filters.status,
         priority: filters.priority,
         kind: filters.kind !== 'all' ? filters.kind : undefined,
+        deliveryMode: filters.deliveryMode !== 'all' ? filters.deliveryMode : undefined,
         projectId: filters.projectId !== 'all' ? filters.projectId : undefined,
         siteId: filters.siteId !== 'all' ? filters.siteId : undefined,
         supplier: filters.supplier !== 'all' ? filters.supplier : undefined,
         page: filters.page,
         pageSize: viewMode === 'table' ? 50 : 10,
       }),
-    [filters.search, filters.status, filters.priority, filters.kind, filters.projectId, filters.siteId, filters.supplier, filters.page, viewMode]
+    [filters.search, filters.status, filters.priority, filters.kind, filters.deliveryMode, filters.projectId, filters.siteId, filters.supplier, filters.page, viewMode]
   );
 
   const { data, isLoading, error, reload } = useAsync(load, [load]);
@@ -110,7 +116,10 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
   }
 
   const kindBadge = (row) => (
-    <Badge tone={PROCUREMENT_KIND_TONE[row.kind] ?? 'neutral'} title={PROCUREMENT_KIND_LABELS[row.kind] ?? row.kind}>{procurementFlowLabel(row)}</Badge>
+    <div className="space-y-1">
+      <Badge tone={PROCUREMENT_KIND_TONE[row.kind] ?? 'neutral'} title={PROCUREMENT_KIND_LABELS[row.kind] ?? row.kind}>{procurementFlowLabel(row)}</Badge>
+      {row.deliveryMode && <Badge tone={DELIVERY_MODE_TONE[row.deliveryMode] ?? 'neutral'}>{DELIVERY_MODE_LABELS[row.deliveryMode]}</Badge>}
+    </div>
   );
   const statusBadge = (row) => (
     <Badge tone={PROCUREMENT_STATUS_TONE[row.status] ?? 'neutral'}>{PROCUREMENT_STATUS_LABELS[row.status] ?? row.status}</Badge>
@@ -124,6 +133,11 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
         <div className="min-w-0">
           <Link to={`${modulePath}/${row.id}`} className="font-medium text-ink hover:text-brand-700 hover:underline">{row.requestNumber}</Link>
           <p className="mt-0.5 text-xs text-ink-subtle">{formatDate(row.createdAt)}</p>
+          {row.batch && (
+            <Link to={`${modulePath}/batch/${row.batch.id}`} className="mt-0.5 inline-flex items-center gap-1 rounded bg-brand-50 px-1.5 py-0.5 text-[11px] font-semibold text-brand-700 hover:underline">
+              <Layers className="h-3 w-3" aria-hidden="true" /> {row.batch.number}
+            </Link>
+          )}
         </div>
       ),
     },
@@ -145,6 +159,9 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
     { key: 'destination', header: 'Destination', value: (row) => row.destination?.name || projectName(row), render: (row) => <span className="text-xs text-ink-muted">{row.destination?.name || projectName(row)}</span> },
     { key: 'project', header: 'Project', value: (row) => row.project?.name || '', render: (row) => <span className="text-xs text-ink-subtle">{row.project?.name || '—'}</span> },
     { key: 'site', header: 'Site', value: (row) => row.site?.name || '', render: (row) => <span className="text-xs text-ink-subtle">{row.site?.name || '—'}</span> },
+    { key: 'area', header: 'Area', value: (row) => row.area?.name || '', render: (row) => <span className="text-xs text-ink-subtle">{row.area?.name || '—'}</span> },
+    { key: 'delivery', header: 'Delivery', value: (row) => DELIVERY_MODE_LABELS[row.deliveryMode] || '', render: (row) => <span className="text-xs text-ink-muted">{DELIVERY_MODE_LABELS[row.deliveryMode] || '—'}</span> },
+    { key: 'transport', header: 'Transport', align: 'right', value: (row) => row.transportPaid || row.transportCost || 0, render: (row) => <span className="tabular-nums text-xs text-ink-muted" title={row.transportCategory}>{row.transportPaid ? formatCurrency(row.transportPaid) : row.transportCost ? `${formatCurrency(row.transportCost)} quoted` : '—'}</span> },
     { key: 'rate', header: 'Cost / Unit', align: 'right', value: (row) => row.purchaseRate || row.estimatedRate || 0, render: (row) => <span className="tabular-nums text-ink">{formatCurrency(row.purchaseRate || row.estimatedRate || 0)}</span> },
     { key: 'amount', header: 'Total Value', align: 'right', value: (row) => amountOf(row), render: (row) => <span className="tabular-nums font-semibold text-ink">{formatCurrency(amountOf(row))}</span> },
     { key: 'status', header: 'Status', value: (row) => row.status, render: statusBadge },
@@ -158,7 +175,7 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
     { key: 'where', header: 'Destination', render: (row) => (
       <div className="whitespace-nowrap">
         <p className="text-ink-muted">{row.destination?.name || projectName(row)}</p>
-        {row.site && <p className="text-xs text-ink-subtle">{row.site.name}</p>}
+        {(row.site || row.area) && <p className="text-xs text-ink-subtle">{[row.site?.name, row.area?.name].filter(Boolean).join(' · ')}</p>}
       </div>
     ) },
     { key: 'total', header: 'Amount', align: 'right', render: (row) => <span className="tabular-nums text-ink-muted">{formatCurrency(amountOf(row))}</span> },
@@ -181,17 +198,30 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
         description="Raise, approve, order and fulfil material purchases — for projects, the central warehouse and contractors."
         breadcrumbs={[{ label: 'Dashboard', to: '/admin' }, { label: 'Procurement' }]}
         actions={
-          <Link to={`${modulePath}/new`}>
-            <Button>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              Add procurement request
-            </Button>
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link to={`${modulePath}/new-batch`}>
+              <Button>
+                <Layers className="h-4 w-4" aria-hidden="true" />
+                New multi-item request
+              </Button>
+            </Link>
+            <Link to={`${modulePath}/new`}>
+              <Button variant="secondary">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Single item
+              </Button>
+            </Link>
+          </div>
         }
       />
 
       {receiveFlash && <Alert tone="positive" className="mb-4" onClose={() => setReceiveFlash(null)}>{receiveFlash}</Alert>}
       {receiveError && <Alert tone="error" className="mb-4" onClose={() => setReceiveError(null)}>{receiveError.message}</Alert>}
+
+      {/* Only Admin decides; this page is Admin's own workspace when basePath is '/admin'. */}
+      {basePath === '/admin' && (
+        <PendingAuthorisationAlert modulePath={modulePath} onDecided={() => { reload(); loadLookups(); }} />
+      )}
 
       {lookups.summary && (
         <ProcurementSummary
@@ -223,6 +253,13 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
                 onChange={(e) => setFilters((f) => ({ ...f, kind: e.target.value, page: 1 }))}
                 className="w-[170px]"
                 options={[{ value: 'all', label: 'All types' }, ...PROCUREMENT_KIND_OPTIONS]}
+              />
+              <Select
+                label="Delivery"
+                value={filters.deliveryMode}
+                onChange={(e) => setFilters((f) => ({ ...f, deliveryMode: e.target.value, page: 1 }))}
+                className="w-[160px]"
+                options={[{ value: 'all', label: 'All deliveries' }, ...DELIVERY_MODE_OPTIONS]}
               />
               <div className="inline-flex overflow-hidden rounded-lg border border-line">
                 <button type="button" onClick={() => setViewMode('normal')}

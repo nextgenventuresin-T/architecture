@@ -36,9 +36,16 @@ const getPhoto = asyncHandler(async (req, res) => {
 });
 
 const taskMaterials = asyncHandler(async (req, res) => {
-  const cId = req.hrScope?.role === 'contractor' ? req.hrScope.contractorId : Number(req.query.contractorId);
+  // Contractor: their own stock. PM on a site with no contractor: that site's Site Store.
   const subtaskId = req.query.subtaskId ? Number(req.query.subtaskId) : null;
-  res.json({ success: true, data: { materials: await dailyWorkService.getTaskMaterials(Number(req.query.taskId), cId, subtaskId) } });
+  const materials = await dailyWorkService.getTaskMaterialsFor(Number(req.query.taskId), req.hrScope, req.query.contractorId, subtaskId);
+  res.json({ success: true, data: { materials } });
 });
 
-module.exports = { list, detail, create, getPhoto, taskMaterials };
+const taskTools = asyncHandler(async (req, res) => {
+  const subtaskId = req.query.subtaskId ? Number(req.query.subtaskId) : null;
+  const tools = await dailyWorkService.getTaskToolsFor(Number(req.query.taskId), req.hrScope, req.query.contractorId, subtaskId);
+  res.json({ success: true, data: { tools } });
+});
+
+module.exports = { list, detail, create, getPhoto, taskMaterials, taskTools };

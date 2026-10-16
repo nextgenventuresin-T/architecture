@@ -6,6 +6,7 @@ import Alert from '../ui/Alert';
 import hrApi from '../../api/hrApi';
 import tasksApi from '../../api/tasksApi';
 import { formatCurrency } from '../../utils/format';
+import SearchableSelect from '../ui/SearchableSelect';
 
 function calcWorkingDays(startDate, endDate) {
   if (!startDate || !endDate) return 0;
@@ -331,7 +332,7 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
             {subtasks.length > 0 && (
               <div>
                 <label className="block text-xs font-medium text-ink mb-1">Assign to Subtask</label>
-                <select
+                <SearchableSelect
                   value={subtaskId}
                   onChange={(e) => setSubtaskId(e.target.value)}
                   className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500"
@@ -340,7 +341,7 @@ export default function AssignWorkerModal({ taskId, task, isOpen, onClose, onAss
                   {subtasks.map((st) => (
                     <option key={st.id} value={st.id}>{st.name}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               </div>
             )}
 

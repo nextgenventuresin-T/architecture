@@ -87,6 +87,8 @@ const requestRules = (isCreate) => {
     body('supplier_contact').optional({ nullable: true }).trim().isLength({ max: 150 }),
     required(body('quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.'), 'Enter a quantity.').toFloat(),
     body('unit').optional({ nullable: true }).trim().isLength({ max: 20 }),
+    body('area_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Select a valid area.').toInt(),
+    body('transport_cost').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Transport cost cannot be negative.').toFloat(),
     body('estimated_rate').optional().isFloat({ min: 0 }).withMessage('Rate cannot be negative.').toFloat(),
     body('required_date').optional({ nullable: true }).isISO8601().withMessage('Enter a valid required date.'),
     body('priority').optional().isIn(PRIORITIES).withMessage('Choose a valid priority.'),
@@ -126,6 +128,56 @@ const requestRules = (isCreate) => {
 // Declared before `/:id` so the literal path is not swallowed by the id rule.
 router.get('/lookups', controller.lookups);
 
+// Multi-item requests (batches). Each item is an ordinary request underneath, so every
+// per-item rule (who may approve, order, send or receive) is still enforced in the service.
+router.post(
+  '/batches',
+  canManage,
+  [
+    body('flow').isIn(['vendor_central', 'vendor_site', 'central_contractor', 'contractor_contractor', 'supplier_contractor'])
+      .withMessage('Choose what kind of multi-item request this is.'),
+    body('items').isArray({ min: 1, max: 50 }).withMessage('Add between 1 and 50 items.'),
+    body('items.*.quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
+    body('items.*.material_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.tool_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.project_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.site_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.task_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.subtask_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.vendor_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.source_contractor_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.destination_contractor_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.estimated_rate').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Rate cannot be negative.').toFloat(),
+    body('items.*.purchase_rate').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Rate cannot be negative.').toFloat(),
+    body('items.*.transport_cost').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Transport cost cannot be negative.').toFloat(),
+    body('items.*.rental_days').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('items.*.rental_start_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('status').optional().isIn(['draft', 'requested']),
+    body('notes').optional({ nullable: true }).trim().isLength({ max: 2000 }),
+  ],
+  validate,
+  controller.createBatch
+);
+router.get('/batches/:batchId', [param('batchId').isInt({ min: 1 })], validate, controller.batchDetail);
+router.post(
+  '/batches/:batchId/:action',
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  [
+    param('batchId').isInt({ min: 1 }),
+    param('action').isIn(['submit', 'approve', 'reject', 'confirm', 'order', 'dispatch', 'receive']),
+    body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('driver_name').optional({ nullable: true }).trim().isLength({ max: 120 }),
+    body('driver_phone').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('challan_number').optional({ nullable: true }).trim().isLength({ max: 60 }),
+    body('transport_cost').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
+    body('order_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('expected_delivery_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    body('receiving_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+  ],
+  validate,
+  controller.batchAction
+);
+
 router.get(
   '/',
   [
@@ -141,6 +193,8 @@ router.get(
     query('supplier').optional().trim(),
     query('priority').optional().isIn([...PRIORITIES, 'all']).withMessage('Choose a valid priority filter.'),
     query('kind').optional().isIn([...KINDS, 'all']).withMessage('Choose a valid type filter.'),
+    query('areaId').optional().isInt({ min: 1 }).toInt(),
+    query('deliveryMode').optional().isIn(['direct_site', 'warehouse', 'transfer', 'all']).withMessage('Choose a valid delivery filter.'),
   ],
   validate,
   controller.list
@@ -181,19 +235,25 @@ router.post(
     body('ordered_quantity').optional().isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
     body('order_date').optional({ nullable: true }).isISO8601().withMessage('Enter a valid order date.'),
     body('expected_delivery_date').optional({ nullable: true }).isISO8601().withMessage('Enter a valid delivery date.'),
+    body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('driver_name').optional({ nullable: true }).trim().isLength({ max: 120 }),
+    body('driver_phone').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('challan_number').optional({ nullable: true }).trim().isLength({ max: 60 }),
   ],
   validate,
   controller.placeOrder
 );
 
 // Material receiving — also writes into the Interface 6 material_entries ledger.
+// A contractor may receive only a vendor order delivered to them (checked in the service).
 router.post(
   '/:id/receiving',
-  canReceive,
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
   [
     param('id').isInt({ min: 1 }),
     body('received_quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
     body('receiving_date').isISO8601().withMessage('Enter a valid receiving date.'),
+    body('transport_cost').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Transport cost cannot be negative.').toFloat(),
     body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
     body('notes').optional({ nullable: true }).trim().isLength({ max: 255 }),
   ],
@@ -258,9 +318,29 @@ router.post(
     body('expected_return_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
     body('purchase_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
     body('expiry_date').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+    // Dispatch to the contractor: the vehicle is verified when they receive it.
+    body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('driver_name').optional({ nullable: true }).trim().isLength({ max: 120 }),
+    body('driver_phone').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('challan_number').optional({ nullable: true }).trim().isLength({ max: 60 }),
   ],
   validate,
   controller.toolFulfil
+);
+
+// The receiving contractor (or Admin/Procurement/Warehouse) receives a dispatched
+// machine after verifying the vehicle. Receiver is enforced in the service.
+router.post(
+  '/:id/tool-receive',
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  [
+    param('id').isInt({ min: 1 }),
+    body('vehicle_number').trim().notEmpty().withMessage('Enter the arriving vehicle number.').isLength({ max: 40 }),
+    body('receiving_date').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Enter a valid date.'),
+    body('notes').optional({ nullable: true }).trim().isLength({ max: 255 }),
+  ],
+  validate,
+  controller.toolReceive
 );
 
 // SEND MATERIAL — Admin/Procurement/Warehouse for a Central -> Contractor

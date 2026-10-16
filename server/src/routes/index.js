@@ -24,6 +24,9 @@ const taskRoutes = require('./taskRoutes');
 const vendorRoutes = require('./vendorRoutes');
 const notificationRoutes = require('./notificationRoutes');
 const pmRoutes = require('./pmRoutes');
+const projectManagerRoutes = require('./projectManagerRoutes');
+const labourRoutes = require('./labourRoutes');
+const staffPortalRoutes = require('./staffPortalRoutes');
 
 const router = express.Router();
 
@@ -55,6 +58,11 @@ router.use('/tasks', taskRoutes);
 router.use('/vendors', vendorRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/pm', pmRoutes);
+router.use('/project-managers', projectManagerRoutes);
+router.use('/labour', labourRoutes);
+// "My Portal" (every login: own attendance + leave) and its Admin/HR side.
+router.use('/my-portal', staffPortalRoutes.myPortal);
+router.use('/staff-attendance', staffPortalRoutes.staff);
 
 // Future ERP modules mount here, one per interface.
 

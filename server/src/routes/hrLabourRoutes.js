@@ -166,7 +166,8 @@ const requestRules = (isCreate) => {
     required(body('skillCategory').trim().notEmpty().withMessage('Enter the skill/category needed.').isLength({ max: SKILL_MAX })),
     required(body('quantity').isInt({ min: 1 }).withMessage('Enter a quantity of at least 1.')).toInt(),
     required(body('requiredDate').isISO8601().withMessage('Enter a valid required date.')),
-    body('durationDays').optional().isInt({ min: 1 }).withMessage('Enter a valid duration in days.').toInt(),
+    // How many days the labour is needed: mandatory when raising a request.
+    required(body('durationDays').isInt({ min: 1 }).withMessage('Enter for how many days the labour is needed.')).toInt(),
     body('priority').optional().isIn(PRIORITIES).withMessage('Choose a valid priority.'),
     body('reason').optional({ nullable: true }).trim(),
     body('submit').optional().isBoolean().toBoolean(),

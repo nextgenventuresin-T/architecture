@@ -18,6 +18,11 @@ export const procurementApi = {
   lookups: () => axiosClient.get('/procurement/lookups').then((r) => r.data.data),
   detail: (id) => axiosClient.get(`/procurement/${id}`).then((r) => r.data.data),
   create: (payload) => axiosClient.post('/procurement', payload).then((r) => r.data.data.request),
+  // Multi-item requests: one batch, each item an ordinary request underneath.
+  createBatch: (payload) => axiosClient.post('/procurement/batches', payload).then((r) => r.data.data),
+  batch: (batchId) => axiosClient.get(`/procurement/batches/${batchId}`).then((r) => r.data.data),
+  batchAction: (batchId, action, payload = {}) =>
+    axiosClient.post(`/procurement/batches/${batchId}/${action}`, payload).then((r) => r.data.data),
   update: (id, payload) => axiosClient.put(`/procurement/${id}`, payload).then((r) => r.data.data.request),
   updateStatus: (id, status) =>
     axiosClient.patch(`/procurement/${id}/status`, { status }).then((r) => r.data.data.request),
@@ -26,6 +31,8 @@ export const procurementApi = {
   fulfil: (id, payload = {}) => axiosClient.post(`/procurement/${id}/fulfil`, payload).then((r) => r.data.data),
   // Machine requests: allocate a chosen serial / register a purchased or rented machine.
   toolFulfil: (id, payload = {}) => axiosClient.post(`/procurement/${id}/tool-fulfil`, payload).then((r) => r.data.data),
+  // The receiving contractor verifies the vehicle and receives a dispatched machine.
+  toolReceive: (id, payload) => axiosClient.post(`/procurement/${id}/tool-receive`, payload).then((r) => r.data.data),
   dispatch: (id, payload = {}) => axiosClient.post(`/procurement/${id}/dispatch`, payload).then((r) => r.data.data),
   // Real bill/invoice file (multipart upload; authenticated blob download).
   uploadBill: (id, file) => {

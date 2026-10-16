@@ -26,6 +26,7 @@ import EmployeeQuickViewModal from '../employees/EmployeeQuickViewModal';
 import useAsync from '../../hooks/useAsync';
 import { employeesApi } from '../../api/employeesApi';
 import { EMPLOYEE_STATUS_LABELS, EMPLOYEE_STATUS_TONE } from '../../utils/employeeOptions';
+import SearchableSelect from '../ui/SearchableSelect';
 
 /**
  * Single node in the interactive tree
@@ -345,7 +346,7 @@ export default function OrgHierarchyTab() {
 
           <div className="flex items-center gap-1.5">
             <Filter className="h-3.5 w-3.5 text-ink-subtle" />
-            <select
+            <SearchableSelect
               value={selectedDept}
               onChange={(e) => setSelectedDept(e.target.value)}
               className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -356,7 +357,7 @@ export default function OrgHierarchyTab() {
                   {d}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </div>
         </div>
 

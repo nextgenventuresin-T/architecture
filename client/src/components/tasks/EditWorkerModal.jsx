@@ -3,6 +3,7 @@ import { X, HardHat, Phone, CreditCard, DollarSign, Briefcase, FileText } from '
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import { hrApi } from '../../api/hrApi';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const DEFAULT_TRADES = [
   'General Labour',
@@ -230,7 +231,7 @@ export default function EditWorkerModal({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Trade / Skill Category</label>
-              <select
+              <SearchableSelect
                 value={skillCategory}
                 onChange={(e) => setSkillCategory(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500"
@@ -243,19 +244,19 @@ export default function EditWorkerModal({
                 {!DEFAULT_TRADES.includes(skillCategory) && skillCategory && (
                   <option value={skillCategory}>{skillCategory}</option>
                 )}
-              </select>
+              </SearchableSelect>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Status</label>
-              <select
+              <SearchableSelect
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500"
               >
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
-              </select>
+              </SearchableSelect>
             </div>
           </div>
 
@@ -270,7 +271,7 @@ export default function EditWorkerModal({
                   Company Labour (In-House)
                 </div>
               ) : (
-                <select
+                <SearchableSelect
                   value={contractorId}
                   onChange={(e) => setContractorId(e.target.value)}
                   className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500"
@@ -281,7 +282,7 @@ export default function EditWorkerModal({
                       {c.name}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               )}
             </div>
 

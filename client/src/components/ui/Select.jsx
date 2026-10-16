@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { ChevronDown } from 'lucide-react';
+import SearchableSelect from './SearchableSelect';
 
 /** Compact filter dropdown used across dashboard sections. */
 export default function Select({ label, value, onChange, options = [], children, className = '', ...props }) {
@@ -13,7 +14,7 @@ export default function Select({ label, value, onChange, options = [], children,
         </label>
       )}
       <div className="relative">
-        <select
+        <SearchableSelect
           id={id}
           value={value}
           onChange={onChange}
@@ -28,7 +29,7 @@ export default function Select({ label, value, onChange, options = [], children,
                   {option.label}
                 </option>
               ))}
-        </select>
+        </SearchableSelect>
         <ChevronDown
           className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle"
           aria-hidden="true"

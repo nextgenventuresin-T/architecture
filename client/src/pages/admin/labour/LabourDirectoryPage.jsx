@@ -35,6 +35,7 @@ import { projectsApi } from '../../../api/projectsApi';
 import { formatCurrency, formatDate } from '../../../utils/format';
 import QuickAddWorkerModal from '../../../components/tasks/QuickAddWorkerModal';
 import EditWorkerModal from '../../../components/tasks/EditWorkerModal';
+import SearchableSelect from '../../../components/ui/SearchableSelect';
 
 export default function LabourDirectoryPage() {
   // Main Top Tabs: 'daily_wage' | 'company_labour' | 'labour_diary'
@@ -605,7 +606,7 @@ export default function LabourDirectoryPage() {
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Project
                   </label>
-                  <select
+                  <SearchableSelect
                     value={dirProjectId}
                     onChange={(e) => {
                       setDirProjectId(e.target.value);
@@ -619,14 +620,14 @@ export default function LabourDirectoryPage() {
                         {p.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Site
                   </label>
-                  <select
+                  <SearchableSelect
                     value={dirSiteId}
                     onChange={(e) => {
                       setDirSiteId(e.target.value);
@@ -641,7 +642,7 @@ export default function LabourDirectoryPage() {
                         {s.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 {activeTab === 'daily_wage' && (
@@ -649,7 +650,7 @@ export default function LabourDirectoryPage() {
                     <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                       Contractor
                     </label>
-                    <select
+                    <SearchableSelect
                       value={dirContractorId}
                       onChange={(e) => {
                         setDirContractorId(e.target.value);
@@ -663,7 +664,7 @@ export default function LabourDirectoryPage() {
                           {c.name}
                         </option>
                       ))}
-                    </select>
+                    </SearchableSelect>
                   </div>
                 )}
 
@@ -671,7 +672,7 @@ export default function LabourDirectoryPage() {
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Today&apos;s Status
                   </label>
-                  <select
+                  <SearchableSelect
                     value={dirTodayStatus}
                     onChange={(e) => {
                       setDirTodayStatus(e.target.value);
@@ -683,14 +684,14 @@ export default function LabourDirectoryPage() {
                     <option value="worked">Worked Today</option>
                     <option value="assigned">Assigned (Not Logged)</option>
                     <option value="available">Available</option>
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Status
                   </label>
-                  <select
+                  <SearchableSelect
                     value={dirStatus}
                     onChange={(e) => {
                       setDirStatus(e.target.value);
@@ -701,7 +702,7 @@ export default function LabourDirectoryPage() {
                     <option value="all">All</option>
                     <option value="active">Active Only</option>
                     <option value="inactive">Inactive</option>
-                  </select>
+                  </SearchableSelect>
                 </div>
               </div>
             </CardBody>
@@ -1080,7 +1081,7 @@ export default function LabourDirectoryPage() {
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Project
                   </label>
-                  <select
+                  <SearchableSelect
                     value={diaryProjectId}
                     onChange={(e) => {
                       setDiaryProjectId(e.target.value);
@@ -1094,14 +1095,14 @@ export default function LabourDirectoryPage() {
                         {p.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Site
                   </label>
-                  <select
+                  <SearchableSelect
                     value={diarySiteId}
                     onChange={(e) => {
                       setDiarySiteId(e.target.value);
@@ -1116,14 +1117,14 @@ export default function LabourDirectoryPage() {
                         {s.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Month
                   </label>
-                  <select
+                  <SearchableSelect
                     value={diaryMonth}
                     onChange={(e) => {
                       setDiaryMonth(e.target.value);
@@ -1137,14 +1138,14 @@ export default function LabourDirectoryPage() {
                         {new Date(2026, m - 1, 1).toLocaleString('default', { month: 'long' })}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-semibold uppercase text-ink-subtle mb-1">
                     Year
                   </label>
-                  <select
+                  <SearchableSelect
                     value={diaryYear}
                     onChange={(e) => {
                       setDiaryYear(e.target.value);
@@ -1155,7 +1156,7 @@ export default function LabourDirectoryPage() {
                     <option value="">All Years</option>
                     <option value="2026">2026</option>
                     <option value="2025">2025</option>
-                  </select>
+                  </SearchableSelect>
                 </div>
               </div>
             </CardBody>

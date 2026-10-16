@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MapPin, ArrowRight, ShieldCheck, Users, AlertTriangle, Plus, Trash2, Building, Sparkles } from 'lucide-react';
 import { Card, CardHeader, CardBody } from '../ui/Card';
@@ -22,6 +22,12 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(null); // site id being deleted
   const [submitting, setSubmitting] = useState(false);
+  // Blocks a second click while a site is being created (state updates too late for that).
+  const creatingRef = useRef(false);
+  const errorText = (err, fallback) => {
+    const details = err.response?.data?.error?.details;
+    return (details && Object.values(details)[0]) || err.response?.data?.error?.message || err.message || fallback;
+  };
   const [error, setError] = useState(null);
 
   // Add Site Form state
@@ -55,6 +61,8 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
   };
 
   const handleQuickAddDefault = async () => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
     try {
       setSubmitting(true);
       setError(null);
@@ -70,8 +78,9 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
       });
       if (typeof onChanged === 'function') onChanged();
     } catch (err) {
-      setError(err.response?.data?.error?.message || err.message || 'Failed to create default site');
+      setError(errorText(err, 'Failed to create default site'));
     } finally {
+      creatingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -87,6 +96,8 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
       return;
     }
 
+    if (creatingRef.current) return;
+    creatingRef.current = true;
     try {
       setSubmitting(true);
       setError(null);
@@ -100,8 +111,9 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
       setIsAddOpen(false);
       if (typeof onChanged === 'function') onChanged();
     } catch (err) {
-      setError(err.response?.data?.error?.message || err.message || 'Failed to create site');
+      setError(errorText(err, 'Failed to create site'));
     } finally {
+      creatingRef.current = false;
       setSubmitting(false);
     }
   };

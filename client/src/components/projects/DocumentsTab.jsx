@@ -7,6 +7,7 @@ import EmptyState from '../ui/EmptyState';
 import Alert from '../ui/Alert';
 import { formatDate } from '../../utils/format';
 import { projectsApi } from '../../api/projectsApi';
+import SearchableSelect from '../ui/SearchableSelect';
 
 function formatFileSize(bytes) {
   if (!bytes || bytes === 0) return '0 B';
@@ -118,7 +119,7 @@ export default function DocumentsTab({ detail, onChanged }) {
 
             <div className="w-48">
               <label className="block text-xs font-medium text-ink mb-1.5">Document Type</label>
-              <select
+              <SearchableSelect
                 value={docType}
                 onChange={(e) => setDocType(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-2.5 py-2 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -129,7 +130,7 @@ export default function DocumentsTab({ detail, onChanged }) {
                 <option value="specification">Technical Specification</option>
                 <option value="site_report">Site Report</option>
                 <option value="other">Other Document</option>
-              </select>
+              </SearchableSelect>
             </div>
 
             <Button

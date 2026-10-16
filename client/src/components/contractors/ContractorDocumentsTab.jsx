@@ -7,6 +7,7 @@ import Alert from '../ui/Alert';
 import EmptyState from '../ui/EmptyState';
 import { formatDate } from '../../utils/format';
 import { contractorsApi } from '../../api/contractorsApi';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const DOC_TYPES = [
   { value: 'gst', label: 'GST / Tax Document' },
@@ -124,7 +125,7 @@ export default function ContractorDocumentsTab({ contractor, documents = [], onC
                 <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-1">
                   Document Type *
                 </label>
-                <select
+                <SearchableSelect
                   value={docType}
                   onChange={(e) => setDocType(e.target.value)}
                   className="w-full rounded-xl border border-line bg-white px-3.5 py-2 text-sm text-ink focus:border-brand-500 focus:outline-none"
@@ -132,7 +133,7 @@ export default function ContractorDocumentsTab({ contractor, documents = [], onC
                   {DOC_TYPES.map((dt) => (
                     <option key={dt.value} value={dt.value}>{dt.label}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               </div>
 
               <div>

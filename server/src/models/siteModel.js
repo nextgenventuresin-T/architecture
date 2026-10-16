@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const ApiError = require('../utils/ApiError');
 
 const SITE_SELECT = `
   SELECT s.*, p.name AS project_name, p.code AS project_code,
@@ -19,22 +20,59 @@ async function findById(id) {
 
 const WRITABLE = ['project_id', 'name', 'address', 'site_engineer_id', 'contractor_id', 'labour_count', 'progress', 'status', 'safety_status'];
 
-async function create(payload) {
-  const columns = WRITABLE.filter((k) => payload[k] !== undefined);
-  const [result] = await pool.query(
-    `INSERT INTO sites (${columns.map((c) => `\`${c}\``).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
-    columns.map((k) => payload[k])
+/**
+ * A project can never have two sites with the same name (e.g. "Quick add Site 1" clicked
+ * twice). Checked here for a clear message; the unique index uq_sites_project_name is what
+ * stops two simultaneous clicks, so its duplicate-key error is turned into the same message.
+ */
+function duplicateNameError(name) {
+  return ApiError.badRequest('Check the highlighted fields.', {
+    name: `This project already has a site named "${String(name).trim()}". Use a different name.`,
+  });
+}
+async function assertNameFree(projectId, name, excludeId = null) {
+  if (!projectId || name === undefined || name === null) return;
+  const [rows] = await pool.query(
+    `SELECT id FROM sites WHERE project_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))${excludeId ? ' AND id <> ?' : ''} LIMIT 1`,
+    [projectId, name, ...(excludeId ? [excludeId] : [])]
   );
-  return result.insertId;
+  if (rows.length) throw duplicateNameError(name);
+}
+const isDuplicateName = (e) => e && (e.code === 'ER_DUP_ENTRY' || e.errno === 1062) && /uq_sites_project_name/.test(e.message);
+
+async function create(payload) {
+  if (typeof payload.name === 'string') payload = { ...payload, name: payload.name.trim() };
+  await assertNameFree(payload.project_id, payload.name);
+  const columns = WRITABLE.filter((k) => payload[k] !== undefined);
+  try {
+    const [result] = await pool.query(
+      `INSERT INTO sites (${columns.map((c) => `\`${c}\``).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+      columns.map((k) => payload[k])
+    );
+    return result.insertId;
+  } catch (e) {
+    if (isDuplicateName(e)) throw duplicateNameError(payload.name);
+    throw e;
+  }
 }
 
 async function update(id, payload) {
   const columns = WRITABLE.filter((k) => payload[k] !== undefined && k !== 'project_id');
   if (!columns.length) return;
-  await pool.query(
-    `UPDATE sites SET ${columns.map((c) => `\`${c}\` = ?`).join(', ')} WHERE id = ?`,
-    [...columns.map((k) => payload[k]), id]
-  );
+  if (typeof payload.name === 'string') {
+    payload = { ...payload, name: payload.name.trim() };
+    const [[site]] = await pool.query('SELECT project_id FROM sites WHERE id = ?', [id]);
+    if (site) await assertNameFree(site.project_id, payload.name, id);
+  }
+  try {
+    await pool.query(
+      `UPDATE sites SET ${columns.map((c) => `\`${c}\` = ?`).join(', ')} WHERE id = ?`,
+      [...columns.map((k) => payload[k]), id]
+    );
+  } catch (e) {
+    if (isDuplicateName(e)) throw duplicateNameError(payload.name);
+    throw e;
+  }
 }
 
 async function remove(id) {

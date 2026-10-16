@@ -3,7 +3,7 @@ import { Card, CardHeader, CardBody } from '../ui/Card';
 import DataTable from '../ui/DataTable';
 import Button from '../ui/Button';
 import ProgressBar from '../ui/ProgressBar';
-import { formatDate, formatNumber } from '../../utils/format';
+import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
 
 /** Remaining quantity, a progress bar toward the ordered total, and every receiving record so far. */
 export default function ReceivingTab({ request, receipts, onReceive, canReceive }) {
@@ -35,6 +35,12 @@ export default function ReceivingTab({ request, receipts, onReceive, canReceive 
       header: 'Quantity received',
       align: 'right',
       render: (row) => <span className="tabular-nums text-ink">{formatNumber(row.receivedQuantity)} {request.unit}</span>,
+    },
+    {
+      key: 'transport',
+      header: 'Transport',
+      align: 'right',
+      render: (row) => <span className="tabular-nums text-ink-muted" title={row.transportExpenseId ? 'Booked as a transport expense' : undefined}>{row.transportCost > 0 ? formatCurrency(row.transportCost) : '—'}</span>,
     },
     { key: 'notes', header: 'Notes', render: (row) => <span className="text-ink-muted">{row.notes || '—'}</span> },
   ];

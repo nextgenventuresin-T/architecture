@@ -17,31 +17,42 @@ const approvalsFor = (path) => ({ label: 'Approvals', path: `${path}/approvals`,
 // still runs the same way so a customised permission matrix is respected.
 const reportsFor = (path) => ({ label: 'Reports', path: `${path}/reports`, permission: 'reports:view' });
 
+// 'My Portal' - own attendance (check in / out) and leave - is for EVERY signed-in user,
+// so it carries no permission gate.
+const myPortalFor = (path) => ({ label: 'My Portal', path: `${path}/my-portal` });
+
 const ROLE_MODULES = {
   [ROLES.FINANCE]: [
+    myPortalFor('/finance'),
     { label: 'Finance', path: '/finance', permission: 'finance:view' },
     approvalsFor('/finance'),
     reportsFor('/finance'),
   ],
   [ROLES.PROCUREMENT]: [
+    myPortalFor('/procurement'),
     { label: 'Procurement', path: '/procurement', permission: 'procurement:view' },
     approvalsFor('/procurement'),
     reportsFor('/procurement'),
   ],
   [ROLES.WAREHOUSE]: [
+    myPortalFor('/warehouse'),
     { label: 'Warehouse', path: '/warehouse', permission: 'warehouse:view' },
     reportsFor('/warehouse'),
   ],
   [ROLES.HR]: [
+    myPortalFor('/hr'),
     { label: 'Human Resources', path: '/hr', permission: 'hr:view' },
+    { label: 'Staff Attendance & Leave', path: '/hr/staff-attendance' },
     approvalsFor('/hr'),
     reportsFor('/hr'),
   ],
   [ROLES.CONTRACTOR]: [
+    myPortalFor('/contractor'),
     { label: 'Dashboard', path: '/contractor', permission: 'dashboard:view' },
     { label: 'Projects & Sites', path: '/contractor/projects', permission: 'projects:view' },
     { label: 'PO & Contracts', path: '/contractor/contracts', permission: 'dashboard:view' },
     { label: 'Daily Work Updates', path: '/contractor/daily-work', permission: 'projects:view' },
+    { label: 'Workers & Attendance', path: '/contractor/labour', permission: 'dashboard:view' },
     { label: 'Site Warehouse', path: '/contractor/site-warehouse', permission: 'dashboard:view' },
     { label: 'Tools & Machines', path: '/contractor/tools', permission: 'dashboard:view' },
     { label: 'Material Requests', path: '/contractor/procurement', permission: 'procurement:view' },
@@ -51,10 +62,12 @@ const ROLE_MODULES = {
     reportsFor('/contractor'),
   ],
   [ROLES.PROJECT_MANAGER]: [
+    myPortalFor('/pm'),
     { label: 'Dashboard', path: '/pm', permission: 'dashboard:view' },
     { label: 'Projects & Sites', path: '/pm/projects', permission: 'projects:view' },
     { label: 'Contractors', path: '/pm/contractors', permission: 'projects:view' },
     { label: 'Daily Work Updates', path: '/pm/daily-work', permission: 'projects:view' },
+    { label: 'Log Daily Work', path: '/pm/daily-work/log', permission: 'projects:view' },
     { label: 'Site Inventory / Stock', path: '/pm/site-warehouse', permission: 'warehouse:view' },
     { label: 'Labour Attendance', path: '/pm/attendance', permission: 'projects:view' },
     { label: 'Contractor Procurement', path: '/pm/procurement', permission: 'procurement:view' },
@@ -65,6 +78,7 @@ const ROLE_MODULES = {
     reportsFor('/pm'),
   ],
   [ROLES.EMPLOYEE]: [
+    myPortalFor('/employee'),
     { label: 'Employees', path: '/employee', permission: 'employees:view' },
     approvalsFor('/employee'),
     reportsFor('/employee'),
@@ -72,6 +86,7 @@ const ROLE_MODULES = {
 };
 
 export function hasPermission(user, permission) {
+  if (!permission) return true;
   return user?.role === ROLES.ADMIN || user?.permissions?.includes(permission);
 }
 

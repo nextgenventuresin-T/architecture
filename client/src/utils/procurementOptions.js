@@ -51,10 +51,33 @@ export const PRIORITY_TONE = {
   urgent: 'danger',
 };
 
+/**
+ * An outside vendor delivering straight to a contractor (their site / warehouse):
+ * Admin places the order with the vendor's vehicle + driver, the contractor receives it.
+ */
+export const isVendorToContractor = (request) =>
+  request?.sourceType === 'supplier'
+  && request?.kind !== 'central_purchase'
+  && (Boolean(request?.destination?.contractorId || request?.responsibleContractor?.id) || isPmRunSite(request));
+
+/** Delivered to a site with no contractor: its Site Store, received by the site's Project Manager. */
+export const isPmRunSite = (request) =>
+  !request?.responsibleContractor?.id && !request?.destination?.contractorId
+  && (request?.destinationType === 'site_store' || Boolean(request?.site?.id));
+
+export const receivingContractorName = (request) => {
+  if (isPmRunSite(request)) {
+    return request?.destinationType === 'site_store' && request?.destination?.name
+      ? `${request.destination.name} (Project Manager)`
+      : `${request?.site?.name || 'the site'} Site Store (Project Manager)`;
+  }
+  return request?.responsibleContractor?.name || request?.destination?.name || 'the contractor';
+};
+
 /** Procurement flow type (destination-oriented). */
 export const PROCUREMENT_KIND_LABELS = {
-  project_site: 'Project / site',
-  central_purchase: 'Central purchase',
+  project_site: 'Direct to site',
+  central_purchase: 'Warehouse purchase',
   contractor_supply: 'Contractor supply',
   internal_transfer: 'Internal transfer',
 };
@@ -67,8 +90,8 @@ export const PROCUREMENT_KIND_TONE = {
 };
 
 export const PROCUREMENT_KIND_OPTIONS = [
-  { value: 'project_site', label: 'Project / site' },
-  { value: 'central_purchase', label: 'Central warehouse purchase' },
+  { value: 'project_site', label: 'Direct to site (vendor delivers to project site)' },
+  { value: 'central_purchase', label: 'Warehouse purchase (vendor delivers to central warehouse)' },
   { value: 'contractor_supply', label: 'Contractor supply' },
   { value: 'internal_transfer', label: 'Internal transfer' },
 ];
@@ -88,8 +111,20 @@ export function procurementFlowLabel(request) {
       ? 'Central Warehouse → Contractor'
       : 'Outside Supplier → Contractor';
   }
-  return 'Project / site';
+  return 'Outside Supplier → Site (direct)';
 }
+
+/**
+ * How the goods arrive (server: deliveryMode). Direct = vendor straight to the
+ * project site; warehouse = bought into / issued from the central warehouse.
+ */
+export const DELIVERY_MODE_OPTIONS = [
+  { value: 'direct_site', label: 'Direct to site' },
+  { value: 'warehouse', label: 'Via warehouse' },
+  { value: 'transfer', label: 'Contractor transfer' },
+];
+export const DELIVERY_MODE_LABELS = Object.fromEntries(DELIVERY_MODE_OPTIONS.map((o) => [o.value, o.label]));
+export const DELIVERY_MODE_TONE = { direct_site: 'positive', warehouse: 'brand', transfer: 'warning' };
 
 export const SOURCE_TYPE_OPTIONS = [
   { value: 'supplier', label: 'Outside / third-party supplier' },

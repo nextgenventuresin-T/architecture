@@ -24,6 +24,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
   const [details, setDetails] = useState(null);
   const [rate, setRate] = useState('');
   const [total, setTotal] = useState('');
+  const [transport, setTransport] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState(null);
   const [fetching, setFetching] = useState(false);
@@ -36,6 +37,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
     setError(null);
     setRate(request?.purchaseRate != null ? String(request.purchaseRate) : '');
     setTotal(request?.totalAmount != null ? String(request.totalAmount) : '');
+    setTransport('');
   }, [request]);
 
   if (!request) return null;
@@ -81,6 +83,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
     setError(null);
     const errs = {};
     if (!rate || Number(rate) <= 0) errs.purchase_rate = 'Enter the actual cost per unit.';
+    if (transport !== '' && !(Number(transport) >= 0)) errs.transport_cost = 'Enter a valid amount.';
     if (Object.keys(errs).length) { setFieldErrors(errs); return; }
     setSaving(true);
     try {
@@ -88,6 +91,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
         vehicle_number: needsVehicle ? vehicle.trim() : undefined,
         purchase_rate: Number(rate),
         total_amount: total ? Number(total) : undefined,
+        transport_cost: transport !== '' ? Number(transport) : undefined,
         receiving_date: today,
       });
       onSaved('Material received into warehouse stock — receipt verified and recorded once.');
@@ -187,6 +191,21 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
               </div>
             </>
           ) : null}
+
+          {(!needsVehicle || details) && (
+            <InputField
+              label="Transport cost paid (optional)"
+              type="number"
+              min="0"
+              step="0.01"
+              value={transport}
+              onChange={(e) => { setTransport(e.target.value); setFieldErrors((c) => ({ ...c, transport_cost: undefined })); }}
+              error={fieldErrors.transport_cost}
+              hint={request.project
+                ? `Booked once as ${request.transportCategory || 'Material Transport'} on ${request.project.name} - separate from the item cost.`
+                : 'Warehouse restock: no project to charge, so it stays on the receipt record.'}
+            />
+          )}
 
           {!needsVehicle && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

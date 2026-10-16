@@ -20,6 +20,8 @@ async function listTasks(query = {}, hrScope) {
     contractorId,
     status: query.status,
     search: query.search,
+    areaId: query.areaId,
+    managerId: query.managerId,
   });
 
   return { tasks };

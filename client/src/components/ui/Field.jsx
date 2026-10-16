@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { ChevronDown } from 'lucide-react';
+import SearchableSelect from './SearchableSelect';
 
 /**
  * Labelled form controls used across the create/edit forms. Keeping select,
@@ -66,7 +67,7 @@ export function SelectField({ label, error, hint, required, options = [], placeh
   return (
     <Shell id={id} label={label} error={error} hint={hint} required={required} className={className}>
       <div className="relative">
-        <select
+        <SearchableSelect
           id={id}
           aria-invalid={Boolean(error) || undefined}
           aria-describedby={error ? `${id}-error` : undefined}
@@ -78,7 +79,7 @@ export function SelectField({ label, error, hint, required, options = [], placeh
           {Array.isArray(options) && options.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
-        </select>
+        </SearchableSelect>
         <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle" aria-hidden="true" />
       </div>
     </Shell>

@@ -16,6 +16,7 @@ import { tasksApi } from '../../../api/tasksApi';
 import { toolApi } from '../../../api/toolApi';
 import { toApiError } from '../../../api/axiosClient';
 import { formatCurrency } from '../../../utils/format';
+import { areaOptionsFor } from '../../../utils/areaOptions';
 import { PRIORITIES, EDITABLE_STATUSES, PROCUREMENT_STATUS_LABELS, PROCUREMENT_KIND_OPTIONS, SOURCE_TYPE_OPTIONS } from '../../../utils/procurementOptions';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -38,6 +39,8 @@ const EMPTY = {
   site_id: '',
   task_id: '',
   subtask_id: '',
+  area_id: '',
+  transport_cost: '',
   material_id: '',
   vendor_id: '',
   supplier: '',
@@ -104,8 +107,15 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     materialsApi.list({ pageSize: 50 }).then((data) => setMaterials(data.materials ?? [])).catch(() => setMaterials([]));
     toolApi.list({ pageSize: 100 }).then((data) => setTools(data.tools ?? [])).catch(() => setTools([]));
     procurementApi.lookups().then((data) => setContractors(data.contractors ?? [])).catch(() => setContractors([]));
-    vendorApi.list().then((data) => setVendors(data.vendors ?? [])).catch(() => setVendors([]));
+    vendorApi.list({ status: 'active', pageSize: 200 }).then((data) => setVendors(data.vendors ?? [])).catch(() => setVendors([]));
   }, []);
+
+  // Areas (floor / room / zone) of the selected project, for area-wise procurement.
+  const [areas, setAreas] = useState([]);
+  useEffect(() => {
+    if (!values.project_id) { setAreas([]); return; }
+    projectsApi.areas(values.project_id).then((d) => setAreas(d.areas ?? [])).catch(() => setAreas([]));
+  }, [values.project_id]);
 
   useEffect(() => {
     if (!values.project_id) {
@@ -184,6 +194,8 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       site_id: r.site ? String(r.site.id) : '',
       task_id: r.task?.id ? String(r.task.id) : (r.task_id ? String(r.task_id) : ''),
       subtask_id: r.subtask?.id ? String(r.subtask.id) : '',
+      area_id: r.area?.id ? String(r.area.id) : '',
+      transport_cost: r.transportCost != null ? String(r.transportCost) : '',
       material_id: r.material?.id ? String(r.material.id) : '',
       vendor_id: r.vendorId ? String(r.vendorId) : '',
       supplier: r.supplier ?? '',
@@ -260,13 +272,26 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     setFieldErrors((current) => ({ ...current, tool_id: undefined }));
   };
 
+  // Machine needed from a date for N days: the last day follows (start + days - 1).
+  const withToolEnd = (v) => {
+    const days = Math.max(1, Math.floor(Number(v.rental_days) || 0));
+    if (!v.rental_start_date || !(Number(v.rental_days) >= 1)) return { ...v, rental_end_date: '' };
+    const end = new Date(v.rental_start_date);
+    end.setDate(end.getDate() + days - 1);
+    return { ...v, rental_end_date: end.toISOString().slice(0, 10) };
+  };
+  const setToolPeriod = (patch) => {
+    setValues((current) => withToolEnd({ ...current, ...patch }));
+    setFieldErrors((current) => ({ ...current, rental_days: undefined, rental_start_date: undefined }));
+  };
+
   const set = (key) => (event) => {
     const { value } = event.target;
     setValues((current) => {
       const next = {
         ...current,
         [key]: value,
-        ...(key === 'project_id' ? { site_id: '', task_id: '', subtask_id: '', material_id: '' } : null),
+        ...(key === 'project_id' ? { site_id: '', task_id: '', subtask_id: '', material_id: '', area_id: '' } : null),
         ...(key === 'site_id' ? { task_id: '', subtask_id: '', material_id: '' } : null),
         ...(key === 'task_id' ? { subtask_id: '', material_id: '', ...(isContractor ? { tool_id: '' } : null) } : null),
         ...(key === 'subtask_id' ? { material_id: '', ...(isContractor ? { tool_id: '' } : null) } : null),
@@ -380,13 +405,19 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
   const currentPlannedTool = plannedTools.find((t) => String(t.toolId) === String(values.tool_id));
   const selectedTaskSubtasks = tasks.find((t) => String(t.id) === String(values.task_id))?.subtasks ?? [];
   const isToolExcess = isContractor && isToolItem && Boolean(currentPlannedTool) && requestedQty > currentPlannedTool.remainingQuantity;
+  // Needed for longer than the task plan allows: Admin must approve the extra days.
+  const isToolDaysExcess = isContractor && isToolItem && Boolean(currentPlannedTool?.plannedDays)
+    && Number(values.rental_days) > Number(currentPlannedTool.plannedDays);
   const isExcess = isToolItem
-    ? isToolExcess
+    ? (isToolExcess || isToolDaysExcess)
     : values.task_id
     ? currentPlannedMaterial
       ? requestedQty > remainingPlanned
       : requestedQty > 0
     : false;
+  // A material not in the task plan at all: Super Admin must authorise it before it can be procured.
+  const isUnplannedMaterial = !isToolItem && Boolean(values.task_id) && Boolean(values.material_id)
+    && !loadingPlannedMaterials && !currentPlannedMaterial && requestedQty > 0;
   const selectedTool = tools.find((t) => String(t.id) === String(values.tool_id));
   const excessQty = isToolItem
     ? (isToolExcess ? requestedQty : 0)
@@ -428,9 +459,17 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       if (values.item_type === 'tool' && Number(values.quantity) !== 1) {
         errors.quantity = 'Each physical machine has its own serial number - request one machine at a time (quantity 1).';
       }
+      if (values.item_type === 'tool') {
+        if (!(Number(values.rental_days) >= 1)) errors.rental_days = 'Enter for how many days the machine is needed.';
+        if (!values.rental_start_date) errors.rental_start_date = 'Enter from which date it is needed.';
+      }
       if (isExcess && !values.excess_reason?.trim()) {
         errors.excess_reason = isToolItem
-          ? 'All planned machines of this type are already requested for this task - give a reason for the extra one.'
+          ? (isToolDaysExcess && !isToolExcess
+            ? 'The machine is needed for longer than planned - give a reason for the extra days.'
+            : 'All planned machines of this type are already requested for this task - give a reason for the extra one.')
+          : isUnplannedMaterial
+          ? 'This material is not planned for the task. Give a reason - Super Admin must authorise it before it can be procured.'
           : 'Reason for excess procurement is mandatory when requested quantity exceeds the Admin-planned baseline.';
       }
       return errors;
@@ -480,6 +519,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
         site_id: values.site_id ? Number(values.site_id) : null,
         task_id: values.task_id ? Number(values.task_id) : null,
         subtask_id: values.task_id && values.subtask_id ? Number(values.subtask_id) : null,
+        area_id: values.area_id ? Number(values.area_id) : null,
         excess_reason: values.excess_reason ? values.excess_reason.trim() : null,
         required_date: values.required_date || null,
         priority: values.priority,
@@ -531,6 +571,8 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       tool_id: isTool && values.tool_id ? Number(values.tool_id) : null,
       task_id: values.task_id ? Number(values.task_id) : null,
       subtask_id: values.task_id && values.subtask_id ? Number(values.subtask_id) : null,
+      area_id: values.area_id ? Number(values.area_id) : null,
+      transport_cost: values.transport_cost !== '' ? Number(values.transport_cost) : null,
       excess_reason: values.excess_reason ? values.excess_reason.trim() : null,
       vendor_id: values.vendor_id ? Number(values.vendor_id) : null,
       supplier: values.supplier.trim() || null,
@@ -735,6 +777,17 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                   />
                 )}
                 <SelectField
+                  label="Area / Floor / Room"
+                  value={values.area_id}
+                  onChange={set('area_id')}
+                  error={fieldErrors.area_id}
+                  placeholder={!values.project_id ? 'Select a project first' : areas.length === 0 ? 'No areas defined for this project' : 'No specific area'}
+                  hint="Where on site this material / machine is used - for area-wise tracking."
+                  options={areaOptionsFor(areas, values.site_id)}
+                  disabled={!values.project_id || areas.length === 0}
+                  className="sm:col-span-2"
+                />
+                <SelectField
                   label="Source"
                   required
                   value={values.source_choice}
@@ -800,7 +853,13 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                       required
                       value={values.tool_id}
                       onChange={(e) => {
-                        setValues((c) => ({ ...c, tool_id: e.target.value, unit: 'unit', quantity: '1' }));
+                        const plan = plannedTools.find((t) => String(t.toolId) === e.target.value);
+                        setValues((c) => withToolEnd({
+                          ...c, tool_id: e.target.value, unit: 'unit', quantity: '1',
+                          // How long it is needed: the planned days unless the requester changes it.
+                          rental_days: String(plan?.plannedDays || c.rental_days || 1),
+                          rental_start_date: c.rental_start_date || new Date().toISOString().slice(0, 10),
+                        }));
                         setFieldErrors((c) => ({ ...c, tool_id: undefined }));
                       }}
                       error={fieldErrors.tool_id}
@@ -847,6 +906,41 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                           <p className="text-sm font-bold text-ink">{currentPlannedTool.alreadyRequested}</p>
                         </div>
                       </div>
+                    )}
+                    {values.tool_id && (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <InputField
+                          label="Needed for (days)"
+                          required
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={values.rental_days}
+                          onChange={(e) => setToolPeriod({ rental_days: e.target.value })}
+                          error={fieldErrors.rental_days}
+                          hint={currentPlannedTool?.plannedDays ? `Planned: ${currentPlannedTool.plannedDays} day(s)` : undefined}
+                        />
+                        <InputField
+                          label="Needed from"
+                          required
+                          type="date"
+                          value={values.rental_start_date}
+                          onChange={(e) => setToolPeriod({ rental_start_date: e.target.value })}
+                          error={fieldErrors.rental_start_date}
+                        />
+                        <InputField
+                          label="Needed until"
+                          type="date"
+                          value={values.rental_end_date}
+                          disabled
+                          hint="Worked out from the start date and days."
+                        />
+                      </div>
+                    )}
+                    {isToolDaysExcess && (
+                      <p className="text-xs text-amber-700">
+                        You need it for {values.rental_days} day(s) but {currentPlannedTool.plannedDays} were planned. Give a reason below - Admin must approve the longer period.
+                      </p>
                     )}
                     <p className="text-xs text-ink-subtle">Admin decides whether the machine is allocated from company stock, purchased or rented.</p>
                   </div>
@@ -928,6 +1022,17 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                       className="sm:col-span-2"
                     />
                   )}
+                  <SelectField
+                    label="Area / Floor / Room"
+                    value={values.area_id}
+                    onChange={set('area_id')}
+                    error={fieldErrors.area_id}
+                    placeholder={!values.project_id ? 'Select a project first' : areas.length === 0 ? 'No areas defined for this project' : 'No specific area'}
+                    hint="Where on site this material / machine is used - for area-wise tracking."
+                    options={areaOptionsFor(areas, values.site_id)}
+                    disabled={!values.project_id || areas.length === 0}
+                    className="sm:col-span-2"
+                  />
                 </>
               )}
 
@@ -1211,7 +1316,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                     placeholder="-- Choose from Vendor Master (or enter manual supplier) --"
                     options={vendors.map((v) => ({
                       value: String(v.id),
-                      label: `${v.name} ${v.phone ? `(${v.phone})` : ''}`,
+                      label: [v.name, v.contactPerson, v.city].filter(Boolean).join(' · ') + (v.phone ? ` (${v.phone})` : ''),
                     }))}
                     className="sm:col-span-2"
                   />
@@ -1243,7 +1348,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                       placeholder="-- Choose from Vendor Master --"
                       options={vendors.map((v) => ({
                         value: String(v.id),
-                        label: `${v.name} ${v.phone ? `(${v.phone})` : ''}`,
+                        label: [v.name, v.contactPerson, v.city].filter(Boolean).join(' · ') + (v.phone ? ` (${v.phone})` : ''),
                       }))}
                       className="sm:col-span-2"
                     />
@@ -1290,6 +1395,18 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                           <span>🚛</span> Vehicle & Transport Logistics {isCentral && <span className="text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">Vehicle Number Mandatory for Central Warehouse</span>}
                         </h4>
                       </div>
+                      <InputField
+                        label={values.item_type === 'tool' ? 'Transport cost (machines)' : 'Transport cost (materials)'}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={values.transport_cost}
+                        onChange={set('transport_cost')}
+                        error={fieldErrors.transport_cost}
+                        placeholder="0.00"
+                        hint={`Quoted freight. The amount actually paid is entered on each delivery and booked once under ${values.item_type === 'tool' ? 'Machines' : 'Materials'} - never added to the item rate.`}
+                        className="sm:col-span-2"
+                      />
                       <InputField
                         label="Vehicle Number"
                         required={isCentral}
@@ -1396,10 +1513,14 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                         <span className="text-amber-600 font-bold text-sm">⚠️</span>
                         <div>
                           <p className="text-xs font-semibold text-amber-900">
-                            Requested quantity exceeds the Admin-planned quantity by {excessQty} {values.unit || currentPlannedMaterial?.unit || 'units'}.
+                            {isUnplannedMaterial
+                              ? 'This material is not planned for the selected task.'
+                              : `Requested quantity exceeds the Admin-planned quantity by ${excessQty} ${values.unit || currentPlannedMaterial?.unit || 'units'}.`}
                           </p>
                           <p className="text-[11px] text-amber-700 mt-0.5">
-                            This excess procurement requires Admin approval and justification before proceeding.
+                            {isUnplannedMaterial
+                              ? 'Your request will be sent to Super Admin. It can only be procured after Super Admin authorises it.'
+                              : 'This excess procurement requires Admin approval and justification before proceeding.'}
                           </p>
                         </div>
                       </div>
@@ -1455,7 +1576,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
               />
               {isExcess && (
                 <TextAreaField
-                  label={isToolItem ? 'Reason for an extra machine' : 'Reason for Excess Procurement'}
+                  label={isToolItem ? 'Reason for an extra machine' : isUnplannedMaterial ? 'Reason for Unplanned Material' : 'Reason for Excess Procurement'}
                   required
                   value={values.excess_reason}
                   onChange={set('excess_reason')}

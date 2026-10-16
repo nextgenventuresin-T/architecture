@@ -28,6 +28,7 @@ import { dailyWorkApi } from '../../api/dailyWorkApi';
 import DailyWorkDetailModal from '../../components/dailyWork/DailyWorkDetailModal';
 import PmWorkUpdateModal from '../../components/dailyWork/PmWorkUpdateModal';
 import { formatNumber, formatDate } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 export default function PmDailyWorkPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -99,7 +100,7 @@ export default function PmDailyWorkPage() {
       <div className="mb-6 grid grid-cols-1 sm:grid-cols-4 gap-3 bg-surface p-4 rounded-2xl border border-line">
         <div>
           <label className="block text-xs font-semibold text-ink-muted mb-1">Project</label>
-          <select
+          <SearchableSelect
             value={selectedProjectId}
             onChange={(e) => {
               setSelectedProjectId(e.target.value);
@@ -113,7 +114,7 @@ export default function PmDailyWorkPage() {
                 {p.code} — {p.name}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
 
         <div>

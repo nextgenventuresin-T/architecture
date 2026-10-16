@@ -20,6 +20,8 @@ router.get(
     query('siteId').optional().isInt({ min: 1 }),
     query('status').optional().trim(),
     query('search').optional().trim(),
+    query('areaId').optional().custom((v) => v === 'none' || Number(v) > 0).withMessage('Invalid area.'),
+    query('managerId').optional().isInt({ min: 1 }),
   ],
   validate,
   controller.list

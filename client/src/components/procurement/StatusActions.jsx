@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import PlaceOrderDialog from './PlaceOrderDialog';
 import ReceiveDialog from './ReceiveDialog';
 import ReceiveMovementDialog from './ReceiveMovementDialog';
+import VendorReceiveDialog from './VendorReceiveDialog';
 import DispatchDialog from './DispatchDialog';
 import VerifiedReceiptDialog from './VerifiedReceiptDialog';
 import ToolFulfilDialog from './ToolFulfilDialog';
@@ -11,7 +12,7 @@ import { procurementApi } from '../../api/procurementApi';
 import { toApiError } from '../../api/axiosClient';
 import useAuth from '../../hooks/useAuth';
 import { ROLES } from '../../config/roles';
-import { STATUS_TRANSITIONS } from '../../utils/procurementOptions';
+import { STATUS_TRANSITIONS, isVendorToContractor } from '../../utils/procurementOptions';
 
 const ICONS = {
   requested: Send,
@@ -56,6 +57,8 @@ export default function StatusActions({ request, movement, onChanged, onError })
   const isFlowRequest = request.kind && request.kind !== 'project_site';
   // Machines are tracked per serial number: completed with "Allocate machine", never received into stock.
   const isToolRequest = request.itemType === 'tool';
+  // Vendor -> contractor: Admin places the order (with vehicle + driver), the contractor receives it.
+  const vendorToContractor = isVendorToContractor(request);
 
   async function applyStatus(nextStatus) {
     setPendingStatus(nextStatus);
@@ -86,6 +89,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   if (canManageOwnRequest) {
     for (const next of transitions) {
       if (isApprovalDecision && !canApprove) continue; // Only Admin can approve/reject.
+      if (isToolRequest && status === 'ordered' && next === 'cancelled') continue; // Dispatched machine: receive it, never cancel in transit.
       buttons.push(
         <Button
           key={next}
@@ -109,7 +113,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
       );
     }
 
-    if (canManage && status === 'approved' && !isFlowRequest && !isToolRequest) {
+    if (canManage && status === 'approved' && (!isFlowRequest || vendorToContractor) && !isToolRequest) {
       buttons.push(
         <Button key="place-order" type="button" variant="primary" onClick={() => setIsPlacingOrder(true)}>
           <ShoppingCart className="h-4 w-4" aria-hidden="true" />
@@ -194,7 +198,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   // Movement receive (Central->Contractor, Contractor->Contractor): the
   // DESTINATION contractor (or Admin/Warehouse) receives the in-transit
   // shipment. Backend enforces destination-only, so this is safe to offer.
-  if (movement && movement.status === 'in_transit' && (canReceive || role === ROLES.CONTRACTOR)) {
+  if (movement && movement.status === 'in_transit' && (canReceive || role === ROLES.CONTRACTOR || request.canReceiveMovement)) {
     buttons.push(
       <Button key="receive-movement" type="button" variant="primary" onClick={() => setIsReceivingMovement(true)}>
         <PackagePlus className="h-4 w-4" aria-hidden="true" />
@@ -203,9 +207,21 @@ export default function StatusActions({ request, movement, onChanged, onError })
     );
   }
 
+  // A dispatched machine: the receiving contractor (or Admin/Warehouse) verifies the
+  // vehicle and receives it, exactly like material.
+  if (isToolRequest && request.canReceiveTool) {
+    buttons.push(
+      <Button key="receive-tool" type="button" variant="primary" onClick={() => setIsReceiving(true)}>
+        <PackagePlus className="h-4 w-4" aria-hidden="true" />
+        Receive machine
+      </Button>
+    );
+  }
+
   // Legacy project/supplier receipt (into material_entries) — not for the
-  // two-phase movement kinds, which use the movement receive above.
-  if (canReceive && !isMovementKind && !isToolRequest && ['ordered', 'partially_received'].includes(status)) {
+  // two-phase movement kinds, which use the movement receive above. A contractor
+  // receives a vendor order delivered to them (`canReceiveOrder`, server-computed).
+  if ((canReceive || request.canReceiveOrder) && !isMovementKind && !isToolRequest && ['ordered', 'partially_received'].includes(status)) {
     buttons.push(
       <Button key="receive" type="button" variant="primary" onClick={() => setIsReceiving(true)}>
         <PackagePlus className="h-4 w-4" aria-hidden="true" />
@@ -248,8 +264,17 @@ export default function StatusActions({ request, movement, onChanged, onError })
         }}
       />
 
+      <VendorReceiveDialog
+        request={isReceiving && (request.canReceiveOrder || (isToolRequest && request.canReceiveTool)) ? request : null}
+        onClose={() => setIsReceiving(false)}
+        onSaved={(message) => {
+          setIsReceiving(false);
+          onChanged(message);
+        }}
+      />
+
       <ReceiveDialog
-        request={isReceiving ? request : null}
+        request={isReceiving && !request.canReceiveOrder && !isToolRequest ? request : null}
         onClose={() => setIsReceiving(false)}
         onSaved={(message) => {
           setIsReceiving(false);

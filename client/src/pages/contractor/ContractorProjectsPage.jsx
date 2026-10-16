@@ -23,6 +23,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import { projectsApi } from '../../api/projectsApi';
 import { formatDate } from '../../utils/format';
 import TaskDetailModal from '../../components/tasks/TaskDetailModal';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 const TASK_STATUS_TONES = {
   'on-track': 'success',
@@ -259,7 +260,7 @@ export default function ContractorProjectsPage() {
                       projectDetail.sites && projectDetail.sites.length > 0 ? (
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-ink-subtle">Filter Site:</span>
-                          <select
+                          <SearchableSelect
                             value={selectedSiteId}
                             onChange={(e) => setSelectedSiteId(e.target.value)}
                             className="rounded-lg border border-line bg-white px-2.5 py-1 text-xs text-ink focus:border-brand-500"
@@ -270,7 +271,7 @@ export default function ContractorProjectsPage() {
                                 {s.name}
                               </option>
                             ))}
-                          </select>
+                          </SearchableSelect>
                         </div>
                       ) : null
                     }

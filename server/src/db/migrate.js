@@ -47,8 +47,14 @@ async function migrate() {
     await require('./migrations/20261009_serials_receipts_cost').up(connection);
     await require('./migrations/20261010_task_tool_days').up(connection);
     await require('./migrations/20261010_transport_expenses').up(connection);
-    await require('./migrations/20261010_material_movements_tool').up(connection);
     await require('./migrations/20261011_task_subtasks').up(connection);
+    await require('./migrations/20261014_pm_areas_vendor_city_transport').up(connection);
+    await require('./migrations/20261015_labour_areas_company_attendance').up(connection);
+    await require('./migrations/20261015_task_plan_transport').up(connection);
+    await require('./migrations/20261016_pm_site_store').up(connection);
+    await require('./migrations/20261016_procurement_batches').up(connection);
+    await require('./migrations/20261016_unique_site_names').up(connection);
+    await require('./migrations/20261016_staff_portal').up(connection);
     console.log(`Schema up to date on "${env.db.database}".`);
   } finally {
     await connection.end();

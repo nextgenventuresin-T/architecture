@@ -122,7 +122,7 @@ async function findById(id) {
      LEFT JOIN sites s ON s.id = dwu.site_id
      LEFT JOIN project_tasks pt ON pt.id = dwu.task_id
      LEFT JOIN task_subtasks dst ON dst.id = dwu.subtask_id
-     JOIN contractors c ON c.id = dwu.contractor_id
+     LEFT JOIN contractors c ON c.id = dwu.contractor_id
      LEFT JOIN users u ON u.id = dwu.created_by
      LEFT JOIN materials m ON m.id = dwu.material_id
      LEFT JOIN warehouse_transactions wt ON wt.id = dwu.warehouse_transaction_id
@@ -188,7 +188,7 @@ async function findAll({ projectId, siteId, contractorId, taskId, subtaskId, dat
      LEFT JOIN sites s ON s.id = dwu.site_id
      LEFT JOIN project_tasks pt ON pt.id = dwu.task_id
      LEFT JOIN task_subtasks dst ON dst.id = dwu.subtask_id
-     JOIN contractors c ON c.id = dwu.contractor_id
+     LEFT JOIN contractors c ON c.id = dwu.contractor_id
      LEFT JOIN materials m ON m.id = dwu.material_id
      LEFT JOIN warehouse_transactions wt ON wt.id = dwu.warehouse_transaction_id
      ${whereSql}

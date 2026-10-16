@@ -10,6 +10,7 @@ import { SelectField, InputField } from '../../components/ui/Field';
 import { pmApi } from '../../api/pmApi';
 import { toApiError } from '../../api/axiosClient';
 import { formatDate } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 const STATUSES = [
   { value: 'PRESENT', label: 'Present' },
@@ -141,14 +142,14 @@ export default function PmAttendancePage() {
                       </div>
                       <div className="flex items-center gap-2">
                         {rec && <Badge tone={TONE[rec.status] ?? 'neutral'}>{rec.status.replace('_', ' ')} · recorded</Badge>}
-                        <select
+                        <SearchableSelect
                           value={statuses[w.id] || rec?.status || 'PRESENT'}
                           onChange={(e) => setStatuses((c) => ({ ...c, [w.id]: e.target.value }))}
                           className="h-9 rounded-lg border border-line bg-white px-2 text-sm"
                           aria-label={`Status for ${w.name}`}
                         >
                           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-                        </select>
+                        </SearchableSelect>
                         <Button size="sm" isLoading={savingId === w.id} onClick={() => mark(w)}>
                           <Check className="mr-1 h-4 w-4" /> {rec ? 'Update' : 'Record'}
                         </Button>

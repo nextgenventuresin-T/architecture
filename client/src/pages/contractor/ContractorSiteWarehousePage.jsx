@@ -26,6 +26,7 @@ import DataTable from '../../components/ui/DataTable';
 import { warehouseApi } from '../../api/warehouseApi';
 import { financeApi } from '../../api/financeApi';
 import { formatNumber, formatDate, formatCurrency } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 /**
  * Contractor Site Warehouse:
@@ -163,16 +164,6 @@ export default function ContractorSiteWarehousePage() {
       },
     },
     {
-      key: 'value',
-      header: 'Inventory Value',
-      align: 'right',
-      render: (row) => (
-        <span className="tabular-nums text-xs text-ink-muted">
-          {formatCurrency(row.stockValue ?? row.stock_value)}
-        </span>
-      ),
-    },
-    {
       key: 'actions',
       header: 'Actions',
       align: 'right',
@@ -295,7 +286,7 @@ export default function ContractorSiteWarehousePage() {
       {error && <Alert tone="error" className="mb-4">{error.message}</Alert>}
 
       {/* KPI Headline Summary: Received -> Used -> Balance */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 mb-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-6">
         <div className="rounded-xl border border-line bg-white p-4 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-ink-muted">Total Stock Received</span>
@@ -335,18 +326,6 @@ export default function ContractorSiteWarehousePage() {
           <p className="mt-1 text-[11px] text-ink-subtle">Available for immediate on-site use</p>
         </div>
 
-        <div className="rounded-xl border border-line bg-white p-4 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-ink-muted">Available Stock Value</span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-canvas text-ink-subtle">
-              <Package className="h-4 w-4" />
-            </span>
-          </div>
-          <p className="mt-2 text-2xl font-bold text-ink tabular-nums">
-            {loading ? '…' : formatCurrency(summary.totalValue)}
-          </p>
-          <p className="mt-1 text-[11px] text-ink-subtle">{usageData.currentStock.length} materials tracked</p>
-        </div>
       </div>
 
       {/* Main Card with Dual Tabs & Filters */}
@@ -404,7 +383,7 @@ export default function ContractorSiteWarehousePage() {
               </div>
 
               {usageData.filterSites?.length > 0 && (
-                <select
+                <SearchableSelect
                   value={selectedSiteId}
                   onChange={(e) => setSelectedSiteId(e.target.value)}
                   className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -415,7 +394,7 @@ export default function ContractorSiteWarehousePage() {
                       {s.name} ({s.project_name})
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               )}
 
               {activeTab === 'used' && (

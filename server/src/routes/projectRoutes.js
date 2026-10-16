@@ -92,6 +92,21 @@ router.post(
 );
 
 // Phase budgeting
+// Site areas (area / floor / room / zone) used to organise tasks, subtasks and procurement.
+const areaRules = [
+  body('name').optional().trim().isLength({ max: 150 }).withMessage('Keep the name under 150 characters.'),
+  body('area_type').optional().trim(),
+  body('description').optional({ nullable: true }).trim().isLength({ max: 255 }),
+  optionalId('site_id'),
+  optionalId('parent_id'),
+  body('sort_order').optional({ nullable: true }).isInt({ min: 0 }).toInt(),
+];
+router.get('/:id/areas', [param('id').isInt({ min: 1 }), query('siteId').optional().isInt({ min: 1 })], validate, requireProjectAccess('id'), controller.listAreas);
+router.get('/:id/areas/summary', [param('id').isInt({ min: 1 })], validate, requireProjectAccess('id'), controller.areaSummary);
+router.post('/:id/areas', canEdit, [param('id').isInt({ min: 1 }), ...areaRules], validate, requireProjectAccess('id'), controller.createArea);
+router.patch('/:id/areas/:areaId', canEdit, [param('id').isInt({ min: 1 }), param('areaId').isInt({ min: 1 }), ...areaRules], validate, requireProjectAccess('id'), controller.updateArea);
+router.delete('/:id/areas/:areaId', canEdit, [param('id').isInt({ min: 1 }), param('areaId').isInt({ min: 1 })], validate, requireProjectAccess('id'), controller.deleteArea);
+
 router.get('/:id/phases', [param('id').isInt({ min: 1 })], validate, requireProjectAccess('id'), controller.getPhases);
 router.put('/:id/phases', canEdit, [param('id').isInt({ min: 1 })], validate, requireProjectAccess('id'), controller.updatePhases);
 

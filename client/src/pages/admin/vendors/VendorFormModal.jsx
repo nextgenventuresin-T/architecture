@@ -3,6 +3,7 @@ import Modal from '../../../components/ui/Modal';
 import Button from '../../../components/ui/Button';
 import Alert from '../../../components/ui/Alert';
 import { vendorApi } from '../../../api/vendorApi';
+import SearchableSelect from '../../../components/ui/SearchableSelect';
 
 export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = null }) {
   const isEdit = Boolean(vendor?.id);
@@ -14,6 +15,7 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
   const [gstNumber, setGstNumber] = useState('');
   const [panNumber, setPanNumber] = useState('');
   const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
   const [billingAddress, setBillingAddress] = useState('');
   const [bankName, setBankName] = useState('');
   const [bankAccountNumber, setBankAccountNumber] = useState('');
@@ -22,6 +24,12 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
   const [notes, setNotes] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Existing cities, suggested while typing so the same city is not spelled three ways.
+  const [cities, setCities] = useState([]);
+  useEffect(() => {
+    if (!isOpen) return;
+    vendorApi.cities().then((rows) => setCities(rows.map((r) => r.city))).catch(() => setCities([]));
+  }, [isOpen]);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -33,6 +41,7 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
       setGstNumber(vendor.gst_number || vendor.gstNumber || '');
       setPanNumber(vendor.pan_number || vendor.panNumber || '');
       setAddress(vendor.address || '');
+      setCity(vendor.city || '');
       setBillingAddress(vendor.billing_address || vendor.billingAddress || '');
       setBankName(vendor.bank_name || vendor.bankName || '');
       setBankAccountNumber(vendor.bank_account_number || vendor.bankAccountNumber || '');
@@ -47,6 +56,7 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
       setGstNumber('');
       setPanNumber('');
       setAddress('');
+      setCity('');
       setBillingAddress('');
       setBankName('');
       setBankAccountNumber('');
@@ -75,6 +85,7 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
       gst_number: gstNumber.trim() || null,
       pan_number: panNumber.trim() || null,
       address: address.trim() || null,
+      city: city.trim() || null,
       billing_address: billingAddress.trim() || null,
       bank_name: bankName.trim() || null,
       bank_account_number: bankAccountNumber.trim() || null,
@@ -134,6 +145,22 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
             />
           </div>
 
+          {/* City */}
+          <div>
+            <label className="block text-xs font-semibold text-ink mb-1">City</label>
+            <input
+              type="text"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              placeholder="e.g. Pune"
+              list="vendor-city-options"
+              className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-none"
+            />
+            <datalist id="vendor-city-options">
+              {cities.map((c) => <option key={c} value={c} />)}
+            </datalist>
+          </div>
+
           {/* Phone */}
           <div>
             <label className="block text-xs font-semibold text-ink mb-1">Phone / Mobile</label>
@@ -161,14 +188,14 @@ export default function VendorFormModal({ isOpen, onClose, onSaved, vendor = nul
           {/* Status */}
           <div>
             <label className="block text-xs font-semibold text-ink mb-1">Status</label>
-            <select
+            <SearchableSelect
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-none"
             >
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
-            </select>
+            </SearchableSelect>
           </div>
 
           {/* Tax Information Header */}

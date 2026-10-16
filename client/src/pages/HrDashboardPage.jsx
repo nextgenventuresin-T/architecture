@@ -8,6 +8,8 @@ import {
   ClipboardList,
   CalendarClock,
   CalendarDays,
+  UserCog,
+  FileBarChart,
 } from 'lucide-react';
 import useAsync from '../hooks/useAsync';
 import useAuth from '../hooks/useAuth';
@@ -23,6 +25,8 @@ import AttendanceTab from '../components/hr/AttendanceTab';
 import LabourRequestsTab from '../components/hr/LabourRequestsTab';
 import LeaveTab from '../components/hr/LeaveTab';
 import HrOverviewTab from '../components/hr/HrOverviewTab';
+import CompanyLabourTab from '../components/labour/CompanyLabourTab';
+import LabourReport from '../components/labour/LabourReport';
 
 /**
  * HR & Labour Management Dashboard — /admin/hr and /hr (HR role).
@@ -63,6 +67,18 @@ export default function HrDashboardPage({ initialTab = 'employee-directory' }) {
       id: 'labour',
       label: 'Labour',
       icon: HardHat,
+      show: isHrOrAdmin,
+    },
+    {
+      id: 'company-labour',
+      label: 'Company Labour',
+      icon: UserCog,
+      show: isHrOrAdmin,
+    },
+    {
+      id: 'labour-report',
+      label: 'Labour Report',
+      icon: FileBarChart,
       show: isHrOrAdmin,
     },
     {
@@ -156,6 +172,12 @@ export default function HrDashboardPage({ initialTab = 'employee-directory' }) {
         {validTab === 'labour' && (
           <LabourManagementTab />
         )}
+
+        {/* Company labour: register, attendance with wages, register */}
+        {validTab === 'company-labour' && <CompanyLabourTab />}
+
+        {/* Project / site-wise labour report */}
+        {validTab === 'labour-report' && <LabourReport mode="admin" />}
 
         {/* Module D: Contractor Workers */}
         {validTab === 'contractor-workers' && (

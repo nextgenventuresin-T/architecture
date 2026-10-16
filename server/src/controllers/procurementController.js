@@ -2,6 +2,7 @@
 
 const asyncHandler = require('../utils/asyncHandler');
 const procurementService = require('../services/procurementService');
+const procurementBatchService = require('../services/procurementBatchService');
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
@@ -13,6 +14,21 @@ const lookups = asyncHandler(async (req, res) => ok(res, await procurementServic
 
 /** GET /api/procurement/:id */
 const detail = asyncHandler(async (req, res) => ok(res, await procurementService.getDetail(req.params.id, req.hrScope, req.user.id)));
+
+/** POST /api/procurement/batches — one request with many materials / machines */
+const createBatch = asyncHandler(async (req, res) =>
+  ok(res, await procurementBatchService.createBatch(req.body, req.user.id, req.hrScope), 201)
+);
+
+/** GET /api/procurement/batches/:batchId */
+const batchDetail = asyncHandler(async (req, res) =>
+  ok(res, await procurementBatchService.getBatch(req.params.batchId, req.hrScope, req.user.id))
+);
+
+/** POST /api/procurement/batches/:batchId/:action — submit | approve | reject | confirm | order | dispatch | receive */
+const batchAction = asyncHandler(async (req, res) =>
+  ok(res, await procurementBatchService.runBatchAction(req.params.batchId, req.params.action, req.body, req.user, req.hrScope))
+);
 
 /** POST /api/procurement */
 const create = asyncHandler(async (req, res) =>
@@ -41,7 +57,7 @@ const placeOrder = asyncHandler(async (req, res) =>
 
 /** POST /api/procurement/:id/receiving */
 const receive = asyncHandler(async (req, res) =>
-  ok(res, await procurementService.receive(req.params.id, req.body, req.user.id), 201)
+  ok(res, await procurementService.receive(req.params.id, req.body, req.user.id, req.hrScope), 201)
 );
 
 /** PUT /api/procurement/:id/receiving/:receiptId */
@@ -77,4 +93,9 @@ const dispatch = asyncHandler(async (req, res) =>
   ok(res, await procurementService.dispatch(req.params.id, req.body, req.hrScope, req.user.id))
 );
 
-module.exports = { list, lookups, detail, create, update, updateStatus, confirmSource, placeOrder, receive, updateReceipt, fulfil, toolFulfil, dispatch, uploadBill, downloadBill };
+/** POST /api/procurement/:id/tool-receive */
+const toolReceive = asyncHandler(async (req, res) =>
+  ok(res, await procurementService.toolReceive(req.params.id, req.body, req.user.id, req.hrScope))
+);
+
+module.exports = { list, lookups, detail, create, createBatch, batchDetail, batchAction, update, updateStatus, confirmSource, placeOrder, receive, updateReceipt, fulfil, toolFulfil, toolReceive, dispatch, uploadBill, downloadBill };

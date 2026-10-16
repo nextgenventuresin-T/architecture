@@ -12,6 +12,7 @@ const fs = require('fs');
 const env = require('./config/env');
 const routes = require('./routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+const { contractorRedaction } = require('./middleware/contractorRedaction');
 
 const app = express();
 
@@ -39,8 +40,8 @@ if (fs.existsSync(uploadsDir)) {
   app.use('/uploads', express.static(uploadsDir));
 }
 
-// API Routes
-app.use('/api', routes);
+// API Routes. Contractor responses are stripped of budgets, margins and internal costs.
+app.use('/api', contractorRedaction, routes);
 
 // Serve Frontend client SPA if built
 const clientDist = path.join(__dirname, '../../client/dist');

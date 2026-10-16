@@ -14,6 +14,7 @@ import { tasksApi } from '../../api/tasksApi';
 import { vendorApi } from '../../api/vendorApi';
 import { toApiError } from '../../api/axiosClient';
 import { formatCurrency, formatDate, formatDateTime } from '../../utils/format';
+import SearchableSelect from '../ui/SearchableSelect';
 
 export const HEALTH_OPTIONS = [
   { value: 'excellent', label: 'Excellent' },
@@ -108,18 +109,18 @@ export default function ToolUnitsPanel({ tools = [], mode = 'admin', onChanged, 
               className="h-9 w-56 rounded-lg border border-line bg-white pl-8 pr-2 text-sm"
             />
           </div>
-          <select value={filters.toolId} onChange={set('toolId')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" aria-label="Machine type">
+          <SearchableSelect value={filters.toolId} onChange={set('toolId')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" aria-label="Machine type">
             <option value="">All machine types</option>
             {tools.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select value={filters.status} onChange={set('status')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" aria-label="Availability">
+          </SearchableSelect>
+          <SearchableSelect value={filters.status} onChange={set('status')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" aria-label="Availability">
             <option value="all">Any availability</option>
             {Object.entries(STATUS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-          <select value={filters.health} onChange={set('health')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" aria-label="Health">
+          </SearchableSelect>
+          <SearchableSelect value={filters.health} onChange={set('health')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" aria-label="Health">
             <option value="all">Any health</option>
             {HEALTH_OPTIONS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
-          </select>
+          </SearchableSelect>
         </div>
 
         {loading ? (

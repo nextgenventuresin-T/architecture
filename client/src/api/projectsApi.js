@@ -28,6 +28,13 @@ export const projectsApi = {
       })
       .then((r) => r.data.data.documents),
   downloadDocumentUrl: (id, docId) => `/api/projects/${id}/documents/${docId}/download`,
+  // Site areas (area / floor / room) used to organise tasks, subtasks and procurement.
+  areas: (id, params) => axiosClient.get(`/projects/${id}/areas`, { params }).then((r) => r.data.data),
+  areaSummary: (id) => axiosClient.get(`/projects/${id}/areas/summary`).then((r) => r.data.data),
+  createArea: (id, payload) => axiosClient.post(`/projects/${id}/areas`, payload).then((r) => r.data.data.area),
+  updateArea: (id, areaId, payload) => axiosClient.patch(`/projects/${id}/areas/${areaId}`, payload).then((r) => r.data.data.area),
+  deleteArea: (id, areaId) => axiosClient.delete(`/projects/${id}/areas/${areaId}`).then((r) => r.data.data),
+
   deleteDocument: (id, docId) => axiosClient.delete(`/projects/${id}/documents/${docId}`).then((r) => r.data.data),
 };
 

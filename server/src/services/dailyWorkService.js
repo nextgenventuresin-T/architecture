@@ -14,6 +14,7 @@ const notificationModel = require('../models/notificationModel');
 const userModel = require('../models/userModel');
 const { PROJECT_PHASES_DEF } = require('../config/projectPhases');
 const { pool } = require('../config/db');
+const areaService = require('./areaService');
 const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const pmScope = require('./pmScopeService');
 const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
@@ -26,6 +27,39 @@ async function contractorWarehouseFor(contractorId) {
 }
 
 /**
+ * Who holds the stock used on a task: a contractor (their warehouse), or a site run by its
+ * Project Manager (that site's Site Store). Accepts a contractor id for existing callers.
+ */
+function toHolder(holder) {
+  if (holder && typeof holder === 'object') return holder;
+  return holder ? { contractorId: Number(holder), warehouseId: null } : null;
+}
+
+/** SQL limiting procurement requests to what was delivered to this holder. */
+function holderClause(holder) {
+  if (holder.contractorId) {
+    return { sql: '(pr.contractor_id = ? OR pr.destination_contractor_id = ?)', params: [holder.contractorId, holder.contractorId] };
+  }
+  return {
+    sql: 'pr.contractor_id IS NULL AND pr.destination_contractor_id IS NULL AND pr.destination_warehouse_id = ?',
+    params: [holder.warehouseId],
+  };
+}
+
+async function holderWarehouse(holder) {
+  if (holder.warehouseId) return { id: Number(holder.warehouseId) };
+  return contractorWarehouseFor(holder.contractorId);
+}
+
+/**
+ * The holder for a daily update on this site: the site's contractor, or - with no
+ * contractor - the site's Site Store, run by its Project Manager.
+ */
+async function siteHolderFor(projectId, siteId) {
+  return pmScope.siteHolder(projectId, siteId);
+}
+
+/**
  * TASK-WISE MATERIAL. Material a contractor procured for a Task may be used only on that Task:
  * received quantity (from requests raised for this task) minus what the daily log has already
  * booked against it, and never more than the contractor's actual warehouse stock.
@@ -33,8 +67,9 @@ async function contractorWarehouseFor(contractorId) {
  * With a subtask, only material procured FOR that subtask counts, capped by what is still
  * unused on the whole main task (so main-task and subtask usage can never overdraw it).
  */
-async function scopedTaskMaterialLines(taskId, contractorId, subtaskId) {
+async function scopedTaskMaterialLines(taskId, holder, subtaskId) {
   const recScope = subtaskId ? ' AND pr.subtask_id = ?' : '';
+  const who = holderClause(holder);
   const [rows] = await pool.query(
     `SELECT pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit) AS unit,
             SUM(COALESCE(
@@ -44,11 +79,11 @@ async function scopedTaskMaterialLines(taskId, contractorId, subtaskId) {
      FROM procurement_requests pr
      JOIN materials m ON m.id = pr.material_id
      WHERE pr.task_id = ? AND pr.item_type = 'material' AND pr.status IN ('received', 'partially_received')
-       AND (pr.contractor_id = ? OR pr.destination_contractor_id = ?)${recScope}
+       AND ${who.sql}${recScope}
      GROUP BY pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit)`,
-    [taskId, contractorId, contractorId, ...(subtaskId ? [subtaskId] : [])]
+    [taskId, ...who.params, ...(subtaskId ? [subtaskId] : [])]
   );
-  const wh = await contractorWarehouseFor(contractorId);
+  const wh = await holderWarehouse(holder);
   const out = [];
   for (const r of rows) {
     const [[u]] = await pool.query(
@@ -67,16 +102,42 @@ async function scopedTaskMaterialLines(taskId, contractorId, subtaskId) {
   return out.filter((x) => x.procured > 0);
 }
 
-async function getTaskMaterials(taskId, contractorId, subtaskId = null) {
-  if (!taskId || !contractorId) return [];
-  const lines = await scopedTaskMaterialLines(taskId, contractorId, subtaskId || null);
+async function getTaskMaterials(taskId, holderArg, subtaskId = null) {
+  const holder = toHolder(holderArg);
+  if (!taskId || !holder || (!holder.contractorId && !holder.warehouseId)) return [];
+  const lines = await scopedTaskMaterialLines(taskId, holder, subtaskId || null);
   if (!subtaskId) return lines;
-  const taskWide = await scopedTaskMaterialLines(taskId, contractorId, null);
+  const taskWide = await scopedTaskMaterialLines(taskId, holder, null);
   return lines.map((l) => {
     const tw = taskWide.find((x) => Number(x.material_id) === Number(l.material_id));
     const left = Math.min(l.taskAvailable, tw ? tw.taskAvailable : 0);
     return { ...l, subtaskId: Number(subtaskId), taskAvailable: left, availableStock: Math.min(left, l.availableStock) };
   });
+}
+
+/**
+ * TASK-WISE MACHINES. Like material, a machine/tool may be logged on a Task only once it was
+ * procured (purchased, rented or allocated) for that Task and received. With a subtask, only
+ * machines procured FOR that subtask count.
+ */
+async function getTaskTools(taskId, holderArg, subtaskId = null) {
+  const holder = toHolder(holderArg);
+  if (!taskId || !holder || (!holder.contractorId && !holder.warehouseId)) return [];
+  const who = holderClause(holder);
+  const [rows] = await pool.query(
+    `SELECT pr.tool_id, t.name, t.code, t.type, COALESCE(SUM(pr.quantity), 0) AS procured
+     FROM procurement_requests pr
+     JOIN tools t ON t.id = pr.tool_id
+     WHERE pr.task_id = ? AND (pr.item_type = 'tool' OR (pr.material_id IS NULL AND pr.tool_id IS NOT NULL))
+       AND pr.status IN ('received', 'partially_received')
+       AND ${who.sql}${subtaskId ? ' AND pr.subtask_id = ?' : ''}
+     GROUP BY pr.tool_id, t.name, t.code, t.type
+     ORDER BY t.name`,
+    [taskId, ...who.params, ...(subtaskId ? [subtaskId] : [])]
+  );
+  return rows.map((r) => ({
+    tool_id: r.tool_id, name: r.name, code: r.code, type: r.type, procured: Number(r.procured || 0),
+  }));
 }
 
 async function list(query = {}, hrScope) {
@@ -378,8 +439,17 @@ async function create(payload, files, hrScope, userId) {
     contractorId = contractorId || owner;
   }
 
-  if (!contractorId) {
-    throw ApiError.badRequest('Contractor must be specified.');
+  // Whose stock this update draws on: the contractor's warehouse, or - on a site with
+  // no contractor, run by its Project Manager - that site's Site Store.
+  let holder = contractorId ? { contractorId, warehouseId: null } : null;
+  if (!holder && pmScope.isPm(hrScope) && siteId) {
+    const siteHolder = await siteHolderFor(projectId, siteId);
+    if (siteHolder?.pmRun) holder = siteHolder;
+  }
+  if (!holder) {
+    throw ApiError.badRequest(pmScope.isPm(hrScope)
+      ? 'Select the site - daily work on a site you run is recorded against its Site Store.'
+      : 'Contractor must be specified.');
   }
 
   // Verify project
@@ -430,6 +500,21 @@ async function create(payload, files, hrScope, userId) {
   const subtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
   const subtaskId = subtask ? subtask.id : null;
 
+  // A machine/tool is booked TASK-WISE only, and only once it was procured for that task.
+  if (toolId || toolCost > 0) {
+    const scopeLabel = subtask ? `subtask "${subtask.name}"` : 'this task';
+    if (!taskId) {
+      throw ApiError.badRequest('Select the Task - a machine/tool can only be used task-wise, against the task it was procured for.');
+    }
+    if (!toolId) {
+      throw ApiError.badRequest(`Select the machine/tool procured for ${scopeLabel} that this cost is for.`);
+    }
+    const taskTools = await getTaskTools(taskId, holder, subtaskId);
+    if (!taskTools.some((t) => Number(t.tool_id) === toolId)) {
+      throw ApiError.badRequest(`That machine/tool was not procured for ${scopeLabel}, so it cannot be used on it. Raise a procurement request for ${scopeLabel} first.`);
+    }
+  }
+
   // Budget exceeded pre-check
   let budgetExceededInfo = null;
   if (taskId) {
@@ -448,7 +533,7 @@ async function create(payload, files, hrScope, userId) {
     // Calculate this update's incoming costs
     let incomingMaterialCost = 0;
     if (materialId && quantityUsed > 0) {
-      const preWh = await contractorWarehouseFor(contractorId);
+      const preWh = await holderWarehouse(holder);
       const matRate = await getConsumptionUnitCost({ warehouseId: preWh?.id, materialId });
       incomingMaterialCost = Number((quantityUsed * matRate).toFixed(2));
     }
@@ -495,6 +580,13 @@ async function create(payload, files, hrScope, userId) {
 
       if (taskOver || subOver) {
         const excessReason = (payload.excess_reason || '').trim();
+        if (!excessReason && hrScope?.role === 'contractor') {
+          // Contractors never see budget figures - only that a justification is needed.
+          const msg = taskOver
+            ? `This update exceeds the approved allocation for task "${task.name}". Enter a reason; it will be sent to Admin for approval.`
+            : `This update exceeds the approved allocation for subtask "${subtask.name}". Enter a reason; it will be sent to Admin for approval.`;
+          throw ApiError.badRequest(msg, { excess_reason: msg });
+        }
         if (!excessReason) {
           throw ApiError.badRequest(
             taskOver
@@ -538,7 +630,7 @@ async function create(payload, files, hrScope, userId) {
     if (!taskId) {
       throw ApiError.badRequest('Select the Task - material can only be used task-wise, against the task it was procured for.');
     }
-    const taskStock = await getTaskMaterials(taskId, contractorId, subtaskId);
+    const taskStock = await getTaskMaterials(taskId, holder, subtaskId);
     const line = taskStock.find((x) => Number(x.material_id) === materialId);
     const scopeLabel = subtask ? `subtask "${subtask.name}"` : 'this task';
     if (!line) {
@@ -547,10 +639,8 @@ async function create(payload, files, hrScope, userId) {
     if (quantityUsed > line.taskAvailable + 1e-9) {
       throw ApiError.badRequest(`Only ${line.taskAvailable} ${line.unit} procured for ${scopeLabel} is still unused (procured ${line.procured}, already used ${line.used}).`);
     }
-    await warehouseModel.ensureContractorWarehouses();
-    const { contractors } = await warehouseModel.findScopes();
-    const warehouse = contractors.find((c) => Number(c.contractor_id) === contractorId);
-    if (!warehouse) throw ApiError.badRequest('That contractor has no warehouse configured.');
+    const warehouse = await holderWarehouse(holder);
+    if (!warehouse) throw ApiError.badRequest(holder.contractorId ? 'That contractor has no warehouse configured.' : 'This site has no Site Store.');
 
     material = await materialModel.findById(materialId);
     if (!material) throw ApiError.badRequest('Selected material does not exist.');
@@ -658,6 +748,18 @@ async function create(payload, files, hrScope, userId) {
     });
   }
 
+  // Area of today's work: chosen on the form, else the subtask's / task's own area.
+  let areaId = null;
+  if (payload.area_id || payload.areaId) {
+    areaId = await areaService.assertAreaFor(payload.area_id || payload.areaId, projectId, siteId || null);
+  } else if (task) {
+    const [[scope]] = await pool.query(
+      'SELECT COALESCE((SELECT area_id FROM task_subtasks WHERE id = ?), (SELECT area_id FROM project_tasks WHERE id = ?)) AS area_id',
+      [subtaskId || 0, task.id]
+    );
+    areaId = scope?.area_id || null;
+  }
+
   const updateId = await dailyWorkModel.createUpdate({
     project_id: projectId,
     site_id: siteId,
@@ -734,6 +836,8 @@ async function create(payload, files, hrScope, userId) {
       }
     }
 
+    if (areaId) await pool.query('UPDATE daily_work_updates SET area_id = ? WHERE id = ?', [areaId, updateId]);
+
     // Process workers if submitted with daily update
     for (const w of workersList) {
       const name = (w.worker_name || w.workerName || '').trim();
@@ -741,6 +845,17 @@ async function create(payload, files, hrScope, userId) {
         const isCompany = (w.worker_type === 'company_labour' || w.worker_type === 'company_employee' || w.workerType === 'company_labour' || w.workerType === 'company_employee' || String(w.labour_type || w.labourType || '').toLowerCase().includes('company'));
         const workerType = isCompany ? 'company_labour' : (w.worker_type || w.workerType || 'daily_wage');
         const dailyWage = isCompany ? 0.0 : Number(w.daily_wage || w.dailyWage || 0.0);
+        const loggedWorkerId = w.worker_id || w.workerId || null;
+
+        // Company labour whose day Admin already recorded in attendance (the costed entry):
+        // the contractor's mention adds nothing, so the day is never counted twice.
+        if (isCompany && loggedWorkerId) {
+          const [[already]] = await pool.query(
+            'SELECT id FROM task_worker_logs WHERE worker_id = ? AND work_date = ? AND attendance_id IS NOT NULL LIMIT 1',
+            [Number(loggedWorkerId), workDate]
+          );
+          if (already) continue;
+        }
 
         await taskModel.addWorkerLog({
           task_id: task.id,
@@ -759,6 +874,7 @@ async function create(payload, files, hrScope, userId) {
           daily_wage: dailyWage,
           work_performed: (w.work_performed || w.workPerformed) ? String(w.work_performed || w.workPerformed).trim() : null,
           created_by: userId,
+          area_id: areaId,
         });
       }
     }
@@ -862,4 +978,28 @@ async function create(payload, files, hrScope, userId) {
   return getById(updateId, hrScope);
 }
 
-module.exports = { list, getById, create, getTaskMaterials };
+/**
+ * The holder whose stock a viewer sees for a task: a contractor's own, or - for a PM on a
+ * site they run with no contractor - that site's Site Store. Null when nothing applies.
+ */
+async function holderForViewer(taskId, hrScope, queryContractorId) {
+  if (hrScope?.role === 'contractor') return { contractorId: Number(hrScope.contractorId), warehouseId: null };
+  const [[task]] = await pool.query('SELECT project_id, site_id FROM project_tasks WHERE id = ? LIMIT 1', [taskId]);
+  if (!task) return null;
+  if (pmScope.isPm(hrScope)) {
+    if (!(hrScope.pmProjectIds || []).includes(Number(task.project_id))) return null;
+    return siteHolderFor(task.project_id, task.site_id);
+  }
+  if (queryContractorId) return { contractorId: Number(queryContractorId), warehouseId: null };
+  return siteHolderFor(task.project_id, task.site_id);
+}
+
+async function getTaskMaterialsFor(taskId, hrScope, queryContractorId, subtaskId) {
+  return getTaskMaterials(taskId, await holderForViewer(taskId, hrScope, queryContractorId), subtaskId);
+}
+
+async function getTaskToolsFor(taskId, hrScope, queryContractorId, subtaskId) {
+  return getTaskTools(taskId, await holderForViewer(taskId, hrScope, queryContractorId), subtaskId);
+}
+
+module.exports = { list, getById, create, getTaskMaterials, getTaskTools, getTaskMaterialsFor, getTaskToolsFor };

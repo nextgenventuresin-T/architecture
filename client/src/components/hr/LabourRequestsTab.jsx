@@ -18,6 +18,7 @@ import {
   PRIORITY_TONE,
 } from '../../utils/hrOptions';
 import { ROLES } from '../../config/roles';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const INITIAL_FILTERS = { status: 'all', priority: 'all', page: 1 };
 
@@ -126,7 +127,7 @@ export default function LabourRequestsTab() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
+            <SearchableSelect
               value={filters.status}
               onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value, page: 1 }))}
               className="h-9 rounded-lg border border-line bg-white px-3 text-sm text-ink"
@@ -141,8 +142,8 @@ export default function LabourRequestsTab() {
               <option value="REJECTED">Rejected</option>
               <option value="CANCELLED">Cancelled</option>
               <option value="COMPLETED">Completed</option>
-            </select>
-            <select
+            </SearchableSelect>
+            <SearchableSelect
               value={filters.priority}
               onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value, page: 1 }))}
               className="h-9 rounded-lg border border-line bg-white px-3 text-sm text-ink"
@@ -152,7 +153,7 @@ export default function LabourRequestsTab() {
               <option value="medium">Medium</option>
               <option value="high">High</option>
               <option value="urgent">Urgent</option>
-            </select>
+            </SearchableSelect>
             <Button variant="secondary" onClick={reload} aria-label="Refresh">
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             </Button>

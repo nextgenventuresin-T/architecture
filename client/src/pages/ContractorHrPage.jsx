@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { HardHat, ClipboardList, CalendarClock } from 'lucide-react';
+import { HardHat, ClipboardList, CalendarClock, IndianRupee } from 'lucide-react';
 import ContractorWorkersTab from '../components/hr/ContractorWorkersTab';
 import LabourRequestsTab from '../components/hr/LabourRequestsTab';
 import AttendanceTab from '../components/hr/AttendanceTab';
+import LabourReport from '../components/labour/LabourReport';
 
 /**
  * HR sub-page for the /contractor workspace.
@@ -22,6 +23,7 @@ export default function ContractorHrPage() {
     { id: 'workers',   label: 'My Workers',      icon: HardHat       },
     { id: 'requests',  label: 'Labour Requests',  icon: ClipboardList },
     { id: 'attendance',label: 'Attendance',       icon: CalendarClock },
+    { id: 'wages',     label: 'Days & Wages',     icon: IndianRupee   },
   ];
 
   return (
@@ -61,6 +63,7 @@ export default function ContractorHrPage() {
         {activeTab === 'workers'    && <ContractorWorkersTab />}
         {activeTab === 'requests'   && <LabourRequestsTab />}
         {activeTab === 'attendance' && <AttendanceTab readOnly />}
+        {activeTab === 'wages'      && <LabourReport mode="contractor" />}
       </main>
     </div>
   );

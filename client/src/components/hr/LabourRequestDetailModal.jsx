@@ -196,13 +196,19 @@ export default function LabourRequestDetailModal({ requestId, onClose }) {
             <Detail label="Qty required" value={request.quantity} />
             <Detail label="Qty fulfilled" value={request.quantityFulfilled ?? 0} />
             <Detail label="Qty remaining" value={remaining} />
-            <Detail label="Required from" value={request.requiredFrom ? formatDate(request.requiredFrom) : '—'} />
-            <Detail label="Required to"   value={request.requiredTo   ? formatDate(request.requiredTo)   : '—'} />
+            <Detail label="Needed from" value={request.requiredDate ? formatDate(request.requiredDate) : '—'} />
+            <Detail label="Number of days" value={request.durationDays ? `${request.durationDays} day(s)` : '—'} />
+            <Detail
+              label="Needed until"
+              value={request.requiredDate && request.durationDays
+                ? formatDate(new Date(new Date(request.requiredDate).getTime() + (Number(request.durationDays) - 1) * 86400000))
+                : '—'}
+            />
           </dl>
 
-          {request.description && (
+          {(request.reason || request.description) && (
             <p className="rounded-lg bg-surface px-4 py-3 text-sm text-ink-muted">
-              {request.description}
+              {request.reason || request.description}
             </p>
           )}
 

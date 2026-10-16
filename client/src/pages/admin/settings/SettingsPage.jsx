@@ -6,6 +6,7 @@ import CustomPaletteEditor from '../../../components/settings/CustomPaletteEdito
 import ThemeLivePreview from '../../../components/settings/ThemeLivePreview';
 import { useTheme, THEMES } from '../../../context/ThemeContext';
 import themeApi from '../../../api/themeApi';
+import SearchableSelect from '../../../components/ui/SearchableSelect';
 
 export default function SettingsPage() {
   const {
@@ -173,7 +174,7 @@ export default function SettingsPage() {
         <div className="flex items-center gap-2 rounded-xl border border-line bg-card p-2 shadow-xs">
           <Building2 className="h-4 w-4 text-ink-subtle ml-1 shrink-0" />
           <span className="text-xs font-semibold text-ink-muted whitespace-nowrap">Configure for:</span>
-          <select
+          <SearchableSelect
             value={selectedCompanyId}
             onChange={(e) => setSelectedCompanyId(e.target.value)}
             className="h-8 rounded-lg border border-line bg-canvas px-2.5 text-xs font-medium text-ink focus:outline-none focus:border-brand-500"
@@ -184,7 +185,7 @@ export default function SettingsPage() {
                 Client: {c.name}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
       </div>
 

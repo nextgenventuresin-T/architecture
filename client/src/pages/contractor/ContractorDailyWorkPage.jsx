@@ -38,15 +38,23 @@ import EmptyState from '../../components/ui/EmptyState';
 import { projectsApi } from '../../api/projectsApi';
 import { dailyWorkApi } from '../../api/dailyWorkApi';
 import { financeApi } from '../../api/financeApi';
+import { pmApi } from '../../api/pmApi';
 import { tasksApi } from '../../api/tasksApi';
 import { hrApi } from '../../api/hrApi';
-import { toolApi } from '../../api/toolApi';
+import { labourApi } from '../../api/labourApi';
 import DailyWorkDetailModal from '../../components/dailyWork/DailyWorkDetailModal';
 import { formatDate, formatNumber, formatCurrency } from '../../utils/format';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
-export default function ContractorDailyWorkPage() {
+/**
+ * Daily work entry. `workspace="pm"` is the Project Manager's version: same form, limited to
+ * the PM's assigned projects/sites. On a site with no contractor the PM runs it, and material
+ * and machines come from that site's Site Store.
+ */
+export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
+  const isPmWorkspace = workspace === 'pm';
   const [searchParams, setSearchParams] = useSearchParams();
   const initialProjectId = searchParams.get('projectId');
   const initialSiteId = searchParams.get('siteId');
@@ -63,6 +71,11 @@ export default function ContractorDailyWorkPage() {
   const [taskId, setTaskId] = useState(initialTaskId || '');
   // Optional subtask under the selected main task ('' = the main task itself).
   const [subtaskId, setSubtaskId] = useState(searchParams.get('subtaskId') || '');
+  // Area of today's work (defaults to the subtask's / task's area).
+  const [areaId, setAreaId] = useState('');
+  const [projectAreas, setProjectAreas] = useState([]);
+  // Company labour registered by Admin (name + phone only).
+  const [companyLabour, setCompanyLabour] = useState([]);
   const [workDate, setWorkDate] = useState(todayISO());
   const [workDone, setWorkDone] = useState('');
   const [progressPercentage, setProgressPercentage] = useState(50);
@@ -90,6 +103,8 @@ export default function ContractorDailyWorkPage() {
   const [miscRemarks, setMiscRemarks] = useState('');
   const [currentTaskDetail, setCurrentTaskDetail] = useState(null);
   const [excessReason, setExcessReason] = useState('');
+  // Set when the server reports the update exceeds the approved allocation and needs a reason.
+  const [needsExcessReason, setNeedsExcessReason] = useState(false);
 
   // Assigned task workers and logged workers
   const [taskAssignedLabour, setTaskAssignedLabour] = useState([]);
@@ -129,16 +144,34 @@ export default function ContractorDailyWorkPage() {
   }, [taskId, subtaskId]);
 
   const loadInventory = useCallback(() => {
+    if (isPmWorkspace) return; // Contractor-only; a PM's stock is per site (task-wise lists above).
     financeApi
       .contractorInventory()
       .then((data) => setInventory(data.inventory || []))
       .catch((err) => console.error('Error fetching contractor inventory:', err));
-  }, []);
+  }, [isPmWorkspace]);
 
   useEffect(() => {
     loadInventory();
     if (taskId) dailyWorkApi.taskMaterials(taskId, undefined, subtaskId || undefined).then(setTaskInventory).catch(() => {});
   }, [loadInventory]);
+
+  // Areas of the selected project.
+  useEffect(() => {
+    if (!projectId) { setProjectAreas([]); return; }
+    projectsApi.areas(projectId).then((d) => setProjectAreas(d.areas || [])).catch(() => setProjectAreas([]));
+  }, [projectId]);
+
+  // Default the area to the chosen subtask's, else the task's.
+  useEffect(() => {
+    const sub = (currentTaskDetail?.subtasks || []).find((st) => String(st.id) === String(subtaskId));
+    const next = sub?.areaId || currentTaskDetail?.areaId || '';
+    setAreaId(next ? String(next) : '');
+  }, [currentTaskDetail, subtaskId]);
+
+  useEffect(() => {
+    labourApi.companyLookup().then(setCompanyLabour).catch(() => setCompanyLabour([]));
+  }, []);
 
   // Load workforce lookup for adding any other available worker
   useEffect(() => {
@@ -153,21 +186,24 @@ export default function ContractorDailyWorkPage() {
     }
   }, []);
 
-  // Load available tools master list
+  // Task-wise: only machines/tools procured and received for the selected task can be logged.
   useEffect(() => {
-    toolApi
-      .list({ pageSize: 100 })
-      .then((data) => setToolsList(data?.tools || []))
-      .catch((err) => {
-        console.error('Error fetching tools list:', err);
-        setToolsList([]);
-      });
-  }, []);
+    if (!taskId) { setToolsList([]); return; }
+    dailyWorkApi
+      .taskTools(taskId, undefined, subtaskId || undefined)
+      .then((list) => {
+        const tools = list || [];
+        setToolsList(tools);
+        setSelectedToolId((prev) => (tools.some((t) => String(t.tool_id) === String(prev)) ? prev : ''));
+      })
+      .catch(() => setToolsList([]));
+  }, [taskId, subtaskId]);
 
-  // Load contractor's assigned projects
+  // Load contractor's assigned projects (a PM: their assigned projects and sites)
   useEffect(() => {
-    projectsApi
-      .list({ pageSize: 50 })
+    (isPmWorkspace
+      ? pmApi.scope().then((d) => ({ projects: d?.projects || [] }))
+      : projectsApi.list({ pageSize: 50 }))
       .then((data) => {
         const list = data.projects || [];
         setProjects(list);
@@ -186,6 +222,18 @@ export default function ContractorDailyWorkPage() {
       setSiteId('');
       return;
     }
+    if (isPmWorkspace) {
+      // A PM's sites come with the project from their scope; a site with no contractor is theirs to run.
+      const prj = projects.find((p) => String(p.id) === String(projectId));
+      const prjSites = (prj?.sites || []).map((s) => ({
+        ...s,
+        name: s.contractor ? `${s.name} (${s.contractor.name})` : `${s.name} (run by you - Site Store)`,
+      }));
+      setSites(prjSites);
+      const found = prjSites.find((s) => String(s.id) === String(initialSiteId));
+      setSiteId(found ? String(found.id) : (prjSites[0] ? String(prjSites[0].id) : ''));
+      return;
+    }
     projectsApi
       .detail(projectId)
       .then((detail) => {
@@ -199,7 +247,7 @@ export default function ContractorDailyWorkPage() {
         }
       })
       .catch((err) => console.error('Error fetching project sites:', err));
-  }, [projectId, initialSiteId]);
+  }, [projectId, initialSiteId, isPmWorkspace, projects]);
 
   // When project or site changes, fetch the tasks for that project/site
   useEffect(() => {
@@ -282,6 +330,7 @@ export default function ContractorDailyWorkPage() {
 
   const handleTaskChange = (selectedId) => {
     setTaskId(selectedId);
+    setNeedsExcessReason(false);
     setSubtaskId('');
     const chosen = tasks.find((t) => String(t.id) === String(selectedId));
     if (chosen) {
@@ -431,7 +480,9 @@ export default function ContractorDailyWorkPage() {
   const subProjected = selectedSubtask ? Number((Number(selectedSubtask.actualCost || 0) + liveUpdateTotal).toFixed(2)) : 0;
   const isSubOver = Boolean(selectedSubtask) && liveUpdateTotal > 0 && subProjected > subApproved;
   const isTaskOver = approvedBudget > 0 && projectedTotal > approvedBudget;
-  const isOverBudget = isTaskOver || isSubOver;
+  // Budgets are not sent to contractors, so the client cannot (and must not) judge an overrun;
+  // the server checks it and asks for a reason (needsExcessReason) without revealing amounts.
+  const isOverBudget = false;
   const excessAmount = Math.max(
     isTaskOver ? Number((projectedTotal - approvedBudget).toFixed(2)) : 0,
     isSubOver ? Number((subProjected - subApproved).toFixed(2)) : 0
@@ -484,6 +535,7 @@ export default function ContractorDailyWorkPage() {
       if (siteId) formData.append('site_id', siteId);
       formData.append('task_id', taskId);
       if (subtaskId) formData.append('subtask_id', subtaskId);
+      if (areaId) formData.append('area_id', areaId);
       formData.append('work_date', workDate);
       formData.append('work_done', workDone.trim());
       formData.append('progress_percentage', progressPercentage);
@@ -524,14 +576,11 @@ export default function ContractorDailyWorkPage() {
         formData.append('photos', photo);
       });
 
-      if (selectedToolId && Number(toolCost) > 0) {
-        const selTool = toolsList.find((t) => String(t.id) === String(selectedToolId));
+      if (selectedToolId) {
+        const selTool = toolsList.find((t) => String(t.tool_id) === String(selectedToolId));
         formData.append('tool_id', selectedToolId);
         formData.append('tool_name', selTool ? selTool.name : '');
-        formData.append('tool_cost', Number(toolCost));
-        if (toolRemarks.trim()) formData.append('tool_remarks', toolRemarks.trim());
-      } else if (Number(toolCost) > 0) {
-        formData.append('tool_cost', Number(toolCost));
+        if (Number(toolCost) > 0) formData.append('tool_cost', Number(toolCost));
         if (toolRemarks.trim()) formData.append('tool_remarks', toolRemarks.trim());
       }
 
@@ -547,6 +596,7 @@ export default function ContractorDailyWorkPage() {
       setWorkDone('');
       setRemarks('');
       setExcessReason('');
+      setNeedsExcessReason(false);
       setSelectedMaterialId('');
       setQuantityUsed('');
       setSelectedToolId('');
@@ -569,6 +619,7 @@ export default function ContractorDailyWorkPage() {
         setSelectedDetailId(res.id);
       }
     } catch (err) {
+      if (err?.response?.data?.error?.details?.excess_reason) setNeedsExcessReason(true);
       setError(err);
     } finally {
       setSubmitting(false);
@@ -637,6 +688,11 @@ export default function ContractorDailyWorkPage() {
     link.click();
     document.body.removeChild(link);
   };
+
+  const ownWorkers = useMemo(
+    () => (Array.isArray(workforceLookupList) ? workforceLookupList : []).filter((w) => w.workerType !== 'company_labour' && !w.isCompanyLabour),
+    [workforceLookupList]
+  );
 
   const filteredWorkforce = useMemo(() => {
     const list = Array.isArray(workforceLookupList) ? workforceLookupList : [];
@@ -764,7 +820,7 @@ export default function ContractorDailyWorkPage() {
 
                 {/* Project Filter */}
                 <div>
-                  <select
+                  <SearchableSelect
                     value={filterProjectId}
                     onChange={(e) => setFilterProjectId(e.target.value)}
                     className="w-full rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -775,12 +831,12 @@ export default function ContractorDailyWorkPage() {
                         {p.code} - {p.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 {/* Site Filter */}
                 <div>
-                  <select
+                  <SearchableSelect
                     value={filterSiteId}
                     onChange={(e) => setFilterSiteId(e.target.value)}
                     className="w-full rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -791,7 +847,7 @@ export default function ContractorDailyWorkPage() {
                         {s.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 {/* Date Filter */}
@@ -984,7 +1040,7 @@ export default function ContractorDailyWorkPage() {
                     <label className="block text-xs font-medium text-ink mb-1.5">
                       Assigned Project <span className="text-rose-500">*</span>
                     </label>
-                    <select
+                    <SearchableSelect
                       value={projectId}
                       onChange={(e) => setProjectId(e.target.value)}
                       required
@@ -995,14 +1051,14 @@ export default function ContractorDailyWorkPage() {
                           {p.code} - {p.name}
                         </option>
                       ))}
-                    </select>
+                    </SearchableSelect>
                   </div>
 
                   <div>
                     <label className="block text-xs font-medium text-ink mb-1.5">
                       Assigned Site <span className="text-rose-500">*</span>
                     </label>
-                    <select
+                    <SearchableSelect
                       value={siteId}
                       onChange={(e) => setSiteId(e.target.value)}
                       required
@@ -1018,7 +1074,7 @@ export default function ContractorDailyWorkPage() {
                           </option>
                         ))
                       )}
-                    </select>
+                    </SearchableSelect>
                   </div>
                 </div>
 
@@ -1030,7 +1086,7 @@ export default function ContractorDailyWorkPage() {
                     </label>
                     {tasksLoading && <span className="text-[11px] text-ink-muted">Loading tasks…</span>}
                   </div>
-                  <select
+                  <SearchableSelect
                     value={taskId}
                     onChange={(e) => handleTaskChange(e.target.value)}
                     required
@@ -1046,7 +1102,7 @@ export default function ContractorDailyWorkPage() {
                         </option>
                       ))
                     )}
-                  </select>
+                  </SearchableSelect>
                   {tasks.length === 0 && !tasksLoading && (
                     <p className="mt-1 text-[11px] text-amber-600">
                       Admin has not created tasks for this project/site yet. Work must be logged against a Task.
@@ -1057,7 +1113,7 @@ export default function ContractorDailyWorkPage() {
                 {taskSubtasks.length > 0 && (
                   <div>
                     <label className="block text-xs font-medium text-ink mb-1.5">Subtask</label>
-                    <select
+                    <SearchableSelect
                       value={subtaskId}
                       onChange={(e) => {
                         setSubtaskId(e.target.value);
@@ -1072,10 +1128,27 @@ export default function ContractorDailyWorkPage() {
                           {st.name} — {st.progress}% ({st.status})
                         </option>
                       ))}
-                    </select>
+                    </SearchableSelect>
                     <p className="mt-1 text-[11px] text-ink-muted">
                       Material, labour, machine and misc costs and progress below are booked to the chosen subtask.
                     </p>
+                  </div>
+                )}
+
+                {taskId && (
+                  <div>
+                    <label className="block text-xs font-medium text-ink mb-1.5">Area</label>
+                    <SearchableSelect
+                      value={areaId}
+                      onChange={(e) => setAreaId(e.target.value)}
+                      aria-label="Area"
+                      className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
+                    >
+                      <option value="">No specific area</option>
+                      {projectAreas
+                        .filter((a) => !siteId || !a.siteId || String(a.siteId) === String(siteId))
+                        .map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                    </SearchableSelect>
                   </div>
                 )}
 
@@ -1115,7 +1188,7 @@ export default function ContractorDailyWorkPage() {
                     <label className="block text-xs font-medium text-ink mb-1.5">
                       Work Status
                     </label>
-                    <select
+                    <SearchableSelect
                       value={workStatus}
                       onChange={(e) => setWorkStatus(e.target.value)}
                       className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -1124,7 +1197,7 @@ export default function ContractorDailyWorkPage() {
                       <option value="needs-attention">Needs Attention</option>
                       <option value="delayed">Delayed</option>
                       <option value="completed">Completed (100%)</option>
-                    </select>
+                    </SearchableSelect>
                   </div>
                 </div>
 
@@ -1158,16 +1231,43 @@ export default function ContractorDailyWorkPage() {
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2 relative">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="xs"
-                        onClick={() => setShowAddWorkerDropdown(!showAddWorkerDropdown)}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* My registered workers (contractor's own) */}
+                      <SearchableSelect
+                        value=""
+                        onChange={(e) => {
+                          const w = ownWorkers.find((x) => String(x.workerId) === e.target.value);
+                          if (w) handleAddWorkerFromWorkforce({ ...w, id: w.workerId, wage: w.dailyRate });
+                        }}
+                        aria-label="Add my worker"
+                        searchPlaceholder="Search my workers by name or phone…"
+                        className="min-w-[13rem] rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink"
                       >
-                        <Search className="h-3 w-3" />
-                        Search Workforce Directory
-                      </Button>
+                        <option value="">+ My worker…</option>
+                        {ownWorkers.map((w) => (
+                          <option key={w.workerId} value={w.workerId}>
+                            {w.name}{w.phone ? ` (${w.phone})` : ''}{w.trade ? ` · ${w.trade}` : ''}
+                          </option>
+                        ))}
+                      </SearchableSelect>
+
+                      {/* Company labour registered by Admin - shown as Name (phone) */}
+                      <SearchableSelect
+                        value=""
+                        onChange={(e) => {
+                          const w = companyLabour.find((x) => String(x.id) === e.target.value);
+                          if (w) handleAddWorkerFromWorkforce({ id: w.id, workerType: 'company_labour', name: w.name, code: w.code, trade: 'Company Labour', isCompanyLabour: true });
+                        }}
+                        aria-label="Add company labour"
+                        searchPlaceholder="Search company labour by name or phone…"
+                        className="min-w-[13rem] rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-1.5 text-xs text-blue-900"
+                      >
+                        <option value="">+ Company labour…</option>
+                        {companyLabour.map((w) => (
+                          <option key={w.id} value={w.id}>{w.label}</option>
+                        ))}
+                      </SearchableSelect>
+
                       <Button
                         type="button"
                         variant="secondary"
@@ -1177,118 +1277,44 @@ export default function ContractorDailyWorkPage() {
                         <Plus className="h-3 w-3" />
                         + Custom Worker
                       </Button>
-
-                      {/* Dropdown for selecting worker from workforce lookup */}
-                      {showAddWorkerDropdown && (
-                        <div className="absolute right-0 top-8 z-30 w-72 rounded-xl border border-line bg-white p-3 shadow-xl space-y-2">
-                          <div className="flex items-center justify-between pb-1 border-b border-line">
-                            <span className="text-xs font-bold text-ink">Select Labour / Employee</span>
-                            <button
-                              type="button"
-                              onClick={() => setShowAddWorkerDropdown(false)}
-                              className="text-ink-muted hover:text-ink"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                          <input
-                            type="text"
-                            placeholder="Type to search name..."
-                            value={workerSearchTerm}
-                            onChange={(e) => setWorkerSearchTerm(e.target.value)}
-                            className="w-full rounded border border-line px-2 py-1 text-xs text-ink"
-                            autoFocus
-                          />
-                          <div className="max-h-48 overflow-y-auto divide-y divide-line/60">
-                            {filteredWorkforce.map((w) => (
-                              <button
-                                key={`${w.workerType}-${w.id}`}
-                                type="button"
-                                onClick={() => handleAddWorkerFromWorkforce(w)}
-                                className="w-full text-left p-1.5 hover:bg-canvas rounded text-xs flex justify-between items-center"
-                              >
-                                <div>
-                                  <div className="font-semibold text-ink">{w.name}</div>
-                                  <div className="text-[10px] text-ink-subtle">
-                                    {w.trade || (w.workerType === 'company_labour' || w.isCompanyLabour ? 'Company Labour' : 'Labour')}
-                                  </div>
-                                </div>
-                                <span className="text-[10px] font-mono text-ink-muted">
-                                  {w.workerType === 'company_labour' || w.isCompanyLabour ? (
-                                    <span className="text-blue-700 font-semibold">₹0 (In-House)</span>
-                                  ) : (
-                                    formatCurrency(w.wage || 0)
-                                  )}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </div>
 
-                  {/* Task Labour Budget & Planning Breakdown (Requirement 4) */}
+                  {/* Task labour plan - schedule only. Contractors never see planned budgets or internal rates. */}
                   {currentTaskDetail && (
                     <div className="rounded-xl border border-blue-200/90 bg-blue-50/40 p-3.5 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-blue-200/60 pb-2">
-                        <div className="flex items-center gap-1.5">
-                          <Users className="h-4 w-4 text-blue-700" />
-                          <span className="text-xs font-bold text-blue-950">
-                            Task Labour Budget & Tracking (Admin Planned)
-                          </span>
-                        </div>
-                        <span className="text-[11px] font-semibold text-blue-800">
-                          Formula: Actual Labour Cost = Days Worked × Actual Daily Wage
-                        </span>
+                      <div className="flex items-center gap-1.5 border-b border-blue-200/60 pb-2">
+                        <Users className="h-4 w-4 text-blue-700" />
+                        <span className="text-xs font-bold text-blue-950">Task Labour Plan</span>
                       </div>
-
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-xs">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
                         <div className="rounded-lg bg-white p-2 border border-blue-100">
-                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Planned Labour Budget</span>
-                          <p className="mt-0.5 font-bold text-ink">
-                            {formatCurrency(currentTaskDetail.labourSummary?.plannedLabourCost || currentTaskDetail.labour_budget || 0)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-white p-2 border border-blue-100">
-                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Actual Labour Used</span>
-                          <p className="mt-0.5 font-bold text-ink-muted">
-                            {formatCurrency(currentTaskDetail.labourSummary?.actualLabourCost || 0)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-white p-2 border border-blue-100">
-                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Remaining Labour Budget</span>
-                          <p className="mt-0.5 font-bold text-emerald-700">
-                            {formatCurrency(currentTaskDetail.labourSummary?.remainingLabourBudget || 0)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg bg-white p-2 border border-blue-100">
-                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Days & Workers</span>
-                          <p className="mt-0.5 font-semibold text-ink text-[11px]">
+                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Days</span>
+                          <p className="mt-0.5 font-semibold text-ink">
                             {currentTaskDetail.labourSummary?.daysWorked || 0} / {currentTaskDetail.labourSummary?.daysPlanned || currentTaskDetail.duration_days || 0} days worked
                           </p>
-                          <p className="text-[10px] text-ink-subtle">
+                        </div>
+                        <div className="rounded-lg bg-white p-2 border border-blue-100">
+                          <span className="text-[10px] uppercase font-semibold text-ink-subtle">Workers</span>
+                          <p className="mt-0.5 font-semibold text-ink">
                             {currentTaskDetail.labourSummary?.workersWorked || 0} / {currentTaskDetail.labourSummary?.workersPlanned || (currentTaskDetail.labour?.length || 0)} workers active
                           </p>
                         </div>
                       </div>
-
                       {currentTaskDetail.labour && currentTaskDetail.labour.length > 0 && (
                         <div className="rounded-lg bg-white/80 p-2 border border-blue-100 text-[11px]">
-                          <span className="font-semibold text-blue-900 mr-2">Admin Planned Labour:</span>
+                          <span className="font-semibold text-blue-900 mr-2">Planned crew:</span>
                           <div className="inline-flex flex-wrap gap-2 mt-1">
                             {currentTaskDetail.labour.map((pl, plIdx) => (
                               <span key={plIdx} className="rounded bg-blue-100/60 px-2 py-0.5 text-blue-900 border border-blue-200">
-                                <strong>{pl.labourType || 'Labour'}</strong>: {pl.workerCount || 1} worker{pl.workerCount > 1 ? 's' : ''} × {pl.workingDays || 0} days @ {formatCurrency(pl.dailyWage || 0)}/day ({formatCurrency(pl.totalCost || 0)})
+                                <strong>{pl.labourType || 'Labour'}</strong>: {pl.workerCount || 1} worker{pl.workerCount > 1 ? 's' : ''} × {pl.workingDays || 0} days
                               </span>
                             ))}
                           </div>
                         </div>
                       )}
-
-                      <div className="flex items-center justify-between pt-1 text-[11px] text-blue-900">
-                        <span>Today&apos;s Wages: <strong>+{formatCurrency(liveLabourCost)}</strong></span>
-                        <span>Projected Remaining Budget after today: <strong className="text-emerald-700 font-bold">{formatCurrency(Math.max(0, (currentTaskDetail.labourSummary?.remainingLabourBudget || 0) - liveLabourCost))}</strong></span>
+                      <div className="pt-1 text-[11px] text-blue-900">
+                        Today&apos;s wages entered: <strong>{formatCurrency(liveLabourCost)}</strong>
                       </div>
                     </div>
                   )}
@@ -1463,7 +1489,7 @@ export default function ContractorDailyWorkPage() {
                       <label className="block text-xs font-medium text-ink mb-1">
                         Select Material
                       </label>
-                      <select
+                      <SearchableSelect
                         value={selectedMaterialId}
                         onChange={(e) => {
                           setSelectedMaterialId(e.target.value);
@@ -1477,7 +1503,7 @@ export default function ContractorDailyWorkPage() {
                             {item.name} ({item.code}) — {formatNumber(item.availableStock)} {item.unit} available
                           </option>
                         ))}
-                      </select>
+                      </SearchableSelect>
                       {taskInventory.length === 0 && (
                         <p className="mt-1 text-[10px] text-ink-subtle">
                           {taskId ? 'No material has been procured and received for this task. Raise a procurement request for this task first.' : 'Select the task first - material is used task-wise.'}
@@ -1535,26 +1561,35 @@ export default function ContractorDailyWorkPage() {
                       <Wrench className="h-4 w-4 text-indigo-700" />
                       <span className="text-xs font-semibold text-ink">Machines / Tools Used Today</span>
                     </div>
-                    <span className="text-[11px] text-ink-subtle">Equipment allocated to this task</span>
+                    <span className="text-[11px] text-ink-subtle">Only machines procured for this task</span>
                   </div>
+                  {toolsList.length === 0 && (
+                    <p className="text-[11px] text-amber-700">
+                      {taskId ? 'No machine/tool has been procured and received for this task. Raise a procurement request for this task first.' : 'Select the task first - machines are used task-wise.'}
+                    </p>
+                  )}
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div>
                       <label className="block text-xs font-medium text-ink mb-1">
                         Select Machine / Tool
                       </label>
-                      <select
+                      <SearchableSelect
                         value={selectedToolId}
-                        onChange={(e) => setSelectedToolId(e.target.value)}
-                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                        onChange={(e) => {
+                          setSelectedToolId(e.target.value);
+                          if (!e.target.value) setToolCost('');
+                        }}
+                        disabled={toolsList.length === 0}
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden disabled:bg-canvas"
                       >
                         <option value="">-- No machine/tool used --</option>
                         {toolsList.map((tool) => (
-                          <option key={tool.id} value={tool.id}>
-                            {tool.name} ({tool.code}) — {tool.type}
+                          <option key={tool.tool_id} value={tool.tool_id}>
+                            {tool.name} ({tool.code}) — {tool.type} · {tool.procured} procured
                           </option>
                         ))}
-                      </select>
+                      </SearchableSelect>
                     </div>
 
                     <div>
@@ -1567,8 +1602,9 @@ export default function ContractorDailyWorkPage() {
                         step="any"
                         value={toolCost}
                         onChange={(e) => setToolCost(e.target.value)}
+                        disabled={!selectedToolId}
                         placeholder="e.g. 1500 (rental/fuel/operational)"
-                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                        className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden disabled:bg-canvas"
                       />
                     </div>
 
@@ -1715,84 +1751,28 @@ export default function ContractorDailyWorkPage() {
                   )}
                 </div>
 
-                {/* Live Task Budget Utilization & Exceeded Alert */}
-                {taskId && currentTaskDetail && (
-                  <div className="rounded-xl border border-line bg-canvas/40 p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-2">
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="h-4 w-4 text-brand-700" />
-                        <span className="text-xs font-semibold text-ink">
-                          {selectedSubtask ? `Subtask Budget & Cost Impact — ${selectedSubtask.name}` : 'Task Budget & Cost Impact'}
-                        </span>
-                      </div>
-                      <span className="text-[11px] text-ink-subtle">
-                        Live breakdown based on today's logged work
-                      </span>
+                {/* Over the approved allocation: the server asks for a reason (no budget figures are shown to contractors). */}
+                {taskId && needsExcessReason && (
+                  <div className="rounded-lg border border-rose-300 bg-rose-50/80 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-rose-900">
+                        This update exceeds the approved allocation for the {selectedSubtask ? 'subtask' : 'task'}. Give a reason - the update is sent to Admin for approval.
+                      </p>
                     </div>
-
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 text-xs">
-                      <div className="rounded-lg border border-line bg-white p-2.5">
-                        <span className="text-[10px] uppercase font-medium text-ink-subtle">Approved Budget</span>
-                        <p className="mt-0.5 font-bold text-ink">{formatCurrency(selectedSubtask ? subApproved : approvedBudget)}</p>
-                        {selectedSubtask && (
-                          <p className="text-[10px] text-ink-subtle">Main task: {formatCurrency(approvedBudget)}</p>
-                        )}
-                      </div>
-                      <div className="rounded-lg border border-line bg-white p-2.5">
-                        <span className="text-[10px] uppercase font-medium text-ink-subtle">Previous Spent</span>
-                        <p className="mt-0.5 font-bold text-ink-muted">{formatCurrency(selectedSubtask ? Number(selectedSubtask.actualCost || 0) : currentActual)}</p>
-                      </div>
-                      <div className="rounded-lg border border-line bg-white p-2.5">
-                        <span className="text-[10px] uppercase font-medium text-brand-700">Today's New Cost</span>
-                        <p className="mt-0.5 font-bold text-brand-700 tabular-nums">+{formatCurrency(liveUpdateTotal)}</p>
-                        <div className="text-[10px] text-ink-subtle mt-0.5 truncate">
-                          Mat: {formatCurrency(liveMaterialCost)} | Lab: {formatCurrency(liveLabourCost)} | Tools: {formatCurrency(liveToolCost)} | Misc: {formatCurrency(liveMiscCost)}
-                        </div>
-                      </div>
-                      <div className={`rounded-lg border p-2.5 ${isOverBudget ? 'border-rose-300 bg-rose-50/60' : 'border-line bg-white'}`}>
-                        <span className={`text-[10px] uppercase font-medium ${isOverBudget ? 'text-rose-700 font-bold' : 'text-ink-subtle'}`}>
-                          Projected Total
-                        </span>
-                        <p className={`mt-0.5 font-bold tabular-nums ${isOverBudget ? 'text-rose-700' : 'text-ink'}`}>
-                          {formatCurrency(projectedTotal)}
-                        </p>
-                        {isOverBudget && (
-                          <div className="text-[10px] font-bold text-rose-700 mt-0.5">
-                            Over by +{formatCurrency(excessAmount)}
-                          </div>
-                        )}
-                      </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-rose-950 mb-1">
+                        Reason <span className="text-rose-600">*</span>
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={excessReason}
+                        onChange={(e) => setExcessReason(e.target.value)}
+                        required
+                        placeholder="Why is the extra work / material needed (e.g. unforeseen rock excavation, design change)…"
+                        className="w-full rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs text-ink placeholder:text-ink-subtle focus:border-rose-500 focus:outline-hidden"
+                      />
                     </div>
-
-                    {isOverBudget && (
-                      <div className="rounded-lg border border-rose-300 bg-rose-50/80 p-3 space-y-2 mt-2">
-                        <div className="flex items-start gap-2">
-                          <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-xs font-bold text-rose-900">
-                              Task Budget Exceeded: +{formatCurrency(excessAmount)} Pending Admin Approval
-                            </p>
-                            <p className="text-[11px] text-rose-800 mt-0.5">
-                              This update will exceed the approved task budget of {formatCurrency(approvedBudget)}. The excess amount will not be treated as approved until reviewed and approved by Admin. A mandatory justification is required.
-                            </p>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold text-rose-950 mb-1">
-                            Excess Budget Justification / Reason <span className="text-rose-600">*</span>
-                          </label>
-                          <textarea
-                            rows={2}
-                            value={excessReason}
-                            onChange={(e) => setExcessReason(e.target.value)}
-                            required
-                            placeholder="Explain why this excess spending is required (e.g., unforeseen soil rock excavation, structural changes, unexpected price surge)..."
-                            className="w-full rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs text-ink placeholder:text-ink-subtle focus:border-rose-500 focus:outline-hidden"
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
 

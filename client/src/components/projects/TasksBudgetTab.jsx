@@ -22,10 +22,12 @@ import Button from '../ui/Button';
 import EmptyState from '../ui/EmptyState';
 import Alert from '../ui/Alert';
 import TaskFormModal from '../tasks/TaskFormModal';
+import { CostSplitLine } from '../tasks/CostSplitRows';
 import TaskDetailModal from '../tasks/TaskDetailModal';
 import ProgressBar from '../ui/ProgressBar';
 import { tasksApi } from '../../api/tasksApi';
 import { formatCurrency, formatNumber, formatDate } from '../../utils/format';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const STATUS_TONES = {
   'on-track': 'success',
@@ -47,6 +49,20 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
   const [search, setSearch] = useState('');
   const [selectedSiteFilter, setSelectedSiteFilter] = useState(preselectedSiteId || 'all');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('all');
+  const [selectedAreaFilter, setSelectedAreaFilter] = useState('all');
+  const [selectedManagerFilter, setSelectedManagerFilter] = useState('all');
+
+  // Areas and managers actually used by this project's tasks, for the filters.
+  const areaFilterOptions = useMemo(() => {
+    const seen = new Map();
+    tasks.forEach((t) => { if (t.areaId) seen.set(String(t.areaId), t.areaName || `Area #${t.areaId}`); });
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [tasks]);
+  const managerFilterOptions = useMemo(() => {
+    const seen = new Map();
+    tasks.forEach((t) => { if (t.assignedManagerId) seen.set(String(t.assignedManagerId), t.assignedManagerName || `#${t.assignedManagerId}`); });
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [tasks]);
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -67,16 +83,22 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
       if (selectedStatusFilter !== 'all' && t.status !== selectedStatusFilter) {
         return false;
       }
+      if (selectedAreaFilter === 'none' && t.areaId) return false;
+      if (selectedAreaFilter !== 'all' && selectedAreaFilter !== 'none' && String(t.areaId || '') !== selectedAreaFilter) return false;
+      if (selectedManagerFilter === 'none' && t.assignedManagerId) return false;
+      if (selectedManagerFilter !== 'all' && selectedManagerFilter !== 'none' && String(t.assignedManagerId || '') !== selectedManagerFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
         const matchName = (t.name || '').toLowerCase().includes(q);
         const matchDesc = (t.description || '').toLowerCase().includes(q);
         const matchSite = (t.siteName || '').toLowerCase().includes(q);
-        if (!matchName && !matchDesc && !matchSite) return false;
+        const matchArea = (t.areaName || '').toLowerCase().includes(q);
+        const matchManager = (t.assignedManagerName || '').toLowerCase().includes(q);
+        if (!matchName && !matchDesc && !matchSite && !matchArea && !matchManager) return false;
       }
       return true;
     });
-  }, [tasks, selectedSiteFilter, selectedStatusFilter, search]);
+  }, [tasks, selectedSiteFilter, selectedStatusFilter, selectedAreaFilter, selectedManagerFilter, search]);
 
   // Rollups across all tasks for this project
   const totalMaterialBudget = tasks.reduce((sum, t) => sum + Number(t.materialBudget || 0), 0);
@@ -189,7 +211,7 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
         <div className="flex flex-wrap items-center gap-2">
           {/* Site Filter */}
           {sites.length > 0 && !preselectedSiteId && (
-            <select
+            <SearchableSelect
               value={selectedSiteFilter}
               onChange={(e) => setSelectedSiteFilter(e.target.value)}
               className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -200,11 +222,11 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                   {s.name}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           )}
 
           {/* Status Filter */}
-          <select
+          <SearchableSelect
             value={selectedStatusFilter}
             onChange={(e) => setSelectedStatusFilter(e.target.value)}
             className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -214,7 +236,35 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
             <option value="attention">Needs Attention</option>
             <option value="delayed">Delayed</option>
             <option value="completed">Completed</option>
-          </select>
+          </SearchableSelect>
+
+          {/* Area Filter */}
+          {areaFilterOptions.length > 0 && (
+            <SearchableSelect
+              value={selectedAreaFilter}
+              onChange={(e) => setSelectedAreaFilter(e.target.value)}
+              aria-label="Filter by area"
+              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+            >
+              <option value="all">All Areas</option>
+              <option value="none">No area</option>
+              {areaFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </SearchableSelect>
+          )}
+
+          {/* Project Manager Filter */}
+          {managerFilterOptions.length > 0 && (
+            <SearchableSelect
+              value={selectedManagerFilter}
+              onChange={(e) => setSelectedManagerFilter(e.target.value)}
+              aria-label="Filter by project manager"
+              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+            >
+              <option value="all">All Managers</option>
+              <option value="none">Unassigned</option>
+              {managerFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </SearchableSelect>
+          )}
         </div>
 
         {/* Search */}
@@ -272,6 +322,16 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                       {task.siteName && (
                         <span className="rounded-md bg-canvas px-2 py-0.5 text-xs font-medium text-ink-muted border border-line">
                           {task.siteName}
+                        </span>
+                      )}
+                      {task.areaName && (
+                        <span className="rounded-md border border-brand-200 bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-800" title="Area">
+                          {task.areaName}
+                        </span>
+                      )}
+                      {task.assignedManagerName && (
+                        <span className="rounded-md border border-line bg-white px-2 py-0.5 text-xs font-medium text-ink-muted" title="Assigned project manager">
+                          PM: {task.assignedManagerName}
                         </span>
                       )}
                       <Badge tone={STATUS_TONES[task.status] || 'neutral'}>
@@ -501,6 +561,7 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                             <div>
                               <span className="block text-[10px] text-ink-subtle">Used / Actual</span>
                               <span className="font-semibold text-brand-700">{formatCurrency(util.materials.actual)}</span>
+                              <CostSplitLine bucket="materials" util={util} />
                             </div>
                             <div>
                               <span className="block text-[10px] text-ink-subtle">Remaining</span>
@@ -529,6 +590,7 @@ export default function TasksBudgetTab({ detail, projectId, preselectedSiteId = 
                             <div>
                               <span className="block text-[10px] text-ink-subtle">Used / Actual</span>
                               <span className="font-semibold text-amber-700">{formatCurrency(util.tools.actual)}</span>
+                              <CostSplitLine bucket="tools" util={util} />
                             </div>
                             <div>
                               <span className="block text-[10px] text-ink-subtle">Remaining</span>

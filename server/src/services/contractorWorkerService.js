@@ -70,7 +70,9 @@ async function getById(id, hrScope) {
 }
 
 async function create(payload, hrScope) {
-  const isCompany = payload.workerType === 'company_labour' || payload.worker_type === 'company_labour' || Boolean(payload.isCompanyLabour || payload.is_company_labour);
+  // Company labour is registered centrally by Admin; a contractor only ever registers their own workers.
+  const isCompany = hrScope.role !== 'contractor'
+    && (payload.workerType === 'company_labour' || payload.worker_type === 'company_labour' || Boolean(payload.isCompanyLabour || payload.is_company_labour));
 
   let contractorId;
   if (isCompany) {
@@ -124,6 +126,11 @@ async function update(id, payload, hrScope) {
     isCompany = (wt === 'company_labour');
   } else if (payload.isCompanyLabour !== undefined || payload.is_company_labour !== undefined) {
     isCompany = Boolean(payload.isCompanyLabour ?? payload.is_company_labour);
+  }
+  // A contractor can neither turn their worker into company labour nor edit company labour.
+  if (hrScope.role === 'contractor') {
+    if (existing.isCompanyLabour) throw ApiError.forbidden('Company labour is managed by Admin.');
+    isCompany = false;
   }
 
   let contractorId = existing.contractorId;

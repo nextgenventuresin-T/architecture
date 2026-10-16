@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Search, Download, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
+import SearchableSelect from '../ui/SearchableSelect';
 
 export default function GroupedActualExpensesModal({ isOpen, onClose, group, onExportCSV }) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -139,7 +140,7 @@ export default function GroupedActualExpensesModal({ isOpen, onClose, group, onE
 
           <div className="flex items-center space-x-1.5">
             <span className="font-semibold text-slate-600">Category:</span>
-            <select
+            <SearchableSelect
               value={categoryFilter}
               onChange={(e) => {
                 setCategoryFilter(e.target.value);
@@ -152,7 +153,7 @@ export default function GroupedActualExpensesModal({ isOpen, onClose, group, onE
               <option value="labour">Labour</option>
               <option value="machines_tools">Machines / Tools</option>
               <option value="miscellaneous">Miscellaneous</option>
-            </select>
+            </SearchableSelect>
           </div>
 
           <Button variant="secondary" size="sm" onClick={handleExport} className="ml-auto">

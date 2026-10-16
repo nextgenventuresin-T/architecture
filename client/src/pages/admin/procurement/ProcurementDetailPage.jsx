@@ -129,6 +129,13 @@ export default function ProcurementDetailPage({ basePath = '/admin/procurement' 
 
       {flash && <Alert tone="success" className="mb-4">{flash}</Alert>}
       {actionError && <Alert tone="error" title="Could not complete that" className="mb-4">{actionError.message}</Alert>}
+      {request.batch && (
+        <Alert tone="info" className="mb-4">
+          This item is part of multi-item request{' '}
+          <Link to={`${basePath}/batch/${request.batch.id}`} className="font-semibold underline">{request.batch.number}</Link>
+          {' '}- open it to act on all its items together.
+        </Alert>
+      )}
 
       <div className="mb-6">
         <StatusActions

@@ -4,6 +4,7 @@ import { Card, CardHeader, CardBody } from '../ui/Card';
 import Badge from '../ui/Badge';
 import EmptyState from '../ui/EmptyState';
 import { formatDate, formatNumber } from '../../utils/format';
+import SearchableSelect from '../ui/SearchableSelect';
 
 export default function DailyWorkTab({ detail }) {
   const { dailyWorkUpdates = [], sites = [], tasks = [] } = detail;
@@ -45,7 +46,7 @@ export default function DailyWorkTab({ detail }) {
             <div className="flex items-center gap-2 text-xs font-medium text-ink-subtle">
               <span>Filter by:</span>
             </div>
-            <select
+            <SearchableSelect
               value={siteFilter}
               onChange={(e) => setSiteFilter(e.target.value)}
               className="rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -56,10 +57,10 @@ export default function DailyWorkTab({ detail }) {
                   {s.name}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
 
             {tasks.length > 0 && (
-              <select
+              <SearchableSelect
                 value={taskFilter}
                 onChange={(e) => setTaskFilter(e.target.value)}
                 className="rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
@@ -70,7 +71,7 @@ export default function DailyWorkTab({ detail }) {
                     {t.name}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             )}
 
             <input

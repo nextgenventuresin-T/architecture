@@ -21,6 +21,7 @@ import Skeleton from '../../components/ui/Skeleton';
 import EmptyState from '../../components/ui/EmptyState';
 import ToolUnitsPanel from '../../components/tools/ToolUnitsPanel';
 import { toolApi } from '../../api/toolApi';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 export default function ContractorToolsPage() {
   const [tools, setTools] = useState([]);
@@ -90,7 +91,7 @@ export default function ContractorToolsPage() {
               className="w-full rounded-xl border border-line bg-white pl-9 pr-4 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none"
             />
           </div>
-          <select
+          <SearchableSelect
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
             className="rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-none"
@@ -101,7 +102,7 @@ export default function ContractorToolsPage() {
                 {type}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
         <p className="text-sm text-ink-muted">Total: {tools.length} equipment items</p>
       </div>

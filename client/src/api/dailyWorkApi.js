@@ -13,6 +13,10 @@ export const dailyWorkApi = {
     axiosClient
       .get('/daily-work/task-materials', { params: { taskId, contractorId, ...(subtaskId ? { subtaskId } : {}) } })
       .then((r) => r.data.data.materials),
+  taskTools: (taskId, contractorId, subtaskId) =>
+    axiosClient
+      .get('/daily-work/task-tools', { params: { taskId, contractorId, ...(subtaskId ? { subtaskId } : {}) } })
+      .then((r) => r.data.data.tools),
   photoUrl: (id) => `/api/daily-work/photos/${id}`,
 };
 

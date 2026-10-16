@@ -11,6 +11,7 @@ import useAsync from '../../../hooks/useAsync';
 import { employeesApi } from '../../../api/employeesApi';
 import { toApiError } from '../../../api/axiosClient';
 import { EMPLOYEE_STATUSES, EMPLOYEE_TYPES } from '../../../utils/employeeOptions';
+import SearchableSelect from '../../../components/ui/SearchableSelect';
 
 const WORK_MODE_OPTIONS = [
   { value: 'office', label: 'Office' },
@@ -705,7 +706,7 @@ export default function EmployeeFormPage({ mode = 'create' }) {
                   <label className="block text-xs font-semibold text-ink-subtle mb-1">
                     Proficiency
                   </label>
-                  <select
+                  <SearchableSelect
                     value={newSkillProficiency}
                     onChange={(e) => setNewSkillProficiency(Number(e.target.value))}
                     className="h-9 w-full rounded-lg border border-line bg-white px-2.5 text-xs text-ink focus:border-brand-500 focus:outline-none"
@@ -715,7 +716,7 @@ export default function EmployeeFormPage({ mode = 'create' }) {
                     <option value={3}>3 Stars (Competent)</option>
                     <option value={2}>2 Stars (Intermediate)</option>
                     <option value={1}>1 Star (Beginner)</option>
-                  </select>
+                  </SearchableSelect>
                 </div>
 
                 <label className="flex items-center gap-2 cursor-pointer pb-2">

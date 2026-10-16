@@ -30,6 +30,7 @@ import { projectsApi } from '../../api/projectsApi';
 import { formatDate } from '../../utils/format';
 import { ATTENDANCE_STATUS_TONE } from '../../utils/hrOptions';
 import { ROLES } from '../../config/roles';
+import SearchableSelect from '../ui/SearchableSelect';
 
 const today = new Date().toISOString().slice(0, 10);
 const INITIAL_FILTERS = {
@@ -303,7 +304,7 @@ export default function AttendanceTab({ readOnly = false }) {
             </div>
 
             {/* Worker Type Filter */}
-            <select
+            <SearchableSelect
               value={filters.labourType}
               onChange={(e) => setFilters((f) => ({ ...f, labourType: e.target.value, page: 1 }))}
               className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -311,11 +312,11 @@ export default function AttendanceTab({ readOnly = false }) {
               <option value="all">All Worker Types</option>
               <option value="company">Company Employees</option>
               <option value="contractor">Contractor Workers / Labour</option>
-            </select>
+            </SearchableSelect>
 
             {/* Contractor Filter */}
             {!isContractor && (
-              <select
+              <SearchableSelect
                 value={filters.contractorId}
                 onChange={(e) => setFilters((f) => ({ ...f, contractorId: e.target.value, page: 1 }))}
                 className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -326,11 +327,11 @@ export default function AttendanceTab({ readOnly = false }) {
                     {c.name}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             )}
 
             {/* Project Filter */}
-            <select
+            <SearchableSelect
               value={filters.projectId}
               onChange={(e) => setFilters((f) => ({ ...f, projectId: e.target.value, page: 1 }))}
               className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -341,7 +342,7 @@ export default function AttendanceTab({ readOnly = false }) {
                   {p.name}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
 
             {/* Date Picker */}
             <div className="flex items-center gap-1">
@@ -355,7 +356,7 @@ export default function AttendanceTab({ readOnly = false }) {
             </div>
 
             {/* Attendance Status Filter */}
-            <select
+            <SearchableSelect
               value={filters.status}
               onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value, page: 1 }))}
               className="h-9 rounded-xl border border-line bg-canvas px-3 text-xs sm:text-sm text-ink focus:border-brand-500 focus:bg-white"
@@ -365,7 +366,7 @@ export default function AttendanceTab({ readOnly = false }) {
               <option value="ABSENT">Absent</option>
               <option value="HALF_DAY">Half Day</option>
               <option value="LEAVE">Leave</option>
-            </select>
+            </SearchableSelect>
           </div>
         </div>
 
