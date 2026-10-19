@@ -50,7 +50,7 @@ export default function MaterialMovementsPage() {
   useEffect(() => {
     reload();
     procurementApi.lookups().then((d) => setContractors(d.contractors ?? [])).catch(() => setContractors([]));
-    materialsApi.list({ pageSize: 200 }).then((d) => setMaterials(d.materials ?? [])).catch(() => setMaterials([]));
+    materialsApi.listAll().then(setMaterials).catch(() => setMaterials([]));
     warehouseApi.lookups().then((d) => setWarehouseLookups(d || { warehouses: [], stockBalances: [] })).catch(() => {});
   }, [reload]);
 

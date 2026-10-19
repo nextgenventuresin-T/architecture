@@ -104,7 +104,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     } else {
       projectsApi.list({ pageSize: 50 }).then((data) => setProjects(data.projects ?? [])).catch(() => setProjects([]));
     }
-    materialsApi.list({ pageSize: 50 }).then((data) => setMaterials(data.materials ?? [])).catch(() => setMaterials([]));
+    materialsApi.listAll().then(setMaterials).catch(() => setMaterials([]));
     toolApi.list({ pageSize: 100 }).then((data) => setTools(data.tools ?? [])).catch(() => setTools([]));
     procurementApi.lookups().then((data) => setContractors(data.contractors ?? [])).catch(() => setContractors([]));
     vendorApi.list({ status: 'active', pageSize: 200 }).then((data) => setVendors(data.vendors ?? [])).catch(() => setVendors([]));

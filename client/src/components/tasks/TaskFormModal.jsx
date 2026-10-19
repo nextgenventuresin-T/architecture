@@ -141,8 +141,8 @@ export default function TaskFormModal({
   // Load catalogues
   useEffect(() => {
     materialsApi
-      .list({ pageSize: 100 })
-      .then((data) => setMaterialsMaster(data.materials || []))
+      .listAll()
+      .then(setMaterialsMaster)
       .catch((err) => console.error('Failed to load materials catalogue:', err));
 
     toolApi

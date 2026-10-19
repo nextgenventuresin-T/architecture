@@ -108,7 +108,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       ? procurementApi.lookups().then((d) => d.projects ?? [])
       : projectsApi.list({ pageSize: 50 }).then((d) => d.projects ?? []);
     projectsLoad.then(setProjects).catch(() => setProjects([]));
-    materialsApi.list({ pageSize: 100 }).then((d) => setMaterials(d.materials ?? [])).catch(() => setMaterials([]));
+    materialsApi.listAll().then(setMaterials).catch(() => setMaterials([]));
     toolApi.list({ pageSize: 100 }).then((d) => setTools(d.tools ?? [])).catch(() => setTools([]));
     vendorApi.list({ status: 'active', pageSize: 200 }).then((d) => setVendors(d.vendors ?? [])).catch(() => setVendors([]));
     procurementApi.lookups().then((d) => setContractors(d.contractors ?? [])).catch(() => setContractors([]));
