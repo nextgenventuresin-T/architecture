@@ -5,6 +5,7 @@
   "description": "Full-stack Architecture ERP (React Vite + Node.js Express + MySQL)",
   "scripts": {
     "build": "npm --prefix client install --include=dev && npm --prefix client run build && npm --prefix server install",
+    "build:hostinger": "npm --prefix client install --include=dev && npm --prefix client run build && npm --prefix server install --omit=dev && node -e \"require('fs').rmSync('client/node_modules',{recursive:true,force:true})\"",
     "start": "node server/src/server.js",
     "server": "npm --prefix server start",
     "client": "npm --prefix client run dev",
