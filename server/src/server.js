@@ -3,6 +3,7 @@
 const app = require('./app');
 const env = require('./config/env');
 const { verifyConnection } = require('./config/db');
+const { ensureSchema } = require('./db/ensureSchema');
 
 async function start() {
   try {
@@ -12,6 +13,8 @@ async function start() {
     console.error('Could not reach MySQL:', error.message);
     process.exit(1);
   }
+  // Add any new columns this version needs (additive, idempotent).
+  await ensureSchema();
 
   app.listen(env.port, () => {
     console.log(`Architecture ERP API listening on http://localhost:${env.port}`);
