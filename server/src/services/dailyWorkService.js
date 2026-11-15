@@ -18,6 +18,7 @@ const areaService = require('./areaService');
 const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const pmScope = require('./pmScopeService');
 const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
+const { isLiquidMaterial, litresOrNull, litresFor } = require('../config/liquidUnits');
 
 /** The warehouse row that belongs to a contractor (null when none is provisioned). */
 async function contractorWarehouseFor(contractorId) {
@@ -71,7 +72,8 @@ async function scopedTaskMaterialLines(taskId, holder, subtaskId) {
   const recScope = subtaskId ? ' AND pr.subtask_id = ?' : '';
   const who = holderClause(holder);
   const [rows] = await pool.query(
-    `SELECT pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit) AS unit,
+    `SELECT pr.material_id, m.name, m.code, m.category, COALESCE(pr.unit, m.unit) AS unit,
+            MAX(pr.litres_per_unit) AS litres_per_unit,
             SUM(COALESCE(
               (SELECT SUM(r.received_quantity) FROM procurement_receipts r WHERE r.procurement_request_id = pr.id),
               (SELECT mm.received_quantity FROM material_movements mm WHERE mm.procurement_request_id = pr.id AND mm.status = 'received' LIMIT 1),
@@ -80,7 +82,7 @@ async function scopedTaskMaterialLines(taskId, holder, subtaskId) {
      JOIN materials m ON m.id = pr.material_id
      WHERE pr.task_id = ? AND pr.item_type = 'material' AND pr.status IN ('received', 'partially_received')
        AND ${who.sql}${recScope}
-     GROUP BY pr.material_id, m.name, m.code, COALESCE(pr.unit, m.unit)`,
+     GROUP BY pr.material_id, m.name, m.code, m.category, COALESCE(pr.unit, m.unit)`,
     [taskId, ...who.params, ...(subtaskId ? [subtaskId] : [])]
   );
   const wh = await holderWarehouse(holder);
@@ -95,6 +97,9 @@ async function scopedTaskMaterialLines(taskId, holder, subtaskId) {
     const cost = wh ? await warehouseModel.averageUnitCost(wh.id, r.material_id) : null;
     out.push({
       material_id: r.material_id, name: r.name, code: r.code, unit: r.unit,
+      // Bucket / liquid material: litres used can be captured with the quantity.
+      isLiquid: isLiquidMaterial({ unit: r.unit, category: r.category, name: r.name }),
+      litresPerUnit: r.litres_per_unit != null ? Number(r.litres_per_unit) : null,
       procured: Number(r.procured), used: Number(u.used), taskAvailable: left,
       availableStock: Math.min(left, stock), costPerUnit: cost || 0,
     });
@@ -194,6 +199,7 @@ async function list(query = {}, hrScope) {
       materialCode: r.material_code,
       materialCategory: r.material_category,
       quantityUsed: r.quantity_used ? Number(r.quantity_used) : null,
+      litresUsed: r.litres_used != null ? Number(r.litres_used) : null,
       unit: r.unit || r.material_unit,
       miscAmount: r.misc_amount ? Number(r.misc_amount) : 0,
       miscDescription: r.misc_description,
@@ -360,6 +366,7 @@ async function getById(id, hrScope) {
     materialCode: update.material_code,
     materialCategory: update.material_category,
     quantityUsed: update.quantity_used ? Number(update.quantity_used) : null,
+    litresUsed: update.litres_used != null ? Number(update.litres_used) : null,
     unit: update.unit || update.material_unit,
     warehouseTransactionId: update.warehouse_transaction_id,
     transactionNumber: update.transaction_number,
@@ -793,6 +800,24 @@ async function create(payload, files, hrScope, userId) {
 
   if (expenseId) {
     await pool.query('UPDATE expenses SET source_id = ? WHERE id = ?', [updateId, expenseId]);
+  }
+
+  // Bucket / liquid material: litres used - typed, else quantity x the litres per unit
+  // recorded when it was procured (this task first, then this project).
+  if (material && quantityUsed > 0 && isLiquidMaterial(material)) {
+    let litresUsed = litresOrNull(payload.litres_used, 'litres_used');
+    if (litresUsed == null) {
+      const [[lp]] = await pool.query(
+        `SELECT litres_per_unit FROM procurement_requests
+         WHERE material_id = ? AND litres_per_unit > 0 AND (task_id <=> ? OR project_id = ?)
+         ORDER BY (task_id <=> ?) DESC, id DESC LIMIT 1`,
+        [material.id, task ? task.id : null, projectId, task ? task.id : null]
+      );
+      litresUsed = litresFor(quantityUsed, { unit: material.unit, litresPerUnit: lp?.litres_per_unit });
+    }
+    if (litresUsed != null) {
+      await pool.query('UPDATE daily_work_updates SET litres_used = ? WHERE id = ?', [litresUsed, updateId]);
+    }
   }
 
   // Attach photos

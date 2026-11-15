@@ -10,6 +10,7 @@ import { InputField, SelectField, TextAreaField } from '../../components/ui/Fiel
 import { myPortalApi } from '../../api/staffPortalApi';
 import { toApiError } from '../../api/axiosClient';
 import useAuth from '../../hooks/useAuth';
+import { formatDate } from '../../utils/format';
 
 export const fmtTime = (v) => (v ? new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—');
 export const fmtHours = (min) => {
@@ -17,7 +18,8 @@ export const fmtHours = (min) => {
   const m = Math.max(0, Math.round(Number(min)));
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 };
-export const fmtDay = (d) => new Date(`${d}T00:00:00`).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+// Weekday + DD-MM-YYYY, e.g. "Sun, 15-11-2026".
+export const fmtDay = (d) => `${new Date(`${String(d).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short' })}, ${formatDate(String(d).slice(0, 10))}`;
 const monthLabel = (m) => new Date(`${m}-01T00:00:00`).toLocaleDateString([], { month: 'long', year: 'numeric' });
 const shiftMonth = (m, by) => {
   const d = new Date(`${m}-01T00:00:00`);

@@ -63,6 +63,7 @@ router.post(
     body('source_contractor_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
     body('source_warehouse_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
     body('sent_quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
+    body('sent_litres').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Enter litres as a number.').toFloat(),
     body('requested_quantity').optional({ nullable: true }).isFloat({ gt: 0 }).toFloat(),
     body('project_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
     body('site_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
@@ -87,6 +88,7 @@ router.post(
   [
     param('id').isInt({ min: 1 }),
     body('received_quantity').optional({ nullable: true }).isFloat({ gt: 0 }).toFloat(),
+    body('received_litres').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Enter litres as a number.').toFloat(),
     body('receiving_date').optional({ nullable: true }).isISO8601(),
     // The receiver MUST enter the vehicle number: it is what fetches and verifies the dispatch.
     body('vehicle_number').trim().notEmpty().withMessage('Enter the vehicle number to verify the dispatch.').isLength({ max: 40 }),

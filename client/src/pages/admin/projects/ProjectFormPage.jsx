@@ -30,9 +30,11 @@ import { projectsApi } from '../../../api/projectsApi';
 import { hrApi } from '../../../api/hrApi';
 import { toApiError } from '../../../api/axiosClient';
 import { PROJECT_STATUSES, PROJECT_TYPES, toOptions } from '../../../utils/projectOptions';
-import { formatCurrency, formatNumber, toDateInputValue } from '../../../utils/format';
+import { formatCurrency, formatNumber, toDateInputValue, todayIso, addDaysIso } from '../../../utils/format';
 import SearchableSelect from '../../../components/ui/SearchableSelect';
 import AreaInput from '../../../components/ui/AreaInput';
+import AreaMeasureField, { DEFAULT_AREA_UNIT } from '../../../components/ui/AreaMeasureField';
+import { formatArea } from '../../../utils/areaUnits';
 
 /** Subtasks of a task grouped by area, in first-seen order: [{ area, count, total }]. */
 function subtasksByArea(subtasks = []) {
@@ -62,7 +64,10 @@ function calcWorkingDays(start, end) {
 }
 
 const EMPTY = {
+  code: '',
   name: '',
+  area_value: '',
+  area_unit: DEFAULT_AREA_UNIT,
   client_id: '',
   client_contract_value: '',
   project_type: 'residential',
@@ -103,8 +108,9 @@ function createEmptyTask(defaultSiteId = '', durationDays = 14) {
     siteId: defaultSiteId,
     description: '',
     status: 'on-track',
-    startDate: '',
-    endDate: '',
+    // A new task starts today by default; the planner can change both dates.
+    startDate: todayIso(),
+    endDate: addDaysIso(todayIso(), durationDays),
     durationDays,
     materials: [],
     tools: [],
@@ -120,6 +126,8 @@ function createEmptySubtask(parent) {
     tempId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     name: '',
     areaName: '',
+    areaValue: '',
+    areaUnit: DEFAULT_AREA_UNIT,
     description: '',
     status: 'on-track',
     startDate: parent?.startDate || '',
@@ -282,6 +290,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
     setValues({
       code: p.code ?? '',
       name: p.name ?? '',
+      area_value: p.area?.value != null ? String(p.area.value) : '',
+      area_unit: p.area?.unit || DEFAULT_AREA_UNIT,
       client_id: p.client?.id ? String(p.client.id) : '',
       client_contract_value: p.clientContractValue != null ? String(p.clientContractValue) : (p.estimatedBudget != null ? String(p.estimatedBudget) : ''),
       project_type: p.projectType ?? 'residential',
@@ -324,6 +334,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
               tempId: `sub-${st.id}`,
               name: st.name || '',
               areaName: st.areaName || '',
+              areaValue: st.areaMeasure?.value != null ? String(st.areaMeasure.value) : '',
+              areaUnit: st.areaMeasure?.unit || DEFAULT_AREA_UNIT,
               description: st.description || '',
               status: st.status || 'on-track',
               progress: Number(st.progress || 0),
@@ -792,7 +804,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                 variant="secondary"
                                 onClick={() =>
                                   updateTask(t.tempId, (task) => {
-                                    const sDate = task.startDate || new Date().toISOString().slice(0, 10);
+                                    const sDate = task.startDate || todayIso();
                                     const eDate = task.endDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
                                     const days = calcWorkingDays(sDate, eDate);
                                     return {
@@ -1273,6 +1285,9 @@ export default function ProjectFormPage({ mode = 'create' }) {
             name: st.name.trim(),
             // Typed area: the server reuses a matching area or creates it ("Floor > Room" nests).
             area_name: st.areaName ? st.areaName.trim() : null,
+            // Measured area of the subtask; the unit is saved only together with a value.
+            area_value: st.areaValue === '' || st.areaValue == null ? null : Number(st.areaValue),
+            area_unit: st.areaValue === '' || st.areaValue == null ? null : (st.areaUnit || DEFAULT_AREA_UNIT),
             description: st.description ? st.description.trim() : null,
             status: st.status || 'on-track',
             ...(st.progress !== undefined ? { progress: Number(st.progress) } : {}),
@@ -1285,6 +1300,12 @@ export default function ProjectFormPage({ mode = 'create' }) {
       });
 
     const payload = { ...values, tasks: formattedTasks };
+    // Blank code: auto-generated on create, unchanged on edit.
+    payload.code = String(values.code || '').trim();
+    if (!payload.code) delete payload.code;
+    // Area is optional; the unit is saved only together with a value.
+    payload.area_value = values.area_value === '' || values.area_value == null ? null : Number(values.area_value);
+    payload.area_unit = payload.area_value == null ? null : values.area_unit;
     for (const key of ['client_id', 'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id']) {
       payload[key] = payload[key] === '' ? null : Number(payload[key]);
     }
@@ -1360,15 +1381,17 @@ export default function ProjectFormPage({ mode = 'create' }) {
           <Card>
             <CardHeader title="Project Information" description="Basic project credentials and location." />
             <CardBody className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-ink-subtle mb-1.5">
-                  Project Code
-                </label>
-                <div className="flex h-11 items-center rounded-xl border border-line bg-canvas-subtle px-3.5 font-mono text-sm font-semibold text-ink-muted">
-                  {isEdit ? values.code || '(Auto-generated)' : 'Auto-generated by system (PRJ-XXXX)'}
-                </div>
-                <p className="mt-1 text-xs text-ink-subtle">Unique project identifier generated automatically upon creation.</p>
-              </div>
+              <InputField
+                label="Project Code"
+                value={values.code}
+                onChange={set('code')}
+                error={fieldErrors.code}
+                maxLength={20}
+                placeholder={isEdit ? 'e.g. PRJ-1001' : 'Leave blank to auto-generate (PRJ-XXXX)'}
+                hint={isEdit
+                  ? 'Must be unique. Changing it keeps every linked record - they refer to the project, not the code.'
+                  : 'Type your own unique code, or leave blank and the system assigns the next PRJ number.'}
+              />
 
               <InputField
                 label="Project Name"
@@ -1429,6 +1452,16 @@ export default function ProjectFormPage({ mode = 'create' }) {
                 error={fieldErrors.location}
                 placeholder="Rajpura Road, Patiala"
                 className="sm:col-span-2"
+              />
+
+              <AreaMeasureField
+                label="Project Area"
+                value={values.area_value}
+                unit={values.area_unit}
+                onValueChange={set('area_value')}
+                onUnitChange={set('area_unit')}
+                error={fieldErrors.area_value || fieldErrors.area_unit}
+                hint="Total area of the project, with its unit."
               />
 
               <TextAreaField
@@ -1910,6 +1943,11 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                             {st.areaName}
                                           </span>
                                         )}
+                                        {st.areaValue !== '' && st.areaValue != null && (
+                                          <span className="shrink-0 rounded-md bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-ink">
+                                            {formatArea({ value: st.areaValue, unit: st.areaUnit })}
+                                          </span>
+                                        )}
                                       </button>
                                       <div className="flex items-center gap-2">
                                         <span className="rounded-md bg-canvas px-2 py-0.5 text-xs font-semibold text-ink">{formatCurrency(sCalc.total)}</span>
@@ -1941,6 +1979,15 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                             value={st.areaName}
                                             areas={projectAreas}
                                             onChange={(val) => updateSub(st.tempId, (x) => ({ ...x, areaName: val }))}
+                                          />
+                                          <AreaMeasureField
+                                            className="sm:col-span-2"
+                                            label="Subtask Area (optional)"
+                                            value={st.areaValue ?? ''}
+                                            unit={st.areaUnit}
+                                            onValueChange={(e) => updateSub(st.tempId, (x) => ({ ...x, areaValue: e.target.value }))}
+                                            onUnitChange={(e) => updateSub(st.tempId, (x) => ({ ...x, areaUnit: e.target.value }))}
+                                            hint="Area this subtask covers, e.g. 1,200 sq. ft. of flooring."
                                           />
                                           <SelectField
                                             label="Status"

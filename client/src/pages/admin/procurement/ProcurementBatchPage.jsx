@@ -73,6 +73,8 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
   const nConfirm = count((r) => r.canConfirmSource);
   const nOrder = canOrderRole ? count((r) => r.status === 'approved' && r.itemType !== 'tool' && r.sourceType === 'supplier' && r.kind !== 'central_purchase') : 0;
   const nDispatch = count((r) => r.canDispatch);
+  // Vendor items still waiting for the vendor to confirm (no vehicle recorded yet).
+  const nVendorConfirm = count((r) => r.canRecordVendorDispatch && r.awaitingVendorDispatch);
   const awaitingVehicle = items.filter((r) =>
     (r.movement?.status === 'in_transit')
     || (['ordered', 'partially_received'].includes(r.status) && (r.canReceiveOrder || r.canReceiveTool || [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE].includes(role)))
@@ -122,6 +124,11 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
                 <ShoppingCart className="h-4 w-4" aria-hidden="true" /> Place orders for {nOrder} vendor item{nOrder === 1 ? '' : 's'}
               </Button>
             )}
+            {nVendorConfirm > 0 && (
+              <Button onClick={() => setDialog('vendor_confirm')}>
+                <Truck className="h-4 w-4" aria-hidden="true" /> Vendor confirmed – add vehicle ({nVendorConfirm})
+              </Button>
+            )}
             {nDispatch > 0 && (
               <Button onClick={() => setDialog('dispatch')}>
                 <Truck className="h-4 w-4" aria-hidden="true" /> Send {nDispatch} item{nDispatch === 1 ? '' : 's'}
@@ -132,7 +139,7 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
                 <PackageCheck className="h-4 w-4" aria-hidden="true" /> Receive by vehicle
               </Button>
             )}
-            {!nSubmit && !nApprove && !nConfirm && !nOrder && !nDispatch && !awaitingVehicle.length && (
+            {!nSubmit && !nApprove && !nConfirm && !nOrder && !nVendorConfirm && !nDispatch && !awaitingVehicle.length && (
               <p className="text-sm text-ink-subtle">Nothing is waiting on you in this request right now.</p>
             )}
           </div>
@@ -208,6 +215,8 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
                     <Badge tone={PROCUREMENT_STATUS_TONE[r.status] ?? 'neutral'}>{PROCUREMENT_STATUS_LABELS[r.status] ?? r.status}</Badge>
                     {r.movement?.status === 'in_transit' && <p className="mt-1 text-xs text-amber-700">In transit · {r.movement.vehicleNumber}</p>}
                     {r.status === 'ordered' && r.vehicleNumber && !r.movement && <p className="mt-1 text-xs text-ink-subtle">Vehicle {r.vehicleNumber}</p>}
+                    {r.awaitingVendorDispatch && <p className="mt-1 text-xs text-amber-700">Awaiting vendor confirmation (no vehicle yet)</p>}
+                    {r.totalLitres != null && <p className="mt-1 text-xs text-ink-subtle">{formatNumber(r.totalLitres)} L</p>}
                   </td>
                 </tr>
               ))}
@@ -219,16 +228,20 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
       {dialog && (
         <BatchDialog
           kind={dialog}
-          items={dialog === 'receive' ? awaitingVehicle : items}
+          items={dialog === 'receive' ? awaitingVehicle.filter((r) => !r.awaitingVendorDispatch) : items}
           quotedTransport={quotedForDispatch}
           busy={Boolean(busy)}
           onClose={() => setDialog(null)}
-          onSubmit={(payload) => act(dialog, payload, dialog === 'order' ? 'Place orders' : dialog === 'dispatch' ? 'Send items' : 'Receive by vehicle')}
+          onSubmit={(payload) => act(dialog, payload, DIALOG_LABEL[dialog])}
         />
       )}
     </>
   );
 }
+
+const DIALOG_LABEL = {
+  order: 'Place orders', vendor_confirm: 'Vendor confirmed', dispatch: 'Send items', receive: 'Receive by vehicle',
+};
 
 /** Shared vehicle / driver details for ordering, sending or receiving many items at once. */
 function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit }) {
@@ -247,7 +260,8 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
     : [];
 
   function submit() {
-    if ((kind !== 'order' || items.some((r) => r.responsibleContractor || r.site)) && !v.vehicle_number.trim()) {
+    // Placing orders no longer needs the vehicle: it is added when the vendor confirms.
+    if (kind !== 'order' && !v.vehicle_number.trim()) {
       setErr('Enter the vehicle number.');
       return;
     }
@@ -256,15 +270,21 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
       vehicle_number: v.vehicle_number.trim(), driver_name: v.driver_name.trim() || null, driver_phone: v.driver_phone.trim() || null,
       transport_cost: v.transport_cost ? Number(v.transport_cost) : null,
     });
+    else if (kind === 'vendor_confirm') onSubmit({
+      vehicle_number: v.vehicle_number.trim(), driver_name: v.driver_name.trim() || null, driver_phone: v.driver_phone.trim() || null,
+      challan_number: v.challan_number.trim() || null, expected_delivery_date: v.expected_delivery_date || null,
+    });
     else onSubmit({
       vehicle_number: v.vehicle_number.trim() || null, driver_name: v.driver_name.trim() || null, driver_phone: v.driver_phone.trim() || null,
       challan_number: v.challan_number.trim() || null, order_date: v.order_date, expected_delivery_date: v.expected_delivery_date || null,
     });
   }
 
-  const title = kind === 'order' ? 'Place vendor orders' : kind === 'dispatch' ? 'Send items' : 'Receive by vehicle';
+  const title = kind === 'order' ? 'Place vendor orders' : kind === 'vendor_confirm' ? 'Vendor confirmed – add vehicle' : kind === 'dispatch' ? 'Send items' : 'Receive by vehicle';
   const description = kind === 'order'
-    ? 'One PO per item. The vendor\'s vehicle and driver are recorded so the receiver can verify them.'
+    ? 'One PO per item. The vehicle is optional now - if the vendor has not confirmed yet, add it later with "Vendor confirmed".'
+    : kind === 'vendor_confirm'
+      ? 'The vendor confirmed the order. This vehicle is recorded on every vendor item still waiting for it; the receiver must verify it.'
     : kind === 'dispatch'
       ? 'Everything goes on one vehicle. The receiver verifies this vehicle number. Freight is booked once, not per item.'
       : 'Enter the vehicle that arrived. Every item on it that you may receive is received in full, after the vehicle is verified.';
@@ -283,10 +303,10 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
             <InputField label="Driver phone" value={v.driver_phone} onChange={set('driver_phone')} />
           </>
         )}
-        {kind === 'order' && (
+        {(kind === 'order' || kind === 'vendor_confirm') && (
           <>
             <InputField label="Challan no." value={v.challan_number} onChange={set('challan_number')} />
-            <InputField label="Order date" type="date" value={v.order_date} onChange={set('order_date')} />
+            {kind === 'order' && <InputField label="Order date" type="date" value={v.order_date} onChange={set('order_date')} />}
             <InputField label="Expected delivery" type="date" value={v.expected_delivery_date} onChange={set('expected_delivery_date')} />
           </>
         )}

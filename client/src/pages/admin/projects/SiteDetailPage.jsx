@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatArea } from '../../../utils/areaUnits';
 import { Link, useParams, useLocation } from 'react-router-dom';
 import { ClipboardPlus, MapPin, ShieldCheck, Users, Package, Wallet, AlertTriangle, ArrowRight } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
@@ -109,6 +110,7 @@ export default function SiteDetailPage() {
               items={[
                 { label: 'Project', value: <Link to={backTo} className="text-brand-700 hover:underline">{site.project_name}</Link> },
                 { label: 'Location', value: <span className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5 text-ink-subtle" aria-hidden="true" />{site.address}</span> },
+                { label: 'Site Area', value: formatArea(site.area_value != null ? { value: site.area_value, unit: site.area_unit } : null) },
                 { label: 'Site engineer', value: site.site_engineer_name },
                 { label: 'Contractor', value: site.contractor_name },
                 { label: 'Engineer contact', value: site.site_engineer_phone },

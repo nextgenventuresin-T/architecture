@@ -1,4 +1,5 @@
 import { Card, CardHeader, CardBody } from '../ui/Card';
+import { formatArea } from '../../utils/areaUnits';
 import { StatusBadge } from '../ui/Badge';
 import ProgressBar from '../ui/ProgressBar';
 import InfoList from './InfoList';
@@ -25,6 +26,7 @@ export default function OverviewTab({ detail }) {
                 { label: 'Project code', value: project.code },
                 { label: 'Type', value: typeLabel(project.projectType) },
                 { label: 'Location', value: project.location },
+                { label: 'Project Area', value: formatArea(project.area) },
                 { label: 'Current phase', value: project.currentPhase },
                 { label: 'Sites', value: `${project.siteCount} site${project.siteCount === 1 ? '' : 's'}` },
                 { label: 'Contractor', value: project.contractor?.name },

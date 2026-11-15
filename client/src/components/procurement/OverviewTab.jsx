@@ -5,6 +5,7 @@ import { Card, CardHeader, CardBody } from '../ui/Card';
 import Badge from '../ui/Badge';
 import InfoList from '../projects/InfoList';
 import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
+import { formatLitres, isLitreUnit } from '../../utils/liquidUnits';
 import { PRIORITY_LABELS, PRIORITY_TONE, PROCUREMENT_KIND_LABELS, procurementFlowLabel, DELIVERY_MODE_LABELS } from '../../utils/procurementOptions';
 
 /** Project/site, material, supplier and the request's own quantity/cost details. */
@@ -76,6 +77,18 @@ export default function OverviewTab({ request, movement }) {
               },
               ...(request.vendor?.phone ? [{ label: 'Vendor Phone', value: request.vendor.phone }] : []),
               { label: 'Quantity requested', value: `${formatNumber(request.quantity)} ${request.unit}` },
+              ...(request.isLiquid ? [{
+                label: 'Litres',
+                value: request.totalLitres != null
+                  ? `${formatLitres(request.totalLitres)}${request.litresPerUnit && !isLitreUnit(request.unit) ? ` (${formatNumber(request.litresPerUnit)} L per ${request.unit})` : ''}`
+                  : 'Not recorded',
+              }] : []),
+              ...(request.sourceType === 'supplier' && request.itemType !== 'tool' ? [{
+                label: 'Vendor confirmation',
+                value: request.vendorConfirmedAt
+                  ? <span className="text-emerald-700">Confirmed {formatDate(request.vendorConfirmedAt)}{request.vehicleNumber ? ` · vehicle ${request.vehicleNumber}` : ''}</span>
+                  : <span className="text-amber-700">Awaiting vendor - vehicle number not recorded yet</span>,
+              }] : []),
               {
                 label: 'Cost per unit',
                 value: formatCurrency(request.purchaseRate != null ? request.purchaseRate : (request.estimatedRate || 0)),
@@ -159,6 +172,10 @@ export default function OverviewTab({ request, movement }) {
                 { label: 'Requested', value: movement.requestedQuantity != null ? `${formatNumber(movement.requestedQuantity)} ${movement.unit}` : '—' },
                 { label: 'Dispatched', value: `${formatNumber(movement.sentQuantity)} ${movement.unit}` },
                 { label: 'Received', value: movement.receivedQuantity != null ? `${formatNumber(movement.receivedQuantity)} ${movement.unit}` : '—' },
+                ...(movement.isLiquid ? [
+                  { label: 'Litres sent', value: formatLitres(movement.sentLitres) },
+                  { label: 'Litres received', value: formatLitres(movement.receivedLitres) },
+                ] : []),
                 { label: 'Cost / Unit', value: formatCurrency(movement.costPerUnit || 0) },
                 { label: 'Total Value', value: formatCurrency(movement.totalMaterialCost || 0) },
                 { label: 'Vehicle', value: movement.vehicleNumber || '—' },

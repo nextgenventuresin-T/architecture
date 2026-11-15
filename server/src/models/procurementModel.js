@@ -62,6 +62,7 @@ const LIST_SELECT = `
     r.received_by, r.received_vehicle_number,
     r.area_id, pa.name AS area_name, pa.area_type, r.transport_cost,
     r.batch_id, pb.batch_number,
+    r.litres_per_unit, r.total_litres, r.vendor_confirmed_at, r.vendor_confirmed_by,
     COALESCE((
       SELECT SUM(te.amount) FROM expenses te
       WHERE te.status NOT IN ('rejected', 'cancelled') AND (
@@ -271,7 +272,7 @@ const WRITABLE = [
   'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'tool_unit_id', 'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'requester_role', 'contractor_id',
-  'area_id', 'transport_cost', 'batch_id',
+  'area_id', 'transport_cost', 'batch_id', 'litres_per_unit', 'total_litres', 'vendor_confirmed_at', 'vendor_confirmed_by',
 ];
 
 // ---------------------------------------------------------------- batches
@@ -339,7 +340,7 @@ const UPDATABLE = [
   'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'tool_unit_id',
-  'area_id', 'transport_cost',
+  'area_id', 'transport_cost', 'litres_per_unit', 'total_litres',
 ];
 
 async function update(id, payload) {

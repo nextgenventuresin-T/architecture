@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Check, X, Send, RotateCcw, ShoppingCart, PackagePlus, Ban, ClipboardCheck, Wrench } from 'lucide-react';
+import { Check, X, Send, RotateCcw, ShoppingCart, PackagePlus, Ban, ClipboardCheck, Wrench, Truck } from 'lucide-react';
 import Button from '../ui/Button';
 import PlaceOrderDialog from './PlaceOrderDialog';
+import VendorDispatchDialog from './VendorDispatchDialog';
 import ReceiveDialog from './ReceiveDialog';
 import ReceiveMovementDialog from './ReceiveMovementDialog';
 import VendorReceiveDialog from './VendorReceiveDialog';
@@ -48,6 +49,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   const [isAllocatingTool, setIsAllocatingTool] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [isConfirmingSource, setIsConfirmingSource] = useState(false);
+  const [isRecordingDispatch, setIsRecordingDispatch] = useState(false);
 
   if (!canManageOwnRequest && !canReceive) return null;
 
@@ -123,6 +125,26 @@ export default function StatusActions({ request, movement, onChanged, onError })
     }
   }
 
+  // Vendor purchase: raised / ordered without a vehicle; once the vendor confirms,
+  // Admin records the dispatch. Nothing can be received until that is done.
+  const awaitingVendor = Boolean(request.awaitingVendorDispatch);
+  if (request.canRecordVendorDispatch) {
+    buttons.push(
+      <Button key="vendor-dispatch" type="button" variant={awaitingVendor ? 'primary' : 'secondary'} onClick={() => setIsRecordingDispatch(true)}>
+        <Truck className="h-4 w-4" aria-hidden="true" />
+        {awaitingVendor ? 'Vendor confirmed – add vehicle' : 'Update vendor vehicle'}
+      </Button>
+    );
+  }
+  // (Before a vendor -> site order is placed the next step is "Place order", not receiving.)
+  if (awaitingVendor && (status !== 'approved' || request.kind === 'central_purchase')) {
+    buttons.push(
+      <span key="awaiting-vendor" className="text-sm text-amber-700">
+        Waiting for the vendor to confirm - receiving opens once the vehicle number is recorded.
+      </span>
+    );
+  }
+
   // Instant fulfilment only for receipt-style flows (supplier purchase / central
   // purchase). Two-phase movement kinds use Send Material -> Receive instead.
   const isMovementKind =
@@ -130,7 +152,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
     (request.kind === 'contractor_supply' && request.source?.type === 'central_warehouse');
   const isInternalTransfer = request.kind === 'internal_transfer';
 
-  if (canReceive && isFlowRequest && !isMovementKind && !isToolRequest && status === 'approved' && !request.warehouseTransactionId) {
+  if (canReceive && isFlowRequest && !isMovementKind && !isToolRequest && status === 'approved' && !request.warehouseTransactionId && !awaitingVendor) {
     buttons.push(
       <Button key="fulfil" type="button" variant="primary" onClick={() => setIsFulfilling(true)}>
         <PackagePlus className="h-4 w-4" aria-hidden="true" />
@@ -221,7 +243,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   // Legacy project/supplier receipt (into material_entries) — not for the
   // two-phase movement kinds, which use the movement receive above. A contractor
   // receives a vendor order delivered to them (`canReceiveOrder`, server-computed).
-  if ((canReceive || request.canReceiveOrder) && !isMovementKind && !isToolRequest && ['ordered', 'partially_received'].includes(status)) {
+  if ((canReceive || request.canReceiveOrder) && !isMovementKind && !isToolRequest && ['ordered', 'partially_received'].includes(status) && !awaitingVendor) {
     buttons.push(
       <Button key="receive" type="button" variant="primary" onClick={() => setIsReceiving(true)}>
         <PackagePlus className="h-4 w-4" aria-hidden="true" />
@@ -241,6 +263,15 @@ export default function StatusActions({ request, movement, onChanged, onError })
         onClose={() => setIsPlacingOrder(false)}
         onSaved={(message) => {
           setIsPlacingOrder(false);
+          onChanged(message);
+        }}
+      />
+
+      <VendorDispatchDialog
+        request={isRecordingDispatch ? request : null}
+        onClose={() => setIsRecordingDispatch(false)}
+        onSaved={(message) => {
+          setIsRecordingDispatch(false);
           onChanged(message);
         }}
       />

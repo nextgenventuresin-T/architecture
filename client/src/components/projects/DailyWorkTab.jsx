@@ -5,6 +5,7 @@ import Badge from '../ui/Badge';
 import EmptyState from '../ui/EmptyState';
 import { formatDate, formatNumber } from '../../utils/format';
 import SearchableSelect from '../ui/SearchableSelect';
+import { formatLitres, isLitreUnit } from '../../utils/liquidUnits';
 
 export default function DailyWorkTab({ detail }) {
   const { dailyWorkUpdates = [], sites = [], tasks = [] } = detail;
@@ -180,7 +181,8 @@ export default function DailyWorkTab({ detail }) {
                     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs">
                       <Package className="h-4 w-4 text-amber-700 shrink-0" />
                       <span className="font-semibold text-amber-900">
-                        Material Consumed: {formatNumber(up.quantityUsed || up.quantity_used)} {up.unit} of {up.materialName || up.material_name}
+                        Material Consumed: {formatNumber(up.quantityUsed || up.quantity_used)} {up.unit}
+                        {up.litresUsed != null && !isLitreUnit(up.unit) ? ` (${formatLitres(up.litresUsed)})` : ''} of {up.materialName || up.material_name}
                       </span>
                       {(up.materialCode || up.material_code) && (
                         <span className="text-amber-700">({up.materialCode || up.material_code})</span>

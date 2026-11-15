@@ -7,6 +7,7 @@ const { requireAuth } = require('../middleware/authMiddleware');
 const { attachHrScope } = require('../middleware/hrScope');
 const { requirePermission } = require('../middleware/authorize');
 const controller = require('../controllers/taskController');
+const { areaRules: areaMeasureRules } = require('../config/areaUnits');
 
 const router = express.Router();
 
@@ -169,6 +170,7 @@ const subtaskBodyRules = (isCreate) => [
   body('tools').optional().isArray(),
   body('labour').optional().isArray(),
   body('misc').optional().isArray(),
+  ...areaMeasureRules(body),
 ];
 
 router.get('/:id/subtasks', [param('id').isInt({ min: 1 })], validate, controller.listSubtasks);

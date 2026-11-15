@@ -2,6 +2,7 @@
 
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
+const { normaliseArea } = require('../config/areaUnits');
 
 const SITE_SELECT = `
   SELECT s.*, p.name AS project_name, p.code AS project_code,
@@ -18,7 +19,7 @@ async function findById(id) {
   return rows[0] || null;
 }
 
-const WRITABLE = ['project_id', 'name', 'address', 'site_engineer_id', 'contractor_id', 'labour_count', 'progress', 'status', 'safety_status'];
+const WRITABLE = ['project_id', 'name', 'address', 'site_engineer_id', 'contractor_id', 'labour_count', 'progress', 'status', 'safety_status', 'area_value', 'area_unit'];
 
 /**
  * A project can never have two sites with the same name (e.g. "Quick add Site 1" clicked
@@ -42,6 +43,7 @@ const isDuplicateName = (e) => e && (e.code === 'ER_DUP_ENTRY' || e.errno === 10
 
 async function create(payload) {
   if (typeof payload.name === 'string') payload = { ...payload, name: payload.name.trim() };
+  payload = normaliseArea({ ...payload });
   await assertNameFree(payload.project_id, payload.name);
   const columns = WRITABLE.filter((k) => payload[k] !== undefined);
   try {
@@ -57,6 +59,7 @@ async function create(payload) {
 }
 
 async function update(id, payload) {
+  payload = normaliseArea({ ...payload });
   const columns = WRITABLE.filter((k) => payload[k] !== undefined && k !== 'project_id');
   if (!columns.length) return;
   if (typeof payload.name === 'string') {

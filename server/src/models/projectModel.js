@@ -11,7 +11,7 @@ const LIST_SELECT = `
   SELECT
     p.id, p.code, p.name, p.project_type, p.location, p.description,
     p.start_date, p.expected_completion, p.is_archived, p.estimated_budget, p.client_contract_value,
-    p.status, p.progress, p.current_phase,
+    p.status, p.progress, p.current_phase, p.area_value, p.area_unit,
     c.id  AS client_id,     c.name AS client_name,
     pm.id AS project_manager_id, pm.full_name AS project_manager_name,
     ar.id AS architect_id,       ar.full_name AS architect_name,
@@ -103,13 +103,18 @@ async function findByCode(code) {
   return rows[0] || null;
 }
 
+/**
+ * Next free auto code (PRJ-1001, PRJ-1002 ...). Codes can now also be typed by hand,
+ * so this takes the highest PRJ-number in use (not the newest row's) and skips any
+ * code that is already taken.
+ */
 async function nextCode() {
-  const [rows] = await pool.query(
-    "SELECT code FROM projects WHERE code LIKE 'PRJ-%' ORDER BY id DESC LIMIT 1"
+  const [[row]] = await pool.query(
+    "SELECT MAX(CAST(SUBSTRING(code, 5) AS UNSIGNED)) AS n FROM projects WHERE code REGEXP '^PRJ-[0-9]+$'"
   );
-  if (!rows.length) return 'PRJ-1001';
-  const match = rows[0].code.match(/PRJ-(\d+)/);
-  const num = match ? parseInt(match[1], 10) + 1 : 1001;
+  let num = Math.max(1000, Number(row?.n) || 0) + 1;
+  // eslint-disable-next-line no-await-in-loop
+  while (await findByCode(`PRJ-${String(num).padStart(4, '0')}`)) num += 1;
   return `PRJ-${String(num).padStart(4, '0')}`;
 }
 
@@ -117,9 +122,13 @@ const WRITABLE = [
   'code', 'name', 'client_id', 'project_type', 'description', 'location',
   'start_date', 'expected_completion', 'estimated_budget', 'client_contract_value',
   'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id', 'status', 'current_phase',
+  'area_value', 'area_unit',
 ];
 
+const { normaliseArea } = require('../config/areaUnits');
+
 async function create(payload) {
+  normaliseArea(payload);
   if (!payload.code) {
     payload.code = await nextCode();
   }
@@ -133,6 +142,7 @@ async function create(payload) {
 }
 
 async function update(id, payload) {
+  normaliseArea(payload);
   const columns = WRITABLE.filter((key) => payload[key] !== undefined);
   if (columns.length === 0) return;
   await pool.query(

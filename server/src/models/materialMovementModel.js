@@ -14,7 +14,7 @@ const LIST_SELECT = `
     mm.source_warehouse_id, mm.destination_warehouse_id,
     mm.source_contractor_id, mm.destination_contractor_id,
     mm.project_id, mm.site_id,
-    mm.requested_quantity, mm.sent_quantity, mm.received_quantity,
+    mm.requested_quantity, mm.sent_quantity, mm.received_quantity, mm.sent_litres, mm.received_litres,
     mm.status, mm.vehicle_number, mm.driver_name, mm.driver_phone,
     mm.transport_cost, mm.other_expenses, mm.reference, mm.remarks,
     mm.cost_per_unit, mm.total_cost,
@@ -23,8 +23,8 @@ const LIST_SELECT = `
     mm.created_at, mm.updated_at,
     m.name AS material_name, m.category AS material_category, m.default_rate AS material_default_rate,
     t.name AS tool_name, t.code AS tool_code, t.type AS tool_type,
-    sw.name AS source_warehouse_name, sw.contractor_id AS source_warehouse_contractor_id,
-    dw.name AS destination_warehouse_name, dw.contractor_id AS destination_warehouse_contractor_id,
+    sw.name AS source_warehouse_name, sw.contractor_id AS source_warehouse_contractor_id, sw.type AS source_warehouse_type,
+    dw.name AS destination_warehouse_name, dw.contractor_id AS destination_warehouse_contractor_id, dw.site_id AS destination_warehouse_site_id,
     sc.name AS source_contractor_name, dc.name AS destination_contractor_name,
     p.name AS project_name, s.name AS site_name,
     su.full_name AS sent_by_name, ru.full_name AS received_by_name,
@@ -142,7 +142,7 @@ const WRITABLE = [
   'requested_quantity', 'sent_quantity', 'status', 'vehicle_number', 'driver_name',
   'driver_phone', 'transport_cost', 'other_expenses', 'reference', 'remarks',
   'procurement_request_id', 'issue_transaction_id', 'sent_by',
-  'cost_per_unit', 'total_cost',
+  'cost_per_unit', 'total_cost', 'sent_litres',
 ];
 
 async function create(payload, conn = null) {
@@ -155,15 +155,15 @@ async function create(payload, conn = null) {
   return result.insertId;
 }
 
-async function markReceived(id, { receivedQuantity, receiveTransactionId, receivedBy, receivedVehicleNumber }, conn = null) {
+async function markReceived(id, { receivedQuantity, receiveTransactionId, receivedBy, receivedVehicleNumber, receivedLitres = null }, conn = null) {
   // `AND status = 'in_transit'` makes the flip itself the duplicate-receipt
   // guard: a second receive matches no row and reports false.
   const [result] = await (conn || pool).query(
     `UPDATE material_movements
      SET status = 'received', received_quantity = ?, receive_transaction_id = ?,
-         received_by = ?, received_at = NOW(), received_vehicle_number = ?
+         received_by = ?, received_at = NOW(), received_vehicle_number = ?, received_litres = ?
      WHERE id = ? AND status = 'in_transit'`,
-    [receivedQuantity, receiveTransactionId ?? null, receivedBy ?? null, receivedVehicleNumber ?? null, id]
+    [receivedQuantity, receiveTransactionId ?? null, receivedBy ?? null, receivedVehicleNumber ?? null, receivedLitres, id]
   );
   return result.affectedRows === 1;
 }

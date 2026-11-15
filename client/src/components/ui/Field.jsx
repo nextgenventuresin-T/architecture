@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { ChevronDown } from 'lucide-react';
 import SearchableSelect from './SearchableSelect';
+import DateInput from './DateInput';
 
 /**
  * Labelled form controls used across the create/edit forms. Keeping select,
@@ -33,6 +34,22 @@ function Shell({ id, label, error, hint, required, children, className = '' }) {
 
 export function InputField({ label, error, hint, required, className, ...props }) {
   const id = useId();
+  // Dates are shown and typed as DD-MM-YYYY everywhere; the value stays ISO (YYYY-MM-DD).
+  if (props.type === 'date') {
+    const { type, ...dateProps } = props;
+    return (
+      <Shell id={id} label={label} error={error} hint={hint} required={required} className={className}>
+        <DateInput
+          id={id}
+          required={required}
+          aria-invalid={Boolean(error) || undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          className={`${baseInput} ${stateClasses(error)} h-11 px-3.5`}
+          {...dateProps}
+        />
+      </Shell>
+    );
+  }
   return (
     <Shell id={id} label={label} error={error} hint={hint} required={required} className={className}>
       <input

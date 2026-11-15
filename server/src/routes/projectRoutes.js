@@ -10,6 +10,7 @@ const { ROLES } = require('../config/roles');
 const { uploadProjectDocuments } = require('../middleware/upload');
 const controller = require('../controllers/projectController');
 
+const { areaRules: areaMeasureRules } = require('../config/areaUnits');
 const router = express.Router();
 
 router.use(requireAuth);
@@ -27,7 +28,10 @@ const optionalId = (field) =>
 const projectRules = (isCreate) => {
   const required = (chain, message) => (isCreate ? chain.notEmpty().withMessage(message) : chain.optional());
   return [
-    body('code').optional().trim().isLength({ max: 20 }).withMessage('Keep the code under 20 characters.'),
+    body('code').optional({ nullable: true }).trim()
+      .isLength({ max: 20 }).withMessage('Keep the code under 20 characters.')
+      .bail()
+      .matches(/^$|^[A-Za-z0-9][A-Za-z0-9\-_/.]*$/).withMessage('Use letters, numbers, - _ / . only (start with a letter or number).'),
     required(body('name').trim().isLength({ max: 180 }).withMessage('That name is too long.'), 'Enter a project name.'),
     required(body('location').trim().isLength({ max: 255 }), 'Enter the project location.'),
     required(body('start_date').isISO8601().withMessage('Enter a valid start date.'), 'Enter a start date.'),
@@ -42,6 +46,7 @@ const projectRules = (isCreate) => {
     optionalId('architect_id'),
     optionalId('site_engineer_id'),
     optionalId('contractor_id'),
+    ...areaMeasureRules(body),
   ];
 };
 
@@ -86,6 +91,7 @@ router.post(
     body('labour_count').optional().isInt({ min: 0 }).toInt(),
     body('progress').optional().isInt({ min: 0, max: 100 }).toInt(),
     body('safety_status').optional().isIn(['safe', 'caution', 'incident']),
+    ...areaMeasureRules(body),
   ],
   validate,
   controller.addSite

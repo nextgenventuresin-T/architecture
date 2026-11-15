@@ -17,6 +17,7 @@ import useAuth from '../../../hooks/useAuth';
 import { ROLES } from '../../../config/roles';
 import { formatCurrency } from '../../../utils/format';
 import { PRIORITIES } from '../../../utils/procurementOptions';
+import { isLiquidMaterial, isLitreUnit, formatLitres } from '../../../utils/liquidUnits';
 
 const today = () => new Date().toISOString().slice(0, 10);
 let rowSeq = 0;
@@ -25,6 +26,7 @@ let rowSeq = 0;
 const ADMIN_FLOWS = [
   { value: 'vendor_central', label: 'Vendor → Central Warehouse', hint: 'Buy from vendors into the company Central Warehouse.' },
   { value: 'vendor_site', label: 'Vendor → Site (direct)', hint: 'Vendors deliver straight to the project site / its contractor (or a PM-run Site Store).' },
+  { value: 'central_site', label: 'Central Warehouse → Site', hint: 'Send company stock from the Central Warehouse to a project site. Stock leaves Central when you dispatch and is added at the site when it is received.' },
 ];
 const REQUESTER_FLOWS = [
   { value: 'central_contractor', label: 'From Central Warehouse', hint: 'Request several items from the company Central Warehouse.' },
@@ -34,6 +36,8 @@ const REQUESTER_FLOWS = [
 
 const isVendorFlow = (flow) => ['vendor_central', 'vendor_site', 'supplier_contractor'].includes(flow);
 const hasLinks = (flow) => flow !== 'vendor_central';
+/** Central Warehouse -> Site moves materials only (machines have their own allocation flow). */
+const materialsOnly = (flow) => flow === 'central_site';
 
 function newRow(defaults) {
   rowSeq += 1;
@@ -44,6 +48,7 @@ function newRow(defaults) {
     tool_id: '',
     quantity: '',
     unit: '',
+    litres_per_unit: '',
     rate: '',
     transport_cost: '',
     vendor_id: defaults.vendor_id || '',
@@ -231,9 +236,15 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
         overPlan = Boolean(plan && qty > Number(plan.remainingPlannedQuantity ?? Infinity));
       }
     }
+    const mat = !isTool && r.material_id ? materials.find((m) => String(m.id) === String(r.material_id)) : null;
+    const liquid = !isTool && Boolean(r.material_id) && isLiquidMaterial({ unit: r.unit || mat?.unit, category: mat?.category, name: mat?.name });
+    const litreUnit = liquid && isLitreUnit(r.unit || mat?.unit);
+    const totalLitres = liquid
+      ? (litreUnit ? qty : (Number(r.litres_per_unit) > 0 && qty > 0 ? Number((qty * Number(r.litres_per_unit)).toFixed(3)) : null))
+      : null;
     const transport = Number(r.transport_cost || 0);
     const lineTotal = qty * Number(r.rate || 0) * (isTool && r.tool_mode === 'rented' ? Number(r.rental_days || 1) : 1) + transport;
-    return { isTool, unplanned, overPlan, plannedDays, transport, lineTotal, needsReason: unplanned || overPlan };
+    return { isTool, unplanned, overPlan, plannedDays, transport, lineTotal, needsReason: unplanned || overPlan, liquid, litreUnit, totalLitres };
   };
 
   const batchTotal = rows.reduce((s, r) => s + analyse(r).lineTotal, 0);
@@ -248,8 +259,11 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       if (a.isTool ? !r.tool_id : !r.material_id) e.item = a.isTool ? 'Select a machine / tool.' : 'Select a material.';
       if (!(Number(r.quantity) > 0)) e.quantity = 'Enter a quantity.';
       if (r.transport_cost !== '' && !(Number(r.transport_cost) >= 0)) e.transport_cost = 'Enter a valid amount.';
+      if (a.liquid && r.litres_per_unit !== '' && !(Number(r.litres_per_unit) >= 0)) e.litres_per_unit = 'Enter litres as a number.';
       if (a.isTool && Number(r.quantity) !== 1) e.quantity = 'One machine per line (quantity 1).';
       if (hasLinks(flow) && !r.project_id) e.project_id = 'Select a project.';
+      if (flow === 'central_site' && r.project_id && !r.site_id) e.site_id = 'Select the site it goes to.';
+      if (materialsOnly(flow) && a.isTool) e.item = 'Central Warehouse → Site carries materials only.';
       if (isRequester && !r.task_id) e.task_id = 'Select the task.';
       if (flow === 'contractor_contractor' && !r.source_contractor_id) e.source_contractor_id = 'Select the source contractor.';
       if (a.isTool && isRequester) {
@@ -280,6 +294,8 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       excess_reason: r.excess_reason.trim() || null,
       // Freight quoted for this item; booked once, with its receipt (or the shared vehicle).
       transport_cost: r.transport_cost !== '' && Number(r.transport_cost) > 0 ? Number(r.transport_cost) : null,
+      // Bucket / liquid material: litres in one unit (server works out the total litres).
+      ...(a.liquid && !a.litreUnit && Number(r.litres_per_unit) > 0 ? { litres_per_unit: Number(r.litres_per_unit) } : {}),
     };
     if (hasLinks(flow)) {
       Object.assign(base, {
@@ -328,6 +344,9 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
         return { ...base, ...vendorFields, procurement_kind: 'project_site' };
       case 'central_contractor':
         return { ...base, procurement_kind: 'contractor_supply', source_type: 'central_warehouse' };
+      case 'central_site':
+        // The receiving contractor / Site Store is resolved by the server from the site.
+        return { ...base, procurement_kind: 'contractor_supply', source_type: 'central_warehouse' };
       case 'contractor_contractor':
         return { ...base, procurement_kind: 'internal_transfer', source_contractor_id: Number(r.source_contractor_id) };
       default: // supplier_contractor
@@ -338,11 +357,6 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
   async function save(status) {
     setFormError(null);
     const errs = validateRows();
-    if (flow === 'vendor_central' && status !== 'draft' && !header.vehicle_number.trim()) {
-      setFormError({ message: 'Vehicle number is mandatory for a vendor delivery into the Central Warehouse.' });
-      setRowErrors(errs);
-      return;
-    }
     setRowErrors(errs);
     if (Object.keys(errs).length) {
       setFormError({ message: 'Some items need attention - check the highlighted lines.' });
@@ -486,9 +500,13 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
 
           {flow === 'vendor_central' && (
             <div className="rounded-lg border border-brand-200 bg-brand-50/50 p-3">
-              <p className="mb-2 text-xs font-semibold text-brand-900">Vendor vehicle (the warehouse verifies it on arrival)</p>
+              <p className="text-xs font-semibold text-brand-900">Vendor vehicle (optional now)</p>
+              <p className="mb-2 text-[11px] text-brand-800">
+                You can raise the purchase without it. Once the vendor confirms, add the vehicle number with
+                &ldquo;Vendor confirmed &ndash; add vehicle&rdquo;; the warehouse verifies it on arrival and cannot receive before that.
+              </p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                <InputField label="Vehicle number" required value={header.vehicle_number} onChange={(e) => setHeader((h) => ({ ...h, vehicle_number: e.target.value }))} placeholder="MH-12-AB-1234" />
+                <InputField label="Vehicle number" value={header.vehicle_number} onChange={(e) => setHeader((h) => ({ ...h, vehicle_number: e.target.value }))} placeholder="MH-12-AB-1234" />
                 <InputField label="Driver name" value={header.driver_name} onChange={(e) => setHeader((h) => ({ ...h, driver_name: e.target.value }))} />
                 <InputField label="Driver phone" value={header.driver_phone} onChange={(e) => setHeader((h) => ({ ...h, driver_phone: e.target.value }))} />
                 <InputField label="Challan no." value={header.challan_number} onChange={(e) => setHeader((h) => ({ ...h, challan_number: e.target.value }))} />
@@ -514,7 +532,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                   <div className="flex items-center gap-2">
                     <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">{idx + 1}</span>
                     <div className="inline-flex overflow-hidden rounded-lg border border-line text-xs">
-                      {['material', 'tool'].map((t) => (
+                      {(materialsOnly(flow) ? ['material'] : ['material', 'tool']).map((t) => (
                         <button key={t} type="button" onClick={() => updateRow(r.key, { item_type: t })}
                           className={`px-2.5 py-1 font-medium ${r.item_type === t ? 'bg-brand-600 text-white' : 'bg-white text-ink-muted hover:bg-canvas'}`}>
                           {t === 'material' ? 'Material' : 'Machine / Tool'}
@@ -549,7 +567,13 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                   />
                   <InputField className="lg:col-span-2" label={`Qty${r.unit ? ` (${r.unit})` : ''}`} required type="number" min="0" step="any"
                     value={r.quantity} onChange={(e) => updateRow(r.key, { quantity: e.target.value })} error={err.quantity} disabled={a.isTool} />
-                  {(isVendorFlow(flow) || !isRequester) && (
+                  {a.liquid && !a.litreUnit && (
+                    <InputField className="lg:col-span-2" label={`Litres per ${r.unit || 'unit'}`} type="number" min="0" step="any"
+                      value={r.litres_per_unit} onChange={(e) => updateRow(r.key, { litres_per_unit: e.target.value })} error={err.litres_per_unit}
+                      placeholder="e.g. 20"
+                      hint={a.totalLitres != null ? `Total: ${formatLitres(a.totalLitres)}` : 'Optional - litres in one bucket / can'} />
+                  )}
+                  {(isVendorFlow(flow) || (!isRequester && !materialsOnly(flow))) && (
                     <InputField className="lg:col-span-2" label={a.isTool && r.tool_mode === 'rented' ? 'Rate / day (₹)' : 'Cost / unit (₹)'} type="number" min="0" step="any"
                       value={r.rate} onChange={(e) => updateRow(r.key, { rate: e.target.value })} error={err.estimated_rate || err.purchase_rate} />
                   )}
@@ -595,7 +619,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                         Change {r.showLinks ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                       </span>
                     </button>
-                    {(r.showLinks || err.project_id || err.task_id) && (
+                    {(r.showLinks || err.project_id || err.site_id || err.task_id) && (
                       <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <SelectField label="Project" required value={r.project_id} onChange={(e) => updateRow(r.key, { project_id: e.target.value })}
                           placeholder="Select project" options={projectOptions} error={err.project_id} />

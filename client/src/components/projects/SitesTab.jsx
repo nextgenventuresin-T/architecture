@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { MapPin, ArrowRight, ShieldCheck, Users, AlertTriangle, Plus, Trash2, Building, Sparkles } from 'lucide-react';
+import { MapPin, ArrowRight, ShieldCheck, Users, AlertTriangle, Plus, Trash2, Building, Sparkles, Ruler, Pencil } from 'lucide-react';
 import { Card, CardHeader, CardBody } from '../ui/Card';
 import Badge, { StatusBadge } from '../ui/Badge';
 import ProgressBar from '../ui/ProgressBar';
@@ -12,6 +12,8 @@ import Select from '../ui/Select';
 import Alert from '../ui/Alert';
 import { projectsApi, sitesApi } from '../../api/projectsApi';
 import { SAFETY_TONE, labelFor } from '../../utils/projectOptions';
+import AreaMeasureField, { DEFAULT_AREA_UNIT } from '../ui/AreaMeasureField';
+import { formatArea } from '../../utils/areaUnits';
 
 const SAFETY_LABEL = { safe: 'Safe', caution: 'Caution', incident: 'Incident' };
 
@@ -40,7 +42,33 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
     progress: 0,
     safety_status: 'safe',
     status: 'on-track',
+    area_value: '',
+    area_unit: DEFAULT_AREA_UNIT,
   });
+
+  // "Edit area" of an existing site: only the area fields are sent.
+  const [areaEdit, setAreaEdit] = useState(null); // { site, value, unit }
+  const [areaError, setAreaError] = useState(null);
+  const saveArea = async (e) => {
+    e?.preventDefault?.();
+    if (!areaEdit) return;
+    const value = areaEdit.value === '' ? null : Number(areaEdit.value);
+    if (value !== null && !(value >= 0)) {
+      setAreaError('Enter the area as a number (0 or more).');
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setAreaError(null);
+      await sitesApi.update(areaEdit.site.id, { area_value: value, area_unit: value === null ? null : areaEdit.unit });
+      setAreaEdit(null);
+      if (typeof onChanged === 'function') onChanged();
+    } catch (err) {
+      setAreaError(errorText(err, 'Failed to save the site area'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const engineers = lookups?.engineers || lookups?.employees || [];
   const contractors = lookups?.contractors || [];
@@ -55,6 +83,8 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
       progress: 0,
       safety_status: 'safe',
       status: 'on-track',
+      area_value: '',
+      area_unit: DEFAULT_AREA_UNIT,
     });
     setError(null);
     setIsAddOpen(true);
@@ -107,6 +137,8 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
         contractor_id: formData.contractor_id ? Number(formData.contractor_id) : undefined,
         labour_count: Number(formData.labour_count || 0),
         progress: Number(formData.progress || 0),
+        area_value: formData.area_value === '' ? null : Number(formData.area_value),
+        area_unit: formData.area_value === '' ? null : formData.area_unit,
       });
       setIsAddOpen(false);
       if (typeof onChanged === 'function') onChanged();
@@ -199,6 +231,16 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
                     {site.labour_count || 0} workers
                   </Badge>
                   <Badge tone="neutral">{site.today_attendance || 0} present today</Badge>
+                  <button
+                    type="button"
+                    onClick={() => { setAreaError(null); setAreaEdit({ site, value: site.area_value != null ? String(Number(site.area_value)) : '', unit: site.area_unit || DEFAULT_AREA_UNIT }); }}
+                    className="inline-flex items-center gap-1 rounded-full border border-line bg-white px-2 py-0.5 text-xs text-ink-muted hover:border-brand-200 hover:text-brand-700"
+                    title="Edit site area"
+                  >
+                    <Ruler className="h-3 w-3" aria-hidden="true" />
+                    {site.area_value != null ? `Area: ${formatArea({ value: site.area_value, unit: site.area_unit })}` : 'Add area'}
+                    <Pencil className="h-3 w-3" aria-hidden="true" />
+                  </button>
                   {site.open_issues > 0 && (
                     <Badge tone="warning">
                       <AlertTriangle className="h-3 w-3" aria-hidden="true" />
@@ -298,6 +340,15 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
             />
           </div>
 
+          <AreaMeasureField
+            label="Site Area"
+            value={formData.area_value}
+            unit={formData.area_unit}
+            onValueChange={(e) => setFormData({ ...formData, area_value: e.target.value })}
+            onUnitChange={(e) => setFormData({ ...formData, area_unit: e.target.value })}
+            hint="Optional - the area of this site and its unit."
+          />
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <TextField
               label="Labour Allocated"
@@ -332,6 +383,34 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
             />
           </div>
         </form>
+      </Modal>
+
+      {/* Edit site area */}
+      <Modal
+        isOpen={Boolean(areaEdit)}
+        onClose={() => setAreaEdit(null)}
+        title="Site area"
+        description={areaEdit ? `Area of ${areaEdit.site.name}. Clear the value to remove it.` : ''}
+        size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setAreaEdit(null)}>Cancel</Button>
+            <Button onClick={saveArea} disabled={submitting}>{submitting ? 'Saving…' : 'Save area'}</Button>
+          </>
+        }
+      >
+        {areaEdit && (
+          <form onSubmit={saveArea} className="space-y-4">
+            {areaError && <Alert tone="error">{areaError}</Alert>}
+            <AreaMeasureField
+              label="Site Area"
+              value={areaEdit.value}
+              unit={areaEdit.unit}
+              onValueChange={(e) => setAreaEdit((a) => ({ ...a, value: e.target.value }))}
+              onUnitChange={(e) => setAreaEdit((a) => ({ ...a, unit: e.target.value }))}
+            />
+          </form>
+        )}
       </Modal>
     </div>
   );

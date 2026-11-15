@@ -122,6 +122,9 @@ const requestRules = (isCreate) => {
     body('usage_charge_days').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
     body('usage_charge_policy').optional({ nullable: true, checkFalsy: true }).isIn(['none', 'per_day_rate', 'fixed_total']),
     body('vendor_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).toInt(),
+    // Bucket / liquid material: litres in one unit, or the total litres.
+    body('litres_per_unit').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Enter litres as a number.').toFloat(),
+    body('total_litres').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Enter litres as a number.').toFloat(),
   ];
 };
 
@@ -134,7 +137,7 @@ router.post(
   '/batches',
   canManage,
   [
-    body('flow').isIn(['vendor_central', 'vendor_site', 'central_contractor', 'contractor_contractor', 'supplier_contractor'])
+    body('flow').isIn(['vendor_central', 'vendor_site', 'central_site', 'central_contractor', 'contractor_contractor', 'supplier_contractor'])
       .withMessage('Choose what kind of multi-item request this is.'),
     body('items').isArray({ min: 1, max: 50 }).withMessage('Add between 1 and 50 items.'),
     body('items.*.quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
@@ -164,7 +167,7 @@ router.post(
   requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
   [
     param('batchId').isInt({ min: 1 }),
-    param('action').isIn(['submit', 'approve', 'reject', 'confirm', 'order', 'dispatch', 'receive']),
+    param('action').isIn(['submit', 'approve', 'reject', 'confirm', 'order', 'vendor_confirm', 'dispatch', 'receive']),
     body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
     body('driver_name').optional({ nullable: true }).trim().isLength({ max: 120 }),
     body('driver_phone').optional({ nullable: true }).trim().isLength({ max: 40 }),
@@ -242,6 +245,24 @@ router.post(
   ],
   validate,
   controller.placeOrder
+);
+
+// The vendor confirmed the order: record its dispatch (vehicle is mandatory here).
+// A vendor purchase can be raised / ordered without it, but cannot be received until it is recorded.
+router.post(
+  '/:id/vendor-dispatch',
+  canManageOrders,
+  [
+    param('id').isInt({ min: 1 }),
+    body('vehicle_number').trim().notEmpty().withMessage("Enter the vendor's vehicle number.").isLength({ max: 40 }),
+    body('driver_name').optional({ nullable: true }).trim().isLength({ max: 120 }),
+    body('driver_phone').optional({ nullable: true }).trim().isLength({ max: 40 }),
+    body('challan_number').optional({ nullable: true }).trim().isLength({ max: 60 }),
+    body('challan_date').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Enter a valid challan date.'),
+    body('expected_delivery_date').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Enter a valid delivery date.'),
+  ],
+  validate,
+  controller.recordVendorDispatch
 );
 
 // Material receiving — also writes into the Interface 6 material_entries ledger.
@@ -354,6 +375,7 @@ router.post(
   [
     param('id').isInt({ min: 1 }),
     body('sent_quantity').optional({ nullable: true }).isFloat({ gt: 0 }).toFloat(),
+    body('sent_litres').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Enter litres as a number.').toFloat(),
     body('vehicle_number').optional({ nullable: true }).trim().isLength({ max: 40 }),
     body('driver_name').optional({ nullable: true }).trim().isLength({ max: 120 }),
     body('driver_phone').optional({ nullable: true }).trim().isLength({ max: 40 }),

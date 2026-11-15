@@ -19,6 +19,7 @@ import Badge from '../ui/Badge';
 import CostSplitRows from './CostSplitRows';
 import ProgressBar from '../ui/ProgressBar';
 import { formatCurrency, formatDate } from '../../utils/format';
+import { formatArea } from '../../utils/areaUnits';
 
 const STATUS = {
   'on-track': { tone: 'positive', label: 'On Track' },
@@ -454,6 +455,7 @@ export default function SubtasksPanel({
                         <span className="truncate text-sm font-semibold text-ink">{st.name}</span>
                         <Badge tone={meta.tone}>{meta.label}</Badge>
                         {st.areaName && <span className="rounded-md border border-brand-200 bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-brand-800">{st.areaName}</span>}
+                        {st.areaMeasure && <span className="rounded-md bg-canvas px-1.5 py-0.5 text-[11px] font-medium text-ink">Area: {formatArea(st.areaMeasure)}</span>}
                         {st.assignedManagerName && <span className="text-[11px] text-ink-muted">PM: {st.assignedManagerName}</span>}
                       </span>
                       <span className="block text-[11px] text-ink-muted">
@@ -575,6 +577,7 @@ export function SubtaskSummaryTable({ subtasks = [], onOpen }) {
                     {st.name}
                   </button>
                 ) : st.name}
+                {st.areaMeasure && <span className="block text-[11px] font-normal text-ink-muted">Area: {formatArea(st.areaMeasure)}</span>}
               </td>
               <td className="px-3 py-2"><ProgressBar value={st.progress} status={st.status} showLabel /></td>
               <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(st.plannedBudget)}</td>

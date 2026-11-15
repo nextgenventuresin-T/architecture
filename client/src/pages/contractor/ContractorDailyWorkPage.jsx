@@ -44,6 +44,7 @@ import { hrApi } from '../../api/hrApi';
 import { labourApi } from '../../api/labourApi';
 import DailyWorkDetailModal from '../../components/dailyWork/DailyWorkDetailModal';
 import { formatDate, formatNumber, formatCurrency } from '../../utils/format';
+import { isLitreUnit, litresFor, formatLitres } from '../../utils/liquidUnits';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -90,6 +91,8 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
   const [taskInventory, setTaskInventory] = useState([]);
   const [selectedMaterialId, setSelectedMaterialId] = useState('');
   const [quantityUsed, setQuantityUsed] = useState('');
+  // Bucket / liquid material: litres used (blank = worked out from litres per unit).
+  const [litresUsed, setLitresUsed] = useState('');
 
   // Machine / Tool usage state
   const [toolsList, setToolsList] = useState([]);
@@ -138,7 +141,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
 
   useEffect(() => {
     setSelectedMaterialId('');
-    setQuantityUsed('');
+    setQuantityUsed(''); setLitresUsed('');
     if (!taskId) { setTaskInventory([]); return; }
     dailyWorkApi.taskMaterials(taskId, undefined, subtaskId || undefined).then(setTaskInventory).catch(() => setTaskInventory([]));
   }, [taskId, subtaskId]);
@@ -570,6 +573,9 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
         formData.append('material_id', selectedMaterialId);
         formData.append('quantity_used', Number(quantityUsed));
         formData.append('unit', selectedMaterial.unit);
+        if (selectedMaterial.isLiquid && !isLitreUnit(selectedMaterial.unit) && litresUsed !== '') {
+          formData.append('litres_used', Number(litresUsed));
+        }
       }
 
       selectedPhotos.forEach((photo) => {
@@ -598,7 +604,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
       setExcessReason('');
       setNeedsExcessReason(false);
       setSelectedMaterialId('');
-      setQuantityUsed('');
+      setQuantityUsed(''); setLitresUsed('');
       setSelectedToolId('');
       setToolCost('');
       setToolRemarks('');
@@ -989,6 +995,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                                   <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800">
                                     <Package className="h-3 w-3" />
                                     {u.quantityUsed || u.quantity_used} {u.unit} used
+                                    {u.litresUsed != null && !isLitreUnit(u.unit) ? ` (${formatLitres(u.litresUsed)})` : ''}
                                   </span>
                                 )}
                               </div>
@@ -1493,7 +1500,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                         value={selectedMaterialId}
                         onChange={(e) => {
                           setSelectedMaterialId(e.target.value);
-                          setQuantityUsed('');
+                          setQuantityUsed(''); setLitresUsed('');
                         }}
                         className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
                       >
@@ -1548,6 +1555,31 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                               Cannot exceed available stock of {sel.availableStock} {sel.unit}!
                             </p>
                           )}
+                          {sel.isLiquid && !isLitreUnit(sel.unit) && (() => {
+                            const auto = litresFor(quantityUsed, { unit: sel.unit, litresPerUnit: sel.litresPerUnit });
+                            return (
+                              <div className="mt-2">
+                                <label className="mb-1 block text-xs font-medium text-ink">Litres used</label>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    min="0"
+                                    value={litresUsed}
+                                    onChange={(e) => setLitresUsed(e.target.value)}
+                                    placeholder={auto != null ? String(auto) : 'e.g. 40'}
+                                    className="w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                                  />
+                                  <span className="rounded-lg border border-line bg-canvas px-2.5 py-1.5 text-xs font-medium text-ink-muted">L</span>
+                                </div>
+                                <p className="mt-1 text-[11px] text-ink-subtle">
+                                  {auto != null
+                                    ? `Leave blank to use ${formatLitres(auto)} (${formatNumber(sel.litresPerUnit)} L per ${sel.unit}).`
+                                    : `Optional - total litres used from these ${sel.unit}.`}
+                                </p>
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })()}

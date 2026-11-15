@@ -59,9 +59,6 @@ export default function PlaceOrderDialog({ request, onClose, onSaved }) {
       errors.ordered_quantity = 'Enter a quantity greater than zero.';
     }
     if (!values.order_date) errors.order_date = 'Enter the order date.';
-    if (toContractor && !values.vehicle_number.trim()) {
-      errors.vehicle_number = "Enter the vendor's vehicle number - the contractor verifies it on arrival.";
-    }
     return errors;
   }
 
@@ -79,16 +76,16 @@ export default function PlaceOrderDialog({ request, onClose, onSaved }) {
         ordered_quantity: Number(values.ordered_quantity),
         order_date: values.order_date,
         expected_delivery_date: values.expected_delivery_date || null,
-        ...(toContractor ? {
+        ...(toContractor && values.vehicle_number.trim() ? {
           vehicle_number: values.vehicle_number.trim(),
           driver_name: values.driver_name.trim() || null,
           driver_phone: values.driver_phone.trim() || null,
           challan_number: values.challan_number.trim() || null,
         } : {}),
       });
-      onSaved(toContractor
+      onSaved(toContractor && (values.vehicle_number.trim() || request.vehicleNumber)
         ? `Order placed. ${receivingContractorName(request)} has been notified to receive it.`
-        : 'Request moved to Ordered.');
+        : 'Order placed. When the vendor confirms, add the vehicle number with "Vendor confirmed - add vehicle".');
     } catch (caught) {
       const apiError = toApiError(caught);
       if (apiError.details) setFieldErrors(apiError.details);
@@ -154,13 +151,13 @@ export default function PlaceOrderDialog({ request, onClose, onSaved }) {
             <div className="sm:col-span-2 rounded-lg border border-brand-200 bg-brand-50/60 p-3 text-xs text-brand-900">
               <p className="font-semibold">Vendor delivers directly to {receivingContractorName(request)}</p>
               <p className="mt-0.5 text-brand-800">
-                Enter the vendor&rsquo;s vehicle and driver. The contractor is notified, verifies the vehicle number when
-                the material arrives, and receives it into their stock.
+                The vehicle is optional now. If the vendor has already confirmed, enter the vehicle and driver;
+                otherwise add them later with &ldquo;Vendor confirmed &ndash; add vehicle&rdquo;. The contractor is notified,
+                verifies the vehicle number when the material arrives, and receives it into their stock.
               </p>
             </div>
             <InputField
-              label="Vehicle number"
-              required
+              label="Vehicle number (optional)"
               value={values.vehicle_number}
               onChange={set('vehicle_number')}
               error={fieldErrors.vehicle_number}

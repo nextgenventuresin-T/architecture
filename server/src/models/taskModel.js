@@ -2,6 +2,7 @@
 
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
+const { normaliseArea } = require('../config/areaUnits');
 const {
   MATERIAL_EXPENSE_CATEGORIES, MACHINE_EXPENSE_CATEGORIES, MISC_EXPENSE_CATEGORIES, NON_MISC_CATEGORIES, TRANSPORT_CATEGORIES,
 } = require('../config/costBuckets');
@@ -390,6 +391,8 @@ function areaAndManager(row) {
     areaType: row.area_id ? row.area_type || null : null,
     assignedManagerId: row.assigned_manager_id || null,
     assignedManagerName: row.assigned_manager_id ? row.assigned_manager_name || null : null,
+    // Measured area (value + unit) - recorded on subtasks, like on projects and sites.
+    areaMeasure: row.area_value != null ? { value: Number(row.area_value), unit: row.area_unit || null } : null,
   };
 }
 
@@ -474,6 +477,23 @@ async function applyAreaAndManager(conn, table, id, projectId, payload = {}) {
     }
     sets.push('assigned_manager_id = ?');
     params.push(managerId);
+  }
+  // Area measurement (value + Feet / Metres / sq. ft. / sq. m.) - subtasks only.
+  if (table === 'task_subtasks') {
+    const rawValue = pickOpt(payload, 'area_value', 'areaValue');
+    const rawUnit = pickOpt(payload, 'area_unit', 'areaUnit');
+    // The value decides: blank clears both columns; a unit alone is ignored.
+    if (rawValue !== undefined) {
+      const m = normaliseArea({ area_value: rawValue, area_unit: rawUnit });
+      if (m.area_value != null && (!Number.isFinite(m.area_value) || m.area_value < 0)) {
+        throw ApiError.badRequest('Check the highlighted fields.', { area_value: 'Enter the area as a number (0 or more).' });
+      }
+      if (m.area_value != null && !m.area_unit) {
+        throw ApiError.badRequest('Check the highlighted fields.', { area_unit: 'Choose Feet, Metres, Square Feet or Square Metres.' });
+      }
+      sets.push('area_value = ?', 'area_unit = ?');
+      params.push(m.area_value ?? null, m.area_unit ?? null);
+    }
   }
   if (sets.length) await conn.query(`UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
 }
@@ -1008,6 +1028,7 @@ async function findTaskById(taskId) {
       materialId: u.material_id,
       materialName: u.material_name,
       quantityUsed: Number(u.quantity_used),
+      litresUsed: u.litres_used != null ? Number(u.litres_used) : null,
       unit: u.unit || u.material_unit,
       contractorName: u.contractor_name,
       remarks: u.remarks,
@@ -1202,6 +1223,7 @@ async function findTaskById(taskId) {
       contractorName: u.contractor_name,
       materialName: u.material_name,
       quantityUsed: u.quantity_used ? Number(u.quantity_used) : null,
+      litresUsed: u.litres_used != null ? Number(u.litres_used) : null,
       unit: u.unit || u.material_unit,
       subtaskId: u.subtask_id || null,
       subtaskName: u.subtask_name || null,
@@ -1223,6 +1245,7 @@ async function findTaskById(taskId) {
       contractorName: u.contractor_name,
       materialName: u.material_name,
       quantityUsed: u.quantity_used ? Number(u.quantity_used) : null,
+      litresUsed: u.litres_used != null ? Number(u.litres_used) : null,
       unit: u.unit || u.material_unit,
       subtaskId: u.subtask_id || null,
       subtaskName: u.subtask_name || null,
@@ -2752,7 +2775,7 @@ async function findSubtaskSummaries(taskIds) {
 async function listSubtasksForTask(taskId) {
   const [rows] = await pool.query(
     `SELECT id, task_id, name, status, progress, start_date, end_date, total_budget, approved_additional_budget,
-            area_id, assigned_manager_id
+            area_id, assigned_manager_id, area_value, area_unit
      FROM task_subtasks WHERE task_id = ? ORDER BY sort_order ASC, id ASC`,
     [taskId]
   );
@@ -2760,6 +2783,7 @@ async function listSubtasksForTask(taskId) {
     id: r.id,
     areaId: r.area_id || null,
     assignedManagerId: r.assigned_manager_id || null,
+    areaMeasure: r.area_value != null ? { value: Number(r.area_value), unit: r.area_unit || null } : null,
     taskId: r.task_id,
     name: r.name,
     status: r.status,

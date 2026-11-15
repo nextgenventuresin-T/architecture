@@ -1,11 +1,13 @@
 'use strict';
 
+const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
 const { ROLES } = require('../config/roles');
 const { vehiclesMatch, normalizeVehicle } = require('../utils/vehicle');
 const procurementModel = require('../models/procurementModel');
 const procurementService = require('./procurementService');
 const materialMovementService = require('./materialMovementService');
+const pmScope = require('./pmScopeService');
 
 /**
  * MULTI-ITEM PROCUREMENT (batches).
@@ -33,6 +35,8 @@ const quoteOf = (r) => (Number(r.transportCost) > 0 && !(Number(r.transportPaid)
 const FLOWS = {
   vendor_central: { label: 'Vendor → Central Warehouse', roles: ADMIN_ROLES },
   vendor_site: { label: 'Vendor → Site / Contractor', roles: ADMIN_ROLES },
+  // Company stock sent to a project site: issued from Central on dispatch, received at the site.
+  central_site: { label: 'Central Warehouse → Site', roles: ADMIN_ROLES },
   central_contractor: { label: 'Central Warehouse → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER] },
   contractor_contractor: { label: 'Contractor → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER] },
   supplier_contractor: { label: 'Outside supplier → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER] },
@@ -45,6 +49,7 @@ const FLOWS = {
 const FLOW_ITEM = {
   vendor_central: { procurement_kind: 'central_purchase', source_type: 'supplier' },
   vendor_site: { procurement_kind: 'project_site', source_type: 'supplier' },
+  central_site: { procurement_kind: 'contractor_supply', source_type: 'central_warehouse' },
   central_contractor: { procurement_kind: 'contractor_supply', source_type: 'central_warehouse' },
   contractor_contractor: { procurement_kind: 'internal_transfer', source_type: 'contractor' },
   supplier_contractor: { procurement_kind: 'contractor_supply', source_type: 'supplier' },
@@ -88,6 +93,29 @@ async function createBatch(payload, userId, hrScope) {
   const prepared = items.map((raw) => ({ ...raw, ...FLOW_ITEM[flow], status, request_number: undefined }));
 
   const errors = {};
+  if (flow === 'central_site') {
+    // Central Warehouse -> Site: each line names its project + site, and is delivered to
+    // whoever holds stock for that site - its contractor, or (no contractor) its Site
+    // Store. That receiver is resolved here, server-side, never taken from the request.
+    for (let i = 0; i < prepared.length; i += 1) {
+      const item = prepared[i];
+      if (item.item_type === 'tool' || (!item.material_id && item.tool_id)) {
+        errors[`items.${i}.material_id`] = 'Central Warehouse → Site carries materials only. Use the machine request for machines.';
+        continue;
+      }
+      if (!item.project_id) { errors[`items.${i}.project_id`] = 'Select the project.'; continue; }
+      if (!item.site_id) { errors[`items.${i}.site_id`] = 'Select the site this material goes to.'; continue; }
+      const [[site]] = await pool.query('SELECT id, project_id FROM sites WHERE id = ? LIMIT 1', [Number(item.site_id)]);
+      if (!site || Number(site.project_id) !== Number(item.project_id)) {
+        errors[`items.${i}.site_id`] = 'That site does not belong to the selected project.';
+        continue;
+      }
+      delete item.source_contractor_id;
+      delete item.vendor_id;
+      item.destination_contractor_id = await pmScope.responsibleContractorId(Number(item.project_id), Number(item.site_id)) || undefined;
+      item.destination_site_id = Number(item.site_id);
+    }
+  }
   const seen = new Map();
   prepared.forEach((item, i) => {
     const key = lineKey(item);
@@ -216,6 +244,25 @@ async function runBatchAction(id, action, payload, user, hrScope) {
           challan_number: payload.challan_number,
         }));
       }
+      break;
+    }
+    case 'vendor_confirm': {
+      // The vendor confirmed: one vehicle / driver / challan recorded on every vendor
+      // item still waiting for it (or being corrected), so the receiver can verify it.
+      if (!ADMIN_ROLES.includes(role)) throw ApiError.forbidden('Only Admin / Procurement can record the vendor dispatch.');
+      if (!normalizeVehicle(payload.vehicle_number)) {
+        throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: "Enter the vendor's vehicle number." });
+      }
+      for (const item of items.filter((r) => r.canRecordVendorDispatch)) {
+        await run(item, () => procurementService.recordVendorDispatch(item.id, {
+          vehicle_number: payload.vehicle_number,
+          driver_name: payload.driver_name,
+          driver_phone: payload.driver_phone,
+          challan_number: payload.challan_number,
+          expected_delivery_date: payload.expected_delivery_date || undefined,
+        }, user.id));
+      }
+      if (!results.length) throw ApiError.badRequest('No vendor item in this request is waiting for a dispatch to be recorded.');
       break;
     }
     case 'dispatch': {

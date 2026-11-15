@@ -24,6 +24,8 @@ const { getActualMaterialRate } = require('../utils/materialPricing');
 const areaService = require('./areaService');
 const transportExpenseService = require('./transportExpenseService');
 const { transportCategoryFor } = require('../config/costBuckets');
+const siteReceiver = require('./siteReceiverScope');
+const { isLiquidMaterial, isLitreUnit, litresOrNull } = require('../config/liquidUnits');
 
 /**
  * How the goods physically arrive, derived from the flow (never stored):
@@ -39,6 +41,26 @@ function deliveryModeFor(row) {
 }
 
 /** Non-negative money amount from a payload field, or null when absent / blank. */
+/**
+ * Litres of a bucket / liquid request: { litres_per_unit, total_litres }. Either
+ * may be typed - the other is derived from the quantity. A litre-unit item is its
+ * own litres. Returns {} for anything that is not a liquid, or when nothing is sent.
+ */
+function litresColumns(payload, { quantity, unit, material }) {
+  const liquid = isLiquidMaterial({ unit, category: material?.category, name: material?.name });
+  const qty = Number(quantity);
+  if (!liquid || !(qty > 0)) return liquid ? {} : { litres_per_unit: null, total_litres: null };
+  if (isLitreUnit(unit)) return { litres_per_unit: 1, total_litres: Number(qty.toFixed(3)) };
+  const sentPer = payload.litres_per_unit !== undefined || payload.litresPerUnit !== undefined;
+  const sentTotal = payload.total_litres !== undefined || payload.totalLitres !== undefined;
+  if (!sentPer && !sentTotal) return {};
+  const per = litresOrNull(payload.litres_per_unit ?? payload.litresPerUnit, 'litres_per_unit');
+  const total = litresOrNull(payload.total_litres ?? payload.totalLitres, 'total_litres');
+  if (per != null && per > 0) return { litres_per_unit: per, total_litres: Number((per * qty).toFixed(3)) };
+  if (total != null && total > 0) return { litres_per_unit: Number((total / qty).toFixed(3)), total_litres: total };
+  return { litres_per_unit: null, total_litres: null };
+}
+
 function moneyOrNull(value, field) {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
@@ -172,10 +194,43 @@ function viewerPmHasSite(viewer, siteId) {
   return viewer?.role === ROLES.PROJECT_MANAGER && siteId != null && (viewer.pmSiteIds || []).includes(Number(siteId));
 }
 
+/** Statuses in which a vendor's confirmation / dispatch can be recorded. */
+const VENDOR_DISPATCH_STATUSES = ['approved', 'ordered', 'partially_received'];
+
+/**
+ * An outside-vendor MATERIAL purchase (into Central, or straight to a site / contractor).
+ * Machines are dispatched with their own vehicle when the unit is allocated.
+ */
+const isVendorPurchase = (row) => row.source_type === 'supplier'
+  && (row.procurement_kind || 'project_site') !== 'internal_transfer'
+  && !(row.item_type === 'tool' || (!row.material_id && row.tool_id));
+
+/**
+ * True while a vendor purchase is waiting for the vendor to confirm and dispatch:
+ * no vehicle number is recorded yet, so it cannot be received.
+ */
+function awaitingVendorDispatch(row) {
+  if (!isVendorPurchase(row)) return false;
+  if (!VENDOR_DISPATCH_STATUSES.includes(row.status)) return false;
+  return !normalizeVehicle(row.vehicle_number);
+}
+
+/** Admin / Procurement record (or correct) the vendor's dispatch until it is fully received. */
+function canRecordVendorDispatch(row, viewer) {
+  if (!isVendorPurchase(row) || !VENDOR_DISPATCH_STATUSES.includes(row.status)) return false;
+  if (row.warehouse_transaction_id) return false;
+  return [ROLES.ADMIN, ROLES.PROCUREMENT].includes(viewer?.role);
+}
+
 function capabilitiesFor(row, viewer) {
   const kind = row.procurement_kind || 'project_site';
   const pmSite = pmRunSiteOf(row);
-  const pmReceives = viewerPmHasSite(viewer, pmSite);
+  // A PM receives at the Site Store of a PM-run site, and also Admin's deliveries
+  // (vendor orders, Central Warehouse -> Site) to any site they are assigned to.
+  const pmReceives = viewerPmHasSite(viewer, pmSite)
+    || ((row.source_type === 'supplier' || row.source_type === 'central_warehouse')
+      && (row.procurement_kind || 'project_site') !== 'central_purchase'
+      && viewerPmHasSite(viewer, Number(row.destination_site_id || row.site_id) || null));
   const isInternalTransfer = kind === 'internal_transfer';
   const isCentralSupply = kind === 'contractor_supply' && row.source_type === 'central_warehouse';
   const role = viewer?.role ?? null;
@@ -305,6 +360,16 @@ function toRequest(row, viewer) {
     supplierContact: row.supplier_contact || null,
     quantity: Number(row.quantity),
     unit: row.unit || row.material_unit || 'unit',
+    // Bucket / liquid material: how many litres the quantity is.
+    isLiquid: !(row.item_type === 'tool' || (!row.material_id && row.tool_id))
+      && isLiquidMaterial({ unit: row.unit || row.material_unit, category: row.material_category, name: row.material_name }),
+    litresPerUnit: row.litres_per_unit != null ? Number(row.litres_per_unit) : null,
+    totalLitres: row.total_litres != null ? Number(row.total_litres) : null,
+    // Vendor deliveries: the vendor's confirmation + dispatch (vehicle etc.) is recorded
+    // before the goods can be received.
+    vendorConfirmedAt: row.vendor_confirmed_at || null,
+    awaitingVendorDispatch: awaitingVendorDispatch(row),
+    canRecordVendorDispatch: canRecordVendorDispatch(row, viewer),
     estimatedRate: Number(row.purchase_rate) > 0
       ? Number(row.purchase_rate)
       : (Number(row.estimated_rate) > 0
@@ -823,15 +888,10 @@ async function create(payload, userId, hrScope, options = {}) {
     throw ApiError.badRequest('Check the highlighted fields.', { quantity: 'Enter a quantity greater than zero.' });
   }
 
-  // Admin vendor procurement INTO the central warehouse records the vendor's
-  // dispatch (vehicle + driver) up front - the warehouse verifies it on receipt.
-  // A contractor / PM requesting material is NOT dispatching anything, so no
-  // vehicle number is asked of them; it is captured later by whoever dispatches.
-  if (flow.procurement_kind === 'central_purchase' && payload.status !== 'draft' && !normalizeVehicle(payload.vehicle_number)) {
-    throw ApiError.badRequest('Check the highlighted fields.', {
-      vehicle_number: 'Vehicle number is mandatory for vendor deliveries into the Central Warehouse.',
-    });
-  }
+  // A vendor purchase can be raised WITHOUT a vehicle number: the vendor has not
+  // confirmed or dispatched anything yet. Once the vendor confirms, the dispatch
+  // (vehicle / driver / challan) is recorded with recordVendorDispatch(), and the
+  // delivery cannot be received until it is - the receiver verifies that vehicle.
 
   // 1. Task Baseline Enforcement
   const isContractor = hrScope?.role === ROLES.CONTRACTOR;
@@ -1167,6 +1227,11 @@ async function create(payload, userId, hrScope, options = {}) {
     contractor_id: responsibleContractorId,
     area_id: areaId,
     transport_cost: quotedTransport,
+    // Bucket / liquid material: litres per unit and total litres ordered.
+    ...litresColumns(payload, { quantity: payload.quantity, unit: unitToUse, material }),
+    // A vehicle given up front means the vendor's dispatch is already confirmed.
+    ...(normalizeVehicle(payload.vehicle_number) && (flow.source_type || payload.source_type) === 'supplier'
+      ? { vendor_confirmed_at: new Date(), vendor_confirmed_by: userId ?? null } : {}),
     ...flow,
   });
 
@@ -1317,6 +1382,21 @@ async function update(id, payload, hrScope, userId) {
       : null;
   }
   if (payload.transport_cost !== undefined) updatePayload.transport_cost = moneyOrNull(payload.transport_cost, 'transport_cost');
+  {
+    const material = request.material_id || payload.material_id
+      ? await materialModel.findById(Number(payload.material_id ?? request.material_id)).catch(() => null)
+      : null;
+    const litres = litresColumns(payload, {
+      quantity: payload.quantity ?? request.quantity,
+      unit: payload.unit ?? request.unit ?? material?.unit,
+      material,
+    });
+    // A changed quantity re-derives total litres from the stored litres per unit.
+    if (!('litres_per_unit' in litres) && payload.quantity !== undefined && Number(request.litres_per_unit) > 0) {
+      litres.total_litres = Number((Number(request.litres_per_unit) * Number(payload.quantity)).toFixed(3));
+    }
+    Object.assign(updatePayload, litres);
+  }
   if (updatePayload.total_amount === undefined || updatePayload.total_amount === null) {
     const finalQty = updatePayload.quantity !== undefined ? Number(updatePayload.quantity) : Number(request.quantity);
     const finalRate = updatePayload.purchase_rate !== undefined
@@ -1536,17 +1616,10 @@ async function placeOrder(id, payload) {
     throw ApiError.badRequest('Check the highlighted fields.', { po_number: 'That PO number is already in use.' });
   }
 
-  // Vendor delivering straight to a contractor: Admin records the vendor's dispatch
-  // (vehicle + driver) so the contractor can verify it on arrival.
-  const receiverId = vendorOrderReceiverId(request);
-  const pmSite = !receiverId && request.source_type === 'supplier' && request.procurement_kind !== 'central_purchase'
-    ? pmRunSiteOf(request) : null;
+  // The PO can be placed before the vendor has confirmed: the vehicle is optional
+  // here. When the vendor confirms, the dispatch (vehicle / driver / challan) is
+  // recorded with recordVendorDispatch(); the receiver verifies that vehicle.
   const vehicle = String(payload.vehicle_number ?? '').trim();
-  if ((receiverId || pmSite) && !normalizeVehicle(vehicle)) {
-    throw ApiError.badRequest('Check the highlighted fields.', {
-      vehicle_number: 'Enter the vendor\'s vehicle number - the contractor verifies it when the material arrives.',
-    });
-  }
 
   await procurementModel.markOrdered(id, {
     poNumber,
@@ -1568,6 +1641,43 @@ async function placeOrder(id, payload) {
       [dispatch.vehicle_number, dispatch.driver_name, dispatch.driver_phone, dispatch.challan_number, id]
     );
   }
+  if (normalizeVehicle(vehicle)) {
+    await pool.query(
+      'UPDATE procurement_requests SET vendor_confirmed_at = COALESCE(vendor_confirmed_at, NOW()) WHERE id = ?',
+      [id]
+    );
+  }
+  // Dispatch already known (given now, or recorded when the vendor confirmed earlier):
+  // tell the receiver what to expect. Otherwise they are told when it is recorded.
+  if (normalizeVehicle(vehicle || request.vehicle_number)) {
+    await notifyVendorDispatch(
+      { ...request, vehicle_number: vehicle || request.vehicle_number },
+      { ...dispatch, vehicle_number: vehicle || request.vehicle_number, poNumber, orderedQuantity, expectedDeliveryDate: payload.expected_delivery_date }
+    );
+  }
+
+  return getById(id);
+}
+
+/**
+ * Tells whoever receives a vendor delivery that it is on its way, with the vehicle
+ * they must verify: the receiving contractor, or the PMs of a PM-run site.
+ */
+async function notifyVendorDispatch(request, dispatch) {
+  const id = request.id;
+  const receiverId = vendorOrderReceiverId(request);
+  const pmSite = !receiverId && request.source_type === 'supplier' && request.procurement_kind !== 'central_purchase'
+    ? pmRunSiteOf(request) : null;
+  const poNumber = dispatch.poNumber || request.po_number || request.request_number;
+  const orderedQuantity = dispatch.orderedQuantity ?? request.ordered_quantity ?? request.quantity;
+  const payload = { expected_delivery_date: dispatch.expectedDeliveryDate || request.expected_delivery_date || null };
+  if (payload.expected_delivery_date instanceof Date) payload.expected_delivery_date = payload.expected_delivery_date.toISOString().slice(0, 10);
+  dispatch = {
+    vehicle_number: dispatch.vehicle_number || request.vehicle_number,
+    driver_name: dispatch.driver_name ?? request.driver_name ?? null,
+    driver_phone: dispatch.driver_phone ?? request.driver_phone ?? null,
+    challan_number: dispatch.challan_number ?? request.challan_number ?? null,
+  };
 
   if (receiverId) {
     const [[c]] = await pool.query('SELECT user_id FROM contractors WHERE id = ? LIMIT 1', [receiverId]);
@@ -1576,7 +1686,7 @@ async function placeOrder(id, payload) {
       const driver = [dispatch.driver_name, dispatch.driver_phone].filter(Boolean).join(', ');
       await notificationModel.create({
         userId: c.user_id,
-        title: 'Material ordered for delivery to you',
+        title: 'Vendor dispatch confirmed - material on its way to you',
         message: `${poNumber}: ${orderedQuantity} ${request.unit || ''} ${item?.name || ''} from ${request.supplier || 'the vendor'}. `
           + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}`
           + `${payload.expected_delivery_date ? `, expected ${payload.expected_delivery_date}` : ''}. Verify the vehicle and receive it when it arrives.`,
@@ -1591,14 +1701,58 @@ async function placeOrder(id, payload) {
     const [[item]] = await pool.query('SELECT name FROM materials WHERE id = ? LIMIT 1', [request.material_id]);
     const driver = [dispatch.driver_name, dispatch.driver_phone].filter(Boolean).join(', ');
     await notifyProjectManagers(request.project_id, {
-      title: 'Material ordered for your site',
+      title: 'Vendor dispatch confirmed - material on its way to your site',
       message: `${poNumber}: ${orderedQuantity} ${request.unit || ''} ${item?.name || ''} from ${request.supplier || 'the vendor'}. `
         + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}. Verify the vehicle and receive it into the Site Store.`,
       actionUrl: `/pm/procurement/${id}`,
       metadata: { module: 'procurement', procurementRequestId: id, poNumber, ...dispatch },
     });
   }
+}
 
+/**
+ * The vendor has confirmed the order: record their dispatch - vehicle number
+ * (mandatory), driver, phone, challan, expected date. Until this is done a vendor
+ * purchase cannot be received, because there is no vehicle to verify on arrival.
+ * Can be corrected (e.g. a different truck) until the goods are fully received.
+ */
+async function recordVendorDispatch(id, payload = {}, userId) {
+  const request = await procurementModel.findRawById(id);
+  if (!request) throw ApiError.notFound('That procurement request does not exist.');
+  if (!isVendorPurchase(request)) {
+    throw ApiError.badRequest('Only a purchase from an outside vendor has a vendor dispatch to record.');
+  }
+  if (!VENDOR_DISPATCH_STATUSES.includes(request.status) || request.warehouse_transaction_id) {
+    throw ApiError.badRequest(
+      `The vendor dispatch can be recorded once the request is approved and until it is received (this one is ${request.status.replace('_', ' ')}).`
+    );
+  }
+  const vehicle = String(payload.vehicle_number ?? '').trim();
+  if (!normalizeVehicle(vehicle)) {
+    throw ApiError.badRequest('Check the highlighted fields.', {
+      vehicle_number: 'Enter the vendor\'s vehicle number - it is verified when the material arrives.',
+    });
+  }
+  const clean = (v) => (v === undefined ? undefined : (String(v ?? '').trim() || null));
+  const fields = {
+    vehicle_number: vehicle,
+    driver_name: clean(payload.driver_name),
+    driver_phone: clean(payload.driver_phone),
+    challan_number: clean(payload.challan_number),
+    challan_date: payload.challan_date === undefined ? undefined : (payload.challan_date || null),
+    expected_delivery_date: payload.expected_delivery_date === undefined ? undefined : (payload.expected_delivery_date || null),
+  };
+  const cols = Object.keys(fields).filter((k) => fields[k] !== undefined);
+  await pool.query(
+    `UPDATE procurement_requests SET ${cols.map((c) => `\`${c}\` = ?`).join(', ')},
+       vendor_confirmed_at = COALESCE(vendor_confirmed_at, NOW()), vendor_confirmed_by = COALESCE(vendor_confirmed_by, ?)
+     WHERE id = ?`,
+    [...cols.map((c) => fields[c]), userId ?? null, id]
+  );
+  // Before the PO is placed the receiver hears about it with the order instead.
+  if (request.status !== 'approved') {
+    await notifyVendorDispatch({ ...request, ...fields }, { ...fields, expectedDeliveryDate: fields.expected_delivery_date });
+  }
   return getById(id);
 }
 
@@ -1627,10 +1781,13 @@ async function receive(id, payload, userId, hrScope, options = {}) {
     }
     payload = { ...payload, transport_cost: quoted };
   }
-  // A Project Manager receives a vendor order delivered to the Site Store of a site they run.
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
-    if (!pmScope.pmHasSite(hrScope, pmRunSiteOf(peek)) || peek.source_type !== 'supplier') {
-      throw ApiError.forbidden('You can only receive a vendor order delivered to a site you manage.');
+  // A Project Manager / Site Engineer receives a vendor order Admin placed for delivery
+  // to one of their sites (its Site Store or its contractor). Freight stays Admin's.
+  if (siteReceiver.isSiteReceiverRole(hrScope)) {
+    const site = Number(peek.destination_site_id || peek.site_id) || null;
+    if (peek.source_type !== 'supplier' || peek.procurement_kind === 'central_purchase'
+      || !(await siteReceiver.canReceiveAtSite(hrScope, site))) {
+      throw ApiError.forbidden('You can only receive a vendor order delivered to a site you are assigned to.');
     }
     payload = { ...payload, transport_cost: quoted };
   }
@@ -1684,6 +1841,11 @@ async function receive(id, payload, userId, hrScope, options = {}) {
     const isCentral = request.procurement_kind === 'central_purchase' ||
       request.source_type === 'central_warehouse' ||
       request.destination_type === 'central_warehouse';
+    if (isVendorPurchase(request) && !normalizeVehicle(request.vehicle_number)) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'The vendor has not confirmed this delivery yet. Admin must record the vendor\'s vehicle number (Vendor confirmed) before it can be received.',
+      });
+    }
     const enteredVehicle = String(payload.vehicle_number ?? '').trim();
     if (isCentral || normalizeVehicle(request.vehicle_number)) {
       if (!normalizeVehicle(enteredVehicle)) {
@@ -1939,7 +2101,7 @@ async function fulfil(id, payload = {}, userId) {
   if (mustVerify) {
     if (!normalizeVehicle(recordedVehicle)) {
       throw ApiError.badRequest('Check the highlighted fields.', {
-        vehicle_number: 'No vehicle number was recorded for this vendor delivery, so it cannot be verified. Revert it to draft and add the dispatch vehicle first.',
+        vehicle_number: 'The vendor has not confirmed this delivery yet - record the vendor\'s vehicle number (Vendor confirmed) first, then receive it.',
       });
     }
     if (!normalizeVehicle(enteredVehicle)) {
@@ -2439,6 +2601,6 @@ async function dispatch(id, payload, hrScope, userId) {
 module.exports = {
   STATUSES, PRIORITIES, TRANSITIONS,
   PROCUREMENT_KINDS, SOURCE_TYPES, DESTINATION_TYPES,
-  list, listScoped, getById, getDetail, create, update, updateStatus, confirmSource, placeOrder,
+  list, listScoped, getById, getDetail, create, update, updateStatus, confirmSource, placeOrder, recordVendorDispatch,
   receive, updateReceipt, getLookups, fulfil, toolFulfil, toolReceive, dispatch, attachBill, getBillFile, toRequest, toReceipt,
 };

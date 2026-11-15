@@ -56,6 +56,8 @@ async function migrate() {
     await require('./migrations/20261016_procurement_batches').up(connection);
     await require('./migrations/20261016_unique_site_names').up(connection);
     await require('./migrations/20261016_staff_portal').up(connection);
+    await require('./migrations/20261115_area_measure_engineer_receiving').up(connection);
+    await require('./migrations/20261115_litres_vendor_dispatch').up(connection);
     console.log(`Schema up to date on "${env.db.database}".`);
   } finally {
     await connection.end();

@@ -37,6 +37,7 @@ function toProject(row) {
     status: row.status,
     progress: row.progress,
     currentPhase: row.current_phase,
+    area: row.area_value != null ? { value: Number(row.area_value), unit: row.area_unit || null } : null,
     siteCount: Number(row.site_count || 0),
     client: row.client_id ? { id: row.client_id, name: row.client_name } : null,
     team: {
@@ -455,10 +456,22 @@ function summariseProgress(project, tasks) {
   };
 }
 
+const CODE_TAKEN = { code: 'That project code is already in use.' };
+const isDuplicateCode = (e) => e && (e.code === 'ER_DUP_ENTRY' || e.errno === 1062) && /uq_projects_code/.test(e.message || '');
+
+/** A blank code means "keep / auto-generate"; anything typed is trimmed. Uniqueness is case-insensitive. */
+function normaliseCode(payload) {
+  if (payload.code === undefined) return;
+  const code = payload.code === null ? '' : String(payload.code).trim();
+  if (!code) delete payload.code;
+  else payload.code = code;
+}
+
 async function create(payload) {
+  normaliseCode(payload);
   if (payload.code) {
     if (await projectModel.findByCode(payload.code)) {
-      throw ApiError.badRequest('Check the highlighted fields.', { code: 'That project code is already in use.' });
+      throw ApiError.badRequest('Check the highlighted fields.', CODE_TAKEN);
     }
   }
   if (new Date(payload.expected_completion) < new Date(payload.start_date)) {
@@ -474,7 +487,14 @@ async function create(payload) {
     payload.client_contract_value = payload.estimated_budget;
   }
 
-  const id = await projectModel.create(payload);
+  let id;
+  try {
+    id = await projectModel.create(payload);
+  } catch (error) {
+    // Two saves racing for the same code: the unique key decides, shown as a field error.
+    if (isDuplicateCode(error)) throw ApiError.badRequest('Check the highlighted fields.', CODE_TAKEN);
+    throw error;
+  }
 
   if (payload.tasks && Array.isArray(payload.tasks)) {
     await taskModel.saveProjectTasks(id, payload.tasks, payload.created_by || null);
@@ -494,10 +514,12 @@ async function update(id, payload) {
     payload.client_contract_value = payload.clientContractValue;
   }
 
+  // Editing the code is safe: every record links to the project by id, never by code.
+  normaliseCode(payload);
   if (payload.code) {
     const existing = await projectModel.findByCode(payload.code);
-    if (existing && existing.id !== Number(id)) {
-      throw ApiError.badRequest('Check the highlighted fields.', { code: 'That project code is already in use.' });
+    if (existing && Number(existing.id) !== Number(id)) {
+      throw ApiError.badRequest('Check the highlighted fields.', CODE_TAKEN);
     }
   }
   if (payload.start_date && payload.expected_completion &&
@@ -507,7 +529,12 @@ async function update(id, payload) {
     });
   }
 
-  await projectModel.update(id, payload);
+  try {
+    await projectModel.update(id, payload);
+  } catch (error) {
+    if (isDuplicateCode(error)) throw ApiError.badRequest('Check the highlighted fields.', CODE_TAKEN);
+    throw error;
+  }
 
   if (payload.tasks && Array.isArray(payload.tasks)) {
     await taskModel.saveProjectTasks(id, payload.tasks, payload.updated_by || null);

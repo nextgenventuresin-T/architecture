@@ -12,8 +12,10 @@ const procurementModel = require('../models/procurementModel');
 const toolModel = require('../models/toolModel');
 const { getActualMaterialRate } = require('../utils/materialPricing');
 const { normalizeVehicle, vehiclesMatch, vehicleSql } = require('../utils/vehicle');
+const siteReceiver = require('./siteReceiverScope');
 
 function num(v) { return v === null || v === undefined ? null : Number(v); }
+const { isLiquidMaterial, litresOrNull, litresFor } = require('../config/liquidUnits');
 
 function toMovement(row) {
   if (!row) return null;
@@ -49,6 +51,10 @@ function toMovement(row) {
     requestedQuantity: num(row.requested_quantity),
     sentQuantity: num(row.sent_quantity),
     receivedQuantity: num(row.received_quantity),
+    // Bucket / liquid material: litres sent and received on this movement.
+    isLiquid: !isTool && isLiquidMaterial({ unit: row.unit, category: row.material_category, name: row.material_name }),
+    sentLitres: num(row.sent_litres),
+    receivedLitres: num(row.received_litres),
     status: row.status,
     vehicleNumber: row.vehicle_number,
     driverName: row.driver_name,
@@ -72,12 +78,18 @@ function contractorId(hrScope) {
   return hrScope?.role === ROLES.CONTRACTOR ? Number(hrScope.contractorId) : null;
 }
 
-/** Site Store warehouse ids of the PM-run sites this Project Manager is assigned to. */
-async function pmSiteStoreIds(hrScope) {
-  const siteIds = hrScope?.pmSiteIds || [];
-  if (!siteIds.length) return [];
-  const [rows] = await pool.query("SELECT id FROM warehouses WHERE type = 'site' AND site_id IN (?)", [siteIds]);
-  return rows.map((r) => Number(r.id));
+/**
+ * A Project Manager / Site Engineer may receive a shipment that is
+ *   - going into the Site Store of one of their sites (any sender), or
+ *   - sent by Admin from the Central Warehouse to one of their sites (the stock
+ *     lands with whoever holds it for that site - its contractor's warehouse).
+ * `siteIds` are the viewer's receivable sites (siteReceiverScope.receiverSiteIds).
+ */
+function siteReceiverMayReceive(row, siteIds) {
+  if (!siteIds || !siteIds.length) return false;
+  const storeSite = row.destination_warehouse_site_id != null ? Number(row.destination_warehouse_site_id) : null;
+  if (storeSite != null) return siteIds.includes(storeSite);
+  return row.source_warehouse_type === 'central' && row.site_id != null && siteIds.includes(Number(row.site_id));
 }
 
 /** Resolves the warehouse row for a contractor (provisioning if needed). */
@@ -104,10 +116,10 @@ async function listMovements(query, hrScope, userId) {
 async function listIncoming(hrScope) {
   const cId = contractorId(hrScope);
   const rows = await movementModel.findAll(cId ? { incomingForContractorId: cId } : { status: 'in_transit' });
-  // A Project Manager sees only shipments heading to the Site Store of a site they run.
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
-    const stores = await pmSiteStoreIds(hrScope);
-    return rows.filter((r) => stores.includes(Number(r.destination_warehouse_id))).map(toMovement);
+  // A Project Manager / Site Engineer sees only shipments they may receive at their sites.
+  if (siteReceiver.isSiteReceiverRole(hrScope)) {
+    const siteIds = await siteReceiver.receiverSiteIds(hrScope);
+    return rows.filter((r) => siteReceiverMayReceive(r, siteIds)).map(toMovement);
   }
   return rows.map(toMovement);
 }
@@ -212,6 +224,13 @@ async function createDispatch(spec, userId) {
     if (costPerUnit === null) costPerUnit = (!isTool && spec.materialId) ? await getActualMaterialRate(spec.materialId) : 0;
     const totalCost = Number((costPerUnit * sentQuantity).toFixed(2));
 
+    // Litres sent (bucket / liquid material): typed, else quantity x litres per unit.
+    const liquid = !isTool && isLiquidMaterial({ unit, category: material?.category, name: material?.name });
+    const typedLitres = litresOrNull(spec.sentLitres, 'sent_litres');
+    const sentLitres = liquid
+      ? (typedLitres != null ? typedLitres : litresFor(sentQuantity, { unit, litresPerUnit: spec.litresPerUnit }))
+      : null;
+
     const id = await movementModel.create({
       movement_number: `MV-${String(await movementModel.nextMovementNumber()).padStart(4, '0')}`,
       item_type: isTool ? 'tool' : 'material',
@@ -226,6 +245,7 @@ async function createDispatch(spec, userId) {
       site_id: spec.siteId ?? null,
       requested_quantity: spec.requestedQuantity ?? null,
       sent_quantity: sentQuantity,
+      sent_litres: sentLitres,
       cost_per_unit: costPerUnit,
       total_cost: totalCost,
       status: 'in_transit',
@@ -303,6 +323,8 @@ async function sendMaterial(payload, hrScope, userId) {
     siteId: payload.site_id,
     requestedQuantity: payload.requested_quantity,
     sentQuantity: payload.sent_quantity ?? payload.quantity,
+    sentLitres: payload.sent_litres,
+    litresPerUnit: payload.litres_per_unit,
     vehicleNumber: payload.vehicle_number,
     driverName: payload.driver_name,
     driverPhone: payload.driver_phone,
@@ -343,6 +365,8 @@ async function dispatchForRequest(request, payload, userId) {
     siteId: request.destination_site_id ?? request.site_id,
     requestedQuantity: Number(request.quantity),
     sentQuantity,
+    sentLitres: payload.sent_litres,
+    litresPerUnit: request.litres_per_unit,
     costPerUnit: rate,
     vehicleNumber: payload.vehicle_number,
     driverName: payload.driver_name,
@@ -388,11 +412,12 @@ async function receiveMaterial(id, payload, hrScope, userId) {
         throw ApiError.forbidden('Only the receiving contractor can receive this shipment.');
       }
     }
-    // A Project Manager receives only shipments into the Site Store of a site they run.
-    if (hrScope?.role === ROLES.PROJECT_MANAGER) {
-      const storeIds = await pmSiteStoreIds(hrScope);
-      if (!storeIds.includes(Number(row.destination_warehouse_id))) {
-        throw ApiError.forbidden('You can only receive a shipment to a site you manage.');
+    // A Project Manager / Site Engineer receives only shipments to their own sites:
+    // into its Site Store, or sent from the Central Warehouse to that site.
+    if (siteReceiver.isSiteReceiverRole(hrScope)) {
+      const siteIds = await siteReceiver.receiverSiteIds(hrScope);
+      if (!siteReceiverMayReceive(row, siteIds)) {
+        throw ApiError.forbidden('You can only receive a shipment sent to a site you are assigned to.');
       }
     }
     if (locked.status !== 'in_transit') {
@@ -448,7 +473,14 @@ async function receiveMaterial(id, payload, hrScope, userId) {
       }, userId, { conn });
     }
 
+    // Litres received: typed, else the same share of the litres sent.
+    const typedLitres = litresOrNull(payload.received_litres, 'received_litres');
+    const receivedLitres = typedLitres != null
+      ? typedLitres
+      : (row.sent_litres != null && sent > 0 ? Number((Number(row.sent_litres) * receivedQuantity / sent).toFixed(3)) : null);
+
     const flipped = await movementModel.markReceived(id, {
+      receivedLitres,
       receivedQuantity,
       receiveTransactionId: receiveTx ? receiveTx.id : null,
       receivedBy: userId ?? null,
@@ -497,11 +529,11 @@ async function lookupByVehicle(vehicleNumber, hrScope) {
   }
 
   const cId = contractorId(hrScope);
-  const isPm = hrScope?.role === ROLES.PROJECT_MANAGER;
-  const pmStores = isPm ? await pmSiteStoreIds(hrScope) : null;
+  const isPm = siteReceiver.isSiteReceiverRole(hrScope);
+  const receivableSites = isPm ? await siteReceiver.receiverSiteIds(hrScope) : null;
   const movementRows = await movementModel.findAll(cId ? { incomingForContractorId: cId } : { status: 'in_transit' });
   const shipments = movementRows
-    .filter((r) => !isPm || pmStores.includes(Number(r.destination_warehouse_id)))
+    .filter((r) => !isPm || siteReceiverMayReceive(r, receivableSites))
     .filter((r) => r.status === 'in_transit' && vehiclesMatch(r.vehicle_number, vehicleNumber))
     .map((r) => {
       const m = toMovement(r);
@@ -513,6 +545,7 @@ async function lookupByVehicle(vehicleNumber, hrScope) {
         itemType: m.itemType,
         material: m.material?.name || null,
         quantity: m.sentQuantity,
+        litres: m.sentLitres,
         unit: m.unit,
         costPerUnit: m.costPerUnit,
         totalCost: m.totalMaterialCost,
@@ -616,4 +649,4 @@ async function myWarehouseStock(hrScope) {
   };
 }
 
-module.exports = { listMovements, listIncoming, getById, getByRequest, sendMaterial, receiveMaterial, lookupByVehicle, dispatchForRequest, myWarehouseStock, toMovement };
+module.exports = { siteReceiverMayReceive, listMovements, listIncoming, getById, getByRequest, sendMaterial, receiveMaterial, lookupByVehicle, dispatchForRequest, myWarehouseStock, toMovement };

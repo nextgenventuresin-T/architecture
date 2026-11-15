@@ -487,7 +487,7 @@ function HistoryModal({ unit, onClose }) {
                       <tr key={a.id}>
                         <td className="px-3 py-2">{a.contractor?.name ?? '—'}</td>
                         <td className="px-3 py-2">{[a.project?.name, a.site?.name, a.task?.name, a.subtask?.name].filter(Boolean).join(' · ') || '—'}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{a.startDate} → {a.returnedDate ?? 'in use'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{formatDate(a.startDate)} → {a.returnedDate ? formatDate(a.returnedDate) : 'in use'}</td>
                         <td className="px-3 py-2 text-right">{a.usageDays ?? '—'}</td>
                         <td className="px-3 py-2 text-right">{a.status === 'returned' ? formatCurrency(a.usageCharge) : a.accruedUsageCharge != null ? `${formatCurrency(a.accruedUsageCharge)} (accruing)` : '—'}</td>
                         <td className="px-3 py-2 text-right">{a.rentalCostAllocated ? formatCurrency(a.rentalCostAllocated) : '—'}</td>
@@ -504,7 +504,7 @@ function HistoryModal({ unit, onClose }) {
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-subtle">Rental</p>
               {detail.rentals.map((r) => (
                 <p key={r.id} className="text-sm text-ink-muted">
-                  {r.vendor?.name ?? 'Vendor'} · {formatCurrency(r.ratePerDay)}/day · {r.startDate} → {r.actualReturnDate ?? r.expectedReturnDate ?? 'open'}
+                  {r.vendor?.name ?? 'Vendor'} · {formatCurrency(r.ratePerDay)}/day · {formatDate(r.startDate)} → {(r.actualReturnDate ?? r.expectedReturnDate) ? formatDate(r.actualReturnDate ?? r.expectedReturnDate) : 'open'}
                   {r.totalCost != null && ` · total ${formatCurrency(r.totalCost)} (allocated ${formatCurrency(r.allocatedCost)}, idle ${formatCurrency(r.unallocatedCost)})`}
                 </p>
               ))}

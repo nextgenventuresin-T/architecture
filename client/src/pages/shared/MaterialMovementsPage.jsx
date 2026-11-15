@@ -175,7 +175,12 @@ export default function MaterialMovementsPage() {
     { key: 'source', header: 'From', value: (r) => r.source.contractorName || r.source.warehouseName, render: (r) => <span className="text-xs text-ink-muted">{r.source.contractorName || r.source.warehouseName}</span> },
     { key: 'destination', header: 'To', value: (r) => r.destination.contractorName || r.destination.warehouseName, render: (r) => <span className="text-xs text-ink-muted">{r.destination.contractorName || r.destination.warehouseName}</span> },
     { key: 'requested', header: 'Requested', align: 'right', value: (r) => r.requestedQuantity ?? 0, render: (r) => <span className="tabular-nums text-ink-subtle">{r.requestedQuantity != null ? formatNumber(r.requestedQuantity) : '—'}</span> },
-    { key: 'sent', header: 'Sent', align: 'right', value: (r) => r.sentQuantity, render: (r) => <span className="tabular-nums text-ink">{formatNumber(r.sentQuantity)}</span> },
+    { key: 'sent', header: 'Sent', align: 'right', value: (r) => r.sentQuantity, render: (r) => (
+      <span className="tabular-nums text-ink">
+        {formatNumber(r.sentQuantity)}
+        {r.sentLitres != null && <span className="block text-[11px] text-ink-subtle">{formatNumber(r.sentLitres)} L</span>}
+      </span>
+    ) },
     { key: 'received', header: 'Received', align: 'right', value: (r) => r.receivedQuantity ?? 0, render: (r) => <span className="tabular-nums text-ink-muted">{r.receivedQuantity != null ? formatNumber(r.receivedQuantity) : '—'}</span> },
     { key: 'rate', header: 'Cost / Unit', align: 'right', value: (r) => r.costPerUnit || 0, render: (r) => <span className="tabular-nums text-ink font-medium">{formatCurrency(r.costPerUnit || 0)}</span> },
     { key: 'cost', header: 'Material Cost', align: 'right', value: (r) => r.totalMaterialCost || 0, render: (r) => <span className="tabular-nums font-bold text-ink">{formatCurrency(r.totalMaterialCost || 0)}</span> },
@@ -279,7 +284,7 @@ export default function MaterialMovementsPage() {
               incoming.map((mv) => (
                 <div key={mv.id} className="flex items-start justify-between gap-3 rounded-lg border border-line p-3">
                   <div className="min-w-0">
-                    <p className="font-medium text-ink">{mv.material.name} · {formatNumber(mv.sentQuantity)} {mv.unit}</p>
+                    <p className="font-medium text-ink">{mv.material.name} · {formatNumber(mv.sentQuantity)} {mv.unit}{mv.sentLitres != null ? ` (${formatNumber(mv.sentLitres)} L)` : ''}</p>
                     <p className="text-xs text-ink-subtle">From {mv.source.contractorName || mv.source.warehouseName} · {mv.movementNumber}</p>
                     <p className="mt-0.5 text-xs text-ink-subtle">Enter the arriving vehicle number to fetch and verify the dispatch details.</p>
                   </div>

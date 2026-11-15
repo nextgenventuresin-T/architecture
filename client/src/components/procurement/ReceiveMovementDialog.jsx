@@ -123,6 +123,7 @@ export default function ReceiveMovementDialog({ movement, onClose, onReceived, o
               <p className="mb-2 font-medium text-ink">Dispatch details — {details.reference}</p>
               {row('Material', details.material)}
               {row('Quantity', `${formatNumber(details.quantity)} ${details.unit}`)}
+              {details.litres != null && row('Litres sent', `${formatNumber(details.litres)} L`)}
               {row('Vehicle number', details.vehicleNumber)}
               {row('Driver name', details.driverName)}
               {row('Driver phone', details.driverPhone)}

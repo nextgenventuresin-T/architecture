@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import DateInput from '../ui/DateInput';
 import {
   X,
   Plus,
@@ -21,7 +22,8 @@ import { toolApi } from '../../api/toolApi';
 import { hrApi } from '../../api/hrApi';
 import { projectsApi } from '../../api/projectsApi';
 import AreaInput from '../ui/AreaInput';
-import { formatCurrency, toDateInputValue } from '../../utils/format';
+import AreaMeasureField, { DEFAULT_AREA_UNIT } from '../ui/AreaMeasureField';
+import { formatCurrency, toDateInputValue, todayIso } from '../../utils/format';
 import SearchableSelect from '../ui/SearchableSelect';
 
 function calcWorkingDays(start, end) {
@@ -119,6 +121,9 @@ export default function TaskFormModal({
   const [endDate, setEndDate] = useState('');
   const [durationDays, setDurationDays] = useState(14);
   const [areaName, setAreaName] = useState('');
+  // Measured area of a subtask (value + unit), like a project's / site's total area.
+  const [areaValue, setAreaValue] = useState('');
+  const [areaUnit, setAreaUnit] = useState(DEFAULT_AREA_UNIT);
   const [managerId, setManagerId] = useState('');
   const [areas, setAreas] = useState([]);
   const [managers, setManagers] = useState([]);
@@ -170,6 +175,8 @@ export default function TaskFormModal({
   useEffect(() => {
     if (initialData) {
       setAreaName(initialData.areaName || '');
+      setAreaValue(initialData.areaMeasure?.value != null ? String(initialData.areaMeasure.value) : '');
+      setAreaUnit(initialData.areaMeasure?.unit || DEFAULT_AREA_UNIT);
       setManagerId(initialData.assignedManagerId ? String(initialData.assignedManagerId) : '');
       setName(initialData.name || '');
       setSiteId(initialData.siteId ? String(initialData.siteId) : '');
@@ -244,13 +251,15 @@ export default function TaskFormModal({
     } else {
       // New Task defaults (a new subtask starts in its main task's area, with its manager)
       setAreaName(isSubtask && parentTask?.areaName ? parentTask.areaName : '');
+      setAreaValue('');
+      setAreaUnit(DEFAULT_AREA_UNIT);
       setManagerId(isSubtask && parentTask?.assignedManagerId ? String(parentTask.assignedManagerId) : '');
       setName('');
       setSiteId(initialSiteId ? String(initialSiteId) : sites[0]?.id ? String(sites[0].id) : '');
       setDescription('');
       setStatus('on-track');
       setProgress(0);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayIso();
       const future = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
       const pStart = isSubtask ? toDateInputValue(parentTask?.startDate || parentTask?.start_date) : '';
       const pEnd = isSubtask ? toDateInputValue(parentTask?.endDate || parentTask?.end_date) : '';
@@ -327,7 +336,7 @@ export default function TaskFormModal({
 
   // Tools Helpers
   const addToolRow = () => {
-    const sDate = startDate || new Date().toISOString().slice(0, 10);
+    const sDate = startDate || todayIso();
     const eDate = endDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
     setTools((prev) => [
       ...prev,
@@ -365,7 +374,7 @@ export default function TaskFormModal({
 
   // Labour Helpers
   const addLabourRow = () => {
-    const sDate = startDate || new Date().toISOString().slice(0, 10);
+    const sDate = startDate || todayIso();
     const eDate = endDate || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
     const days = calcWorkingDays(sDate, eDate);
     setLabour((prev) => [
@@ -536,6 +545,8 @@ export default function TaskFormModal({
     try {
       if (isSubtask) {
         const { project_id: _p, site_id: _s, ...subPayload } = payload;
+        subPayload.area_value = areaValue === '' ? null : Number(areaValue);
+        subPayload.area_unit = areaValue === '' ? null : areaUnit;
         if (isEdit) await tasksApi.updateSubtask(parentTask.id, initialData.id, subPayload);
         else await tasksApi.createSubtask(parentTask.id, subPayload);
       } else if (isEdit) {
@@ -634,6 +645,17 @@ export default function TaskFormModal({
                 return !sid || !a.siteId || String(a.siteId) === String(sid);
               })}
             />
+            {isSubtask && (
+              <AreaMeasureField
+                className="sm:col-span-2"
+                label="Subtask Area (optional)"
+                value={areaValue}
+                unit={areaUnit}
+                onValueChange={(e) => setAreaValue(e.target.value)}
+                onUnitChange={(e) => setAreaUnit(e.target.value)}
+                hint="Area this subtask covers, e.g. 1,200 sq. ft. of flooring."
+              />
+            )}
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Assigned Project Manager</label>
               <SearchableSelect
@@ -681,8 +703,7 @@ export default function TaskFormModal({
 
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Start Date</label>
-              <input
-                type="date"
+              <DateInput
                 value={startDate}
                 onChange={(e) => handleStartDateChange(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
@@ -691,8 +712,7 @@ export default function TaskFormModal({
 
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Expected Completion</label>
-              <input
-                type="date"
+              <DateInput
                 value={endDate}
                 onChange={(e) => handleEndDateChange(e.target.value)}
                 className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink focus:border-brand-500 focus:outline-hidden"
@@ -951,15 +971,13 @@ export default function TaskFormModal({
 
                       {t.rental_type !== 'Purchase' && (
                         <>
-                          <input
-                            type="date"
+                          <DateInput
                             value={t.start_date || ''}
                             onChange={(e) => updateToolRow(idx, 'start_date', e.target.value)}
                             title="On site from"
                             className="w-32 rounded border border-line px-2 py-1 text-xs"
                           />
-                          <input
-                            type="date"
+                          <DateInput
                             value={t.end_date || ''}
                             min={t.start_date || undefined}
                             onChange={(e) => updateToolRow(idx, 'end_date', e.target.value)}
@@ -1087,8 +1105,7 @@ export default function TaskFormModal({
                             </td>
 
                             <td className="p-2">
-                              <input
-                                type="date"
+                              <DateInput
                                 value={l.start_date || ''}
                                 onChange={(e) => updateLabourRow(idx, 'start_date', e.target.value)}
                                 className="w-full rounded border border-line bg-white px-2 py-1 text-xs text-ink focus:border-brand-500"
@@ -1096,8 +1113,7 @@ export default function TaskFormModal({
                             </td>
 
                             <td className="p-2">
-                              <input
-                                type="date"
+                              <DateInput
                                 value={l.end_date || ''}
                                 onChange={(e) => updateLabourRow(idx, 'end_date', e.target.value)}
                                 className="w-full rounded border border-line bg-white px-2 py-1 text-xs text-ink focus:border-brand-500"

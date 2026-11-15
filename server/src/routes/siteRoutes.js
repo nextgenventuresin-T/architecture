@@ -5,9 +5,12 @@ const { body, param } = require('express-validator');
 const validate = require('../middleware/validate');
 const { requireAuth } = require('../middleware/authMiddleware');
 // Interface 10 — blocks reaching a site by editing the id in the URL.
-const { requireSiteAccess } = require('../middleware/authorize');
+const { requireSiteAccess, requirePermission } = require('../middleware/authorize');
+
+const canEdit = requirePermission('projects', 'edit');
 const controller = require('../controllers/siteController');
 
+const { areaRules: areaMeasureRules } = require('../config/areaUnits');
 const router = express.Router();
 router.use(requireAuth);
 
@@ -15,6 +18,7 @@ router.get('/:id', [param('id').isInt({ min: 1 })], validate, requireSiteAccess(
 
 router.patch(
   '/:id',
+  canEdit,
   [
     param('id').isInt({ min: 1 }),
     body('name').optional().trim().notEmpty().withMessage('Enter a site name.'),
@@ -23,12 +27,14 @@ router.patch(
     body('labour_count').optional().isInt({ min: 0 }).toInt(),
     body('safety_status').optional().isIn(['safe', 'caution', 'incident']).withMessage('Choose a valid safety status.'),
     body('status').optional().isIn(['on-track', 'attention', 'delayed', 'on-hold', 'completed']),
+    ...areaMeasureRules(body),
   ],
   validate,
+  requireSiteAccess('id'),
   controller.update
 );
 
-router.delete('/:id', [param('id').isInt({ min: 1 })], validate, controller.remove);
+router.delete('/:id', canEdit, [param('id').isInt({ min: 1 })], validate, requireSiteAccess('id'), controller.remove);
 
 router.post(
   '/:id/activities',

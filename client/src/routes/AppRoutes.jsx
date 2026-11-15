@@ -59,6 +59,7 @@ import PmProcurementPage from '../pages/pm/PmProcurementPage';
 import PmAttendancePage from '../pages/pm/PmAttendancePage';
 import PmMachinesPage from '../pages/pm/PmMachinesPage';
 import PmExpensesPage from '../pages/pm/PmExpensesPage';
+import SiteReceivingPage from '../pages/shared/SiteReceivingPage';
 import ClientListPage from '../pages/admin/clients/ClientListPage';
 import FinanceDashboardPage from '../pages/admin/finance/FinanceDashboardPage';
 import ExpenseFormPage from '../pages/admin/finance/ExpenseFormPage';
@@ -291,6 +292,7 @@ export default function AppRoutes() {
         <Route path="machines" element={<PmMachinesPage />} />
         <Route path="expenses" element={<PmExpensesPage />} />
         <Route path="material-movements" element={<MaterialMovementsPage />} />
+        <Route path="receive-materials" element={<SiteReceivingPage basePath="/pm" />} />
         <Route path="approvals" element={<ApprovalsPage basePath="/pm" />} />
         <Route path="reports" element={<ReportsDashboardPage basePath="/pm" />} />
       </Route>
@@ -309,6 +311,8 @@ export default function AppRoutes() {
           {/* Every login: own attendance (check in / out) and leave. */}
           <Route path="my-portal" element={<MyPortalPage />} />
           {role === ROLES.HR && <Route path="staff-attendance" element={<StaffAttendancePage />} />}
+          {/* Site Engineers receive Admin's deliveries to their sites (scoped by the API). */}
+          {role === ROLES.EMPLOYEE && <Route path="receive-materials" element={<SiteReceivingPage basePath="/employee" />} />}
           {role === ROLES.CONTRACTOR && (
             <>
               <Route path="projects" element={<ContractorProjectsPage />} />

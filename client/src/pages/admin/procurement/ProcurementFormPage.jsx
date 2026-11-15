@@ -16,6 +16,7 @@ import { tasksApi } from '../../../api/tasksApi';
 import { toolApi } from '../../../api/toolApi';
 import { toApiError } from '../../../api/axiosClient';
 import { formatCurrency } from '../../../utils/format';
+import { isLiquidMaterial, isLitreUnit, formatLitres } from '../../../utils/liquidUnits';
 import { areaOptionsFor } from '../../../utils/areaOptions';
 import { PRIORITIES, EDITABLE_STATUSES, PROCUREMENT_STATUS_LABELS, PROCUREMENT_KIND_OPTIONS, SOURCE_TYPE_OPTIONS } from '../../../utils/procurementOptions';
 
@@ -47,6 +48,7 @@ const EMPTY = {
   supplier_contact: '',
   quantity: '',
   unit: '',
+  litres_per_unit: '',
   estimated_rate: '',
   purchase_rate: '',
   total_amount: '',
@@ -202,6 +204,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       supplier_contact: r.supplierContact ?? '',
       quantity: String(r.quantity ?? ''),
       unit: r.unit ?? '',
+      litres_per_unit: r.litresPerUnit != null && !isLitreUnit(r.unit) ? String(r.litresPerUnit) : '',
       estimated_rate: String(r.estimatedRate ?? 0),
       purchase_rate: r.purchaseRate != null ? String(r.purchaseRate) : '',
       total_amount: r.totalAmount != null ? String(r.totalAmount) : '',
@@ -402,6 +405,14 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
   const requestedQty = Number(values.quantity || 0);
   const remainingAfter = currentPlannedMaterial ? Number((remainingPlanned - requestedQty).toFixed(2)) : 0;
   const isToolItem = values.item_type === 'tool';
+  // Bucket / liquid material: offer litres per unit and show the total litres.
+  const selectedMaterial = !isToolItem && values.material_id ? materials.find((m) => String(m.id) === String(values.material_id)) : null;
+  const liquid = !isToolItem && Boolean(values.material_id)
+    && isLiquidMaterial({ unit: values.unit || selectedMaterial?.unit, category: selectedMaterial?.category, name: selectedMaterial?.name });
+  const litreUnit = liquid && isLitreUnit(values.unit || selectedMaterial?.unit);
+  const totalLitres = liquid && !litreUnit && Number(values.litres_per_unit) > 0 && Number(values.quantity) > 0
+    ? Number((Number(values.quantity) * Number(values.litres_per_unit)).toFixed(3))
+    : null;
   const currentPlannedTool = plannedTools.find((t) => String(t.toolId) === String(values.tool_id));
   const selectedTaskSubtasks = tasks.find((t) => String(t.id) === String(values.task_id))?.subtasks ?? [];
   const isToolExcess = isContractor && isToolItem && Boolean(currentPlannedTool) && requestedQty > currentPlannedTool.remainingQuantity;
@@ -475,9 +486,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       return errors;
     }
     const kind = values.procurement_kind;
-    if (kind === 'central_purchase' && !values.vehicle_number?.trim()) {
-      errors.vehicle_number = 'Vehicle number is mandatory for Central Warehouse purchase.';
-    }
+    // A vendor purchase may be raised without the vehicle: it is added once the vendor confirms.
     if (kind === 'project_site') {
       if (!values.project_id) errors.project_id = 'Select a project.';
       if (values.item_type !== 'tool' && isExcess && !values.excess_reason?.trim()) {
@@ -504,6 +513,14 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     return errors;
   }
 
+  /** Bucket / liquid material: litres in one unit (the server works out the total). */
+  function litresPayload() {
+    if (!liquid || litreUnit) return {};
+    return values.litres_per_unit !== '' && Number(values.litres_per_unit) > 0
+      ? { litres_per_unit: Number(values.litres_per_unit) }
+      : { litres_per_unit: null };
+  }
+
   function buildPayload() {
     // Contractor form maps a single "Source" choice onto the backend kinds.
     // A contractor is always the DESTINATION and is tied to their project/site.
@@ -515,6 +532,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
         tool_id: isTool && values.tool_id ? Number(values.tool_id) : null,
         quantity: Number(values.quantity),
         unit: values.unit.trim() || (isTool ? 'unit' : undefined),
+        ...litresPayload(),
         project_id: Number(values.project_id),
         site_id: values.site_id ? Number(values.site_id) : null,
         task_id: values.task_id ? Number(values.task_id) : null,
@@ -579,6 +597,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       supplier_contact: values.supplier_contact.trim() || null,
       quantity: Number(values.quantity),
       unit: values.unit.trim() || (isTool ? 'unit' : undefined),
+      ...litresPayload(),
       estimated_rate: values.purchase_rate ? Number(values.purchase_rate) : (values.estimated_rate ? Number(values.estimated_rate) : 0),
       required_date: values.required_date || null,
       priority: values.priority,
@@ -1409,12 +1428,13 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                       />
                       <InputField
                         label="Vehicle Number"
-                        required={isCentral}
                         value={values.vehicle_number}
                         onChange={set('vehicle_number')}
                         error={fieldErrors.vehicle_number}
                         placeholder="e.g. MH-12-AB-1234 / PB-10-AB-1234"
-                        description={isCentral ? "Registration number of the delivery truck/vehicle (Mandatory for Central Warehouse)" : "Registration number of the delivery truck/vehicle"}
+                        description={values.source_type === 'supplier' || isCentral
+                          ? 'Optional now - add it when the vendor confirms (Vendor confirmed - add vehicle). It must be recorded before the delivery can be received.'
+                          : 'Registration number of the delivery truck/vehicle'}
                       />
                     </>
                   );
@@ -1548,6 +1568,24 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                 placeholder="bags"
                 hint="Prefilled from the material; change if this order differs."
               />
+              {liquid && !litreUnit && (
+                <InputField
+                  label={`Litres per ${values.unit || 'unit'}`}
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={values.litres_per_unit}
+                  onChange={set('litres_per_unit')}
+                  error={fieldErrors.litres_per_unit}
+                  placeholder="e.g. 20"
+                  hint={totalLitres != null
+                    ? `Total: ${formatLitres(totalLitres)} - litres sent and used are tracked too.`
+                    : 'Optional - litres in one bucket / can / drum, so litres sent and used are tracked.'}
+                />
+              )}
+              {liquid && litreUnit && Number(values.quantity) > 0 && (
+                <p className="self-end pb-2 text-xs text-ink-muted">Measured in litres: {formatLitres(Number(values.quantity))}</p>
+              )}
               {!(isContractor && isToolItem) && !(((!isContractor && ['central_purchase', 'contractor_supply', 'project_site'].includes(values.procurement_kind) && (values.source_type === 'supplier' || values.procurement_kind === 'central_purchase' || values.procurement_kind === 'project_site')) || (isContractor && values.source_choice === 'supplier'))) && (
                 <InputField
                   label="Cost per unit"

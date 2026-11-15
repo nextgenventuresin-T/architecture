@@ -6,6 +6,7 @@ import { InputField, TextAreaField } from '../ui/Field';
 import { procurementApi } from '../../api/procurementApi';
 import { toApiError } from '../../api/axiosClient';
 import { formatNumber } from '../../utils/format';
+import { isLitreUnit, litresFor, formatLitres } from '../../utils/liquidUnits';
 
 /**
  * SEND MATERIAL for a movement-kind request. Issues source stock now and
@@ -18,7 +19,7 @@ import { formatNumber } from '../../utils/format';
  */
 export default function DispatchDialog({ request, onClose, onSaved, onError }) {
   const [values, setValues] = useState({
-    sent_quantity: '', vehicle_number: '', driver_name: '', driver_phone: '',
+    sent_quantity: '', sent_litres: '', vehicle_number: '', driver_name: '', driver_phone: '',
     transport_cost: '', other_expenses: '', remarks: '',
   });
   const [fieldErrors, setFieldErrors] = useState({});
@@ -31,6 +32,7 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
     setFieldErrors({});
     setValues({
       sent_quantity: String(request.quantity ?? ''),
+      sent_litres: '',
       vehicle_number: '', driver_name: '', driver_phone: '',
       transport_cost: '', other_expenses: '', remarks: '',
     });
@@ -45,6 +47,9 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
     request.source?.type === 'central_warehouse' ||
     request.destination?.type === 'central_warehouse';
   const isVehicleRequired = isInternalTransfer || isCentral;
+  // Bucket / liquid material: capture the litres sent too.
+  const showLitres = Boolean(request.isLiquid) && !isLitreUnit(request.unit);
+  const autoLitres = litresFor(values.sent_quantity, { unit: request.unit, litresPerUnit: request.litresPerUnit });
 
   const set = (key) => (event) => {
     setValues((current) => ({ ...current, [key]: event.target.value }));
@@ -73,6 +78,8 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
     try {
       await procurementApi.dispatch(request.id, {
         sent_quantity: Number(values.sent_quantity),
+        // Bucket / liquid: typed litres, else the server works them out from litres per unit.
+        ...(showLitres && values.sent_litres !== '' ? { sent_litres: Number(values.sent_litres) } : {}),
         vehicle_number: values.vehicle_number.trim() || null,
         driver_name: values.driver_name.trim() || null,
         driver_phone: values.driver_phone.trim() || null,
@@ -134,6 +141,12 @@ export default function DispatchDialog({ request, onClose, onSaved, onError }) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <InputField label="Quantity to dispatch" required type="number" min="0" step="0.01" value={values.sent_quantity} onChange={set('sent_quantity')} error={fieldErrors.sent_quantity} />
+        {showLitres && (
+          <InputField label="Litres sent" type="number" min="0" step="any" value={values.sent_litres} onChange={set('sent_litres')}
+            error={fieldErrors.sent_litres}
+            placeholder={autoLitres != null ? String(autoLitres) : 'e.g. 200'}
+            hint={autoLitres != null ? `Leave blank to use ${formatLitres(autoLitres)} (${formatNumber(request.litresPerUnit)} L per ${request.unit}).` : `Total litres in these ${request.unit || 'units'}.`} />
+        )}
         <InputField label="Vehicle number" required={isVehicleRequired} value={values.vehicle_number} onChange={set('vehicle_number')} error={fieldErrors.vehicle_number} placeholder="PB11 AB 1234" description={isCentral ? "Mandatory for Central Warehouse shipments" : undefined} />
         <InputField label="Driver name" value={values.driver_name} onChange={set('driver_name')} error={fieldErrors.driver_name} />
         <InputField label="Driver phone" value={values.driver_phone} onChange={set('driver_phone')} error={fieldErrors.driver_phone} />

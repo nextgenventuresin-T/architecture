@@ -73,6 +73,8 @@ const ROLE_MODULES = {
     { label: 'Contractor Procurement', path: '/pm/procurement', permission: 'procurement:view' },
     { label: 'Machines & Tools', path: '/pm/machines', permission: 'procurement:view' },
     { label: 'Material Movements', path: '/pm/material-movements', permission: 'procurement:view' },
+    // Receiving is scoped to the PM's assigned sites by the API, so it needs no extra permission.
+    { label: 'Receive Materials', path: '/pm/receive-materials' },
     { label: 'Project Expenses', path: '/pm/expenses', permission: 'projects:view' },
     approvalsFor('/pm'),
     reportsFor('/pm'),
@@ -80,6 +82,8 @@ const ROLE_MODULES = {
   [ROLES.EMPLOYEE]: [
     myPortalFor('/employee'),
     { label: 'Employees', path: '/employee', permission: 'employees:view' },
+    // Site Engineers: receive deliveries to their sites (others simply see no sites).
+    { label: 'Receive Materials', path: '/employee/receive-materials' },
     approvalsFor('/employee'),
     reportsFor('/employee'),
   ],

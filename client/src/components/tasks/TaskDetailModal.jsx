@@ -31,6 +31,7 @@ import TaskFormModal from './TaskFormModal';
 import SubtasksPanel, { SubtaskSummaryTable } from './SubtasksPanel';
 import SearchableSelect from '../ui/SearchableSelect';
 import CostSplitRows from './CostSplitRows';
+import { formatLitres, isLitreUnit } from '../../utils/liquidUnits';
 
 const STATUS_TONES = {
   'on-track': 'success',
@@ -864,6 +865,7 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                                 <td className="py-2.5 px-3 font-semibold text-ink">{c.materialName}<SubtaskChip name={c.subtaskName} /></td>
                                 <td className="py-2.5 px-3 text-right font-bold text-brand-700 tabular-nums">
                                   {c.quantityUsed} {c.unit}
+                                  {c.litresUsed != null && !isLitreUnit(c.unit) && <span className="block text-[11px] font-medium text-ink-muted">{formatLitres(c.litresUsed)}</span>}
                                 </td>
                                 <td className="py-2.5 px-3 text-ink">{c.contractorName || '—'}</td>
                                 <td className="py-2.5 px-3 text-ink-muted max-w-xs truncate">{c.remarks || '—'}</td>
@@ -1317,7 +1319,8 @@ export default function TaskDetailModal({ taskId, onClose: closeModal, onUpdated
                             <div className="rounded-lg bg-white border border-line p-2 text-xs text-ink flex items-center gap-2">
                               <Package className="h-4 w-4 text-brand-600" />
                               <span>
-                                Material consumed: <strong>{u.quantityUsed ?? u.quantity_used} {u.unit || u.material_unit}</strong> of{' '}
+                                Material consumed: <strong>{u.quantityUsed ?? u.quantity_used} {u.unit || u.material_unit}
+                                  {u.litresUsed != null && !isLitreUnit(u.unit || u.material_unit) ? ` (${formatLitres(u.litresUsed)})` : ''}</strong> of{' '}
                                 <strong>{u.materialName ?? u.material_name}</strong>
                               </span>
                             </div>
