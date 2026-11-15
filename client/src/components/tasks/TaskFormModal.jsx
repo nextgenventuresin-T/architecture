@@ -636,6 +636,7 @@ export default function TaskFormModal({
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {!isSubtask && (
             <AreaInput
               compact
               value={areaName}
@@ -645,15 +646,14 @@ export default function TaskFormModal({
                 return !sid || !a.siteId || String(a.siteId) === String(sid);
               })}
             />
+            )}
             {isSubtask && (
               <AreaMeasureField
-                className="sm:col-span-2"
-                label="Subtask Area (optional)"
+                label="Area"
                 value={areaValue}
                 unit={areaUnit}
                 onValueChange={(e) => setAreaValue(e.target.value)}
                 onUnitChange={(e) => setAreaUnit(e.target.value)}
-                hint="Area this subtask covers, e.g. 1,200 sq. ft. of flooring."
               />
             )}
             <div>

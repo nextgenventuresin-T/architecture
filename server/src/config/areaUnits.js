@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Units a project / site area measurement can be recorded in. Exactly these four -
+ * Units a project / site / subtask area measurement can be recorded in -
  * keep in sync with client/src/utils/areaUnits.js.
  */
 const AREA_UNITS = Object.freeze({
@@ -9,6 +9,8 @@ const AREA_UNITS = Object.freeze({
   m: 'Metres',
   sqft: 'Square Feet (sq. ft.)',
   sqm: 'Square Metres (sq. m.)',
+  rft: 'Running Feet (rft)',
+  rmt: 'Running Metres (rmt)',
 });
 const AREA_UNIT_VALUES = Object.freeze(Object.keys(AREA_UNITS));
 
@@ -23,7 +25,7 @@ function areaRules(body) {
     body('area_value').optional({ nullable: true, checkFalsy: true })
       .isFloat({ min: 0, max: 999999999999 }).withMessage('Enter the area as a number (0 or more).').toFloat(),
     body('area_unit').optional({ nullable: true, checkFalsy: true })
-      .isIn(AREA_UNIT_VALUES).withMessage('Choose Feet, Metres, Square Feet or Square Metres.'),
+      .isIn(AREA_UNIT_VALUES).withMessage('Choose a valid unit for the area.'),
     body('area_unit').custom((unit, { req }) => {
       const v = req.body.area_value;
       if (v !== undefined && v !== null && v !== '' && !unit) throw new Error('Choose the unit of the area.');

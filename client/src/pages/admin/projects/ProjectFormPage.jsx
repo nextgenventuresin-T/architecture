@@ -1974,20 +1974,13 @@ export default function ProjectFormPage({ mode = 'create' }) {
                                               placeholder="e.g. Column Casting, Slab Shuttering, Wiring Ground Floor"
                                             />
                                           </div>
-                                          <AreaInput
-                                            className="sm:col-span-2"
-                                            value={st.areaName}
-                                            areas={projectAreas}
-                                            onChange={(val) => updateSub(st.tempId, (x) => ({ ...x, areaName: val }))}
-                                          />
                                           <AreaMeasureField
                                             className="sm:col-span-2"
-                                            label="Subtask Area (optional)"
+                                            label="Area"
                                             value={st.areaValue ?? ''}
                                             unit={st.areaUnit}
                                             onValueChange={(e) => updateSub(st.tempId, (x) => ({ ...x, areaValue: e.target.value }))}
                                             onUnitChange={(e) => updateSub(st.tempId, (x) => ({ ...x, areaUnit: e.target.value }))}
-                                            hint="Area this subtask covers, e.g. 1,200 sq. ft. of flooring."
                                           />
                                           <SelectField
                                             label="Status"

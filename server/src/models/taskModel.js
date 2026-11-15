@@ -489,7 +489,7 @@ async function applyAreaAndManager(conn, table, id, projectId, payload = {}) {
         throw ApiError.badRequest('Check the highlighted fields.', { area_value: 'Enter the area as a number (0 or more).' });
       }
       if (m.area_value != null && !m.area_unit) {
-        throw ApiError.badRequest('Check the highlighted fields.', { area_unit: 'Choose Feet, Metres, Square Feet or Square Metres.' });
+        throw ApiError.badRequest('Check the highlighted fields.', { area_unit: 'Choose the unit of the area.' });
       }
       sets.push('area_value = ?', 'area_unit = ?');
       params.push(m.area_value ?? null, m.area_unit ?? null);
