@@ -98,7 +98,9 @@ async function refreshSession({ refreshToken, userAgent, ipAddress }) {
   }
 
   const tokenHash = hashToken(refreshToken);
-  const stored = await refreshTokenModel.findActive(tokenHash);
+  const stored = await refreshTokenModel.findActive(tokenHash)
+    // Two refreshes raced with the same cookie: the other one already rotated it.
+    || await refreshTokenModel.findJustRotated(tokenHash);
   if (!stored) {
     // Token is signed but not on record: treat as replay and drop all sessions.
     await refreshTokenModel.revokeAllForUser(payload.sub);

@@ -19,7 +19,8 @@ export const procurementApi = {
   detail: (id) => axiosClient.get(`/procurement/${id}`).then((r) => r.data.data),
   create: (payload) => axiosClient.post('/procurement', payload).then((r) => r.data.data.request),
   // Multi-item requests: one batch, each item an ordinary request underneath.
-  createBatch: (payload) => axiosClient.post('/procurement/batches', payload).then((r) => r.data.data),
+  // Many items are each validated and created on the server - allow it time on a busy host.
+  createBatch: (payload) => axiosClient.post('/procurement/batches', payload, { timeout: 180000 }).then((r) => r.data.data),
   batch: (batchId) => axiosClient.get(`/procurement/batches/${batchId}`).then((r) => r.data.data),
   batchAction: (batchId, action, payload = {}) =>
     axiosClient.post(`/procurement/batches/${batchId}/${action}`, payload).then((r) => r.data.data),

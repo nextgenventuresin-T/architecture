@@ -7,7 +7,7 @@ const axiosClient = axios.create({
   baseURL,
   withCredentials: true, // sends the httpOnly refresh cookie
   headers: { 'Content-Type': 'application/json' },
-  timeout: 15000,
+  timeout: 60000,
 });
 
 axiosClient.interceptors.request.use((config) => {
@@ -17,7 +17,17 @@ axiosClient.interceptors.request.use((config) => {
 });
 
 // Silently renews an expired access token once, then replays the request.
+// Only ONE refresh runs at a time (page load + an expired request, or several expired
+// requests at once all share it) - a second refresh with the same cookie would race.
 let refreshPromise = null;
+export function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = axiosClient.post('/auth/refresh')
+      .then((r) => r.data.data)
+      .finally(() => { setTimeout(() => { refreshPromise = null; }, 0); });
+  }
+  return refreshPromise;
+}
 
 axiosClient.interceptors.response.use(
   (response) => response,
@@ -29,13 +39,10 @@ axiosClient.interceptors.response.use(
     if (status === 401 && original && !original._retried && !isAuthRoute) {
       original._retried = true;
       try {
-        refreshPromise = refreshPromise || axiosClient.post('/auth/refresh');
-        const { data } = await refreshPromise;
-        refreshPromise = null;
-        setAccessToken(data.data.accessToken);
+        const data = await refreshSession();
+        setAccessToken(data.accessToken);
         return axiosClient(original);
       } catch (refreshError) {
-        refreshPromise = null;
         clearAccessToken();
         return Promise.reject(refreshError);
       }
