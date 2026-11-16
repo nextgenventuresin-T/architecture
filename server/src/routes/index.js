@@ -33,8 +33,19 @@ const siteReceivingRoutes = require('./siteReceivingRoutes');
 const router = express.Router();
 
 
-router.get('/health', (req, res) => {
-  res.json({ success: true, data: { status: 'ok', time: new Date().toISOString() } });
+router.get('/health', async (req, res) => {
+  // Deploy check: when this process started, and whether the database has every
+  // column the running code needs (no data, only column names).
+  const { missingColumns, startup } = require('../db/ensureSchema');
+  let missing = null;
+  try { missing = await missingColumns(); } catch (e) { missing = [`check failed: ${e.code || e.message}`]; }
+  res.json({
+    success: true,
+    data: {
+      status: 'ok', time: new Date().toISOString(), build: '2026-11-16b',
+      startedAt: startup.startedAt, schemaMissing: missing, migrationErrors: startup.migrationErrors,
+    },
+  });
 });
 
 router.use('/auth', authRoutes);
