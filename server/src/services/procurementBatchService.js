@@ -115,12 +115,11 @@ async function createBatch(payload, userId, hrScope) {
     // Store. That receiver is resolved here, server-side, never taken from the request.
     for (let i = 0; i < prepared.length; i += 1) {
       const item = prepared[i];
-      if (item.item_type === 'tool' || (!item.material_id && item.tool_id)) {
-        errors[`items.${i}.material_id`] = 'Central Warehouse → Site carries materials only. Use the machine request for machines.';
-        continue;
-      }
+      // A machine from the Central Warehouse is a company-owned machine: Admin allocates
+      // one of its serial numbers to the site, which receives it (like any machine request).
+      if (item.item_type === 'tool' || (!item.material_id && item.tool_id)) item.tool_procurement_type = 'purchased_owned';
       if (!item.project_id) { errors[`items.${i}.project_id`] = 'Select the project.'; continue; }
-      if (!item.site_id) { errors[`items.${i}.site_id`] = 'Select the site this material goes to.'; continue; }
+      if (!item.site_id) { errors[`items.${i}.site_id`] = 'Select the site this item goes to.'; continue; }
       const [[site]] = await pool.query('SELECT id, project_id FROM sites WHERE id = ? LIMIT 1', [Number(item.site_id)]);
       if (!site || Number(site.project_id) !== Number(item.project_id)) {
         errors[`items.${i}.site_id`] = 'That site does not belong to the selected project.';

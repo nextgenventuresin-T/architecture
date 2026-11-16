@@ -326,6 +326,19 @@ async function approve(id, token) {
   r = await api('POST', `/projects/${projectId}/labour`, admin.token, { record_date: '2026-11-16', site_id: siteId, category: 'Mason', worker_count: 3, present_count: 3, daily_rate: 650 });
   check('crew-count entry still works', r.status === 201 || r.status === 200, show(r));
 
+  // ------------------------------------------------------------ 9. machine from Central -> Site
+  section('9. Central Warehouse -> Site with a machine line');
+  r = await api('POST', '/procurement/batches', admin.token, {
+    flow: 'central_site', status: 'requested', items: [
+      { item_type: 'tool', tool_id: toolRow.id, quantity: 2, project_id: projectId, site_id: siteId, task_id: taskId, excess_reason: 'Test' },
+    ],
+  });
+  const cb = r.data?.batch?.id;
+  check('central -> site batch with machines accepted', (r.status === 201 || r.status === 200) && cb, show(r));
+  const cItems = cb ? await q('SELECT item_type, procurement_kind, source_type, tool_procurement_type, destination_site_id, quantity FROM procurement_requests WHERE batch_id=?', [cb]) : [];
+  check('2 owned-machine allocations to the site', cItems.length === 2 && cItems.every((x) => x.item_type === 'tool' && x.source_type === 'central_warehouse'
+    && x.tool_procurement_type === 'purchased_owned' && Number(x.destination_site_id) === Number(siteId) && Number(x.quantity) === 1), JSON.stringify(cItems));
+
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   if (failures.length) console.log('Failed:', failures.join(' | '));

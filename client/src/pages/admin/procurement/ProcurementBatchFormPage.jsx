@@ -37,7 +37,7 @@ const REQUESTER_FLOWS = [
 
 const isVendorFlow = (flow) => ['vendor_central', 'vendor_site', 'supplier_contractor'].includes(flow);
 const hasLinks = (flow) => flow !== 'vendor_central';
-/** Central Warehouse -> Site moves materials only (machines have their own allocation flow). */
+/** Central Warehouse -> Site: no purchase price (company stock); machines are owned-unit allocations. */
 const materialsOnly = (flow) => flow === 'central_site';
 
 function newRow(defaults) {
@@ -284,14 +284,13 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       if (a.isTool && !(Number.isInteger(Number(r.quantity)) && Number(r.quantity) >= 1 && Number(r.quantity) <= 50)) e.quantity = 'Enter whole units (1 - 50).';
       if (hasLinks(flow) && !r.project_id) e.project_id = 'Select a project.';
       if (flow === 'central_site' && r.project_id && !r.site_id) e.site_id = 'Select the site it goes to.';
-      if (materialsOnly(flow) && a.isTool) e.item = 'Central Warehouse → Site carries materials only.';
       if (isRequester && !r.task_id) e.task_id = 'Select the task.';
       if (flow === 'contractor_contractor' && !r.source_contractor_id) e.source_contractor_id = 'Select the source contractor.';
       if (a.isTool && isRequester) {
         if (!(Number(r.rental_days) >= 1)) e.rental_days = 'Days needed.';
         if (!r.rental_start_date) e.rental_start_date = 'Needed from.';
       }
-      if (a.isTool && !isRequester && r.tool_mode === 'rented' && !(Number(r.rental_days) >= 1)) e.rental_days = 'Rental days.';
+      if (a.isTool && !isRequester && !materialsOnly(flow) && r.tool_mode === 'rented' && !(Number(r.rental_days) >= 1)) e.rental_days = 'Rental days.';
       if (a.needsReason && !r.excess_reason.trim()) e.excess_reason = a.unplanned ? 'Not planned for this task - give a reason.' : 'More than planned - give a reason.';
       if (Object.keys(e).length) errs[r.key] = e;
     });
@@ -333,6 +332,9 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
           rental_start_date: r.rental_start_date,
           rental_end_date: lastDay(r.rental_start_date, r.rental_days) || null,
         });
+      } else if (materialsOnly(flow)) {
+        // Central Warehouse -> Site: an owned machine is allocated, nothing is bought.
+        Object.assign(base, { tool_procurement_type: 'purchased_owned' });
       } else {
         Object.assign(base, {
           tool_procurement_type: r.tool_mode,
@@ -564,7 +566,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                   <div className="flex items-center gap-2">
                     <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">{idx + 1}</span>
                     <div className="inline-flex overflow-hidden rounded-lg border border-line text-xs">
-                      {(materialsOnly(flow) ? ['material'] : ['material', 'tool']).map((t) => (
+                      {['material', 'tool'].map((t) => (
                         <button key={t} type="button" onClick={() => updateRow(r.key, { item_type: t })}
                           className={`px-2.5 py-1 font-medium ${r.item_type === t ? 'bg-brand-600 text-white' : 'bg-white text-ink-muted hover:bg-canvas'}`}>
                           {t === 'material' ? 'Material' : 'Machine / Tool'}
@@ -627,11 +629,16 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
 
                 {a.isTool && (
                   <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4">
-                    {!isRequester && (
+                    {!isRequester && materialsOnly(flow) && (
+                      <p className="self-end pb-2 text-xs text-ink-muted sm:col-span-4">
+                        Company-owned machine from the Central Warehouse - after approval, Admin allocates its serial number(s) to the site.
+                      </p>
+                    )}
+                    {!isRequester && !materialsOnly(flow) && (
                       <SelectField label="Obtained by" value={r.tool_mode} onChange={(e) => updateRow(r.key, { tool_mode: e.target.value })}
                         options={[{ value: 'to_be_purchased', label: 'Purchase' }, { value: 'rented', label: 'Rent' }]} />
                     )}
-                    {(isRequester || r.tool_mode === 'rented') && (
+                    {(isRequester || (r.tool_mode === 'rented' && !materialsOnly(flow))) && (
                       <>
                         <InputField label={isRequester ? 'Needed for (days)' : 'Rental days'} required type="number" min="1" step="1"
                           value={r.rental_days} onChange={(e) => updateRow(r.key, { rental_days: e.target.value })} error={err.rental_days}
