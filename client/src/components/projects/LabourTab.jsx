@@ -11,6 +11,7 @@ import Modal from '../ui/Modal';
 import Alert from '../ui/Alert';
 import { projectsApi } from '../../api/projectsApi';
 import { hrApi } from '../../api/hrApi';
+import { contractorsApi } from '../../api/contractorsApi';
 import { formatCurrency, formatNumber, formatDate } from '../../utils/format';
 
 /**
@@ -74,6 +75,14 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
   const [directorySearch, setDirectorySearch] = useState('');
   const [marks, setMarks] = useState({}); // id -> { present, rate }
 
+  // The site page does not pass the contractor list, so load it here when missing.
+  const [contractorList, setContractorList] = useState(lookups?.contractors || []);
+  useEffect(() => {
+    if (lookups?.contractors?.length) { setContractorList(lookups.contractors); return; }
+    if (!isLogOpen || contractorList.length) return;
+    contractorsApi.listAll().then((list) => setContractorList(list || [])).catch(() => {});
+  }, [isLogOpen, lookups, contractorList.length]);
+
   useEffect(() => {
     if (!isLogOpen || directory.length) return;
     setDirectoryLoading(true);
@@ -89,7 +98,8 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
     const words = directorySearch.toLowerCase().split(/\s+/).filter(Boolean);
     return directory.filter((w) => {
       const isCompany = w.workerType === 'company_labour';
-      const inCrew = cId ? String(w.contractorId || '') === cId || isCompany : isCompany || !w.contractorId;
+      // A contractor chosen: their workers (plus company labour). None chosen: everyone.
+      const inCrew = cId ? String(w.contractorId || '') === cId || isCompany : true;
       const text = `${w.name} ${w.trade} ${w.code || ''}`.toLowerCase();
       return inCrew && words.every((x) => text.includes(x));
     });
@@ -772,8 +782,8 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
               value={logForm.contractor_id}
               onChange={(e) => setLogForm({ ...logForm, contractor_id: e.target.value })}
               options={[
-                { value: '', label: 'Direct / Company Crew' },
-                ...(lookups?.contractors || []).map((c) => ({
+                { value: '', label: logMode === 'named' ? 'All workers / company crew' : 'Direct / Company Crew' },
+                ...contractorList.map((c) => ({
                   value: c.id,
                   label: c.name,
                 })),
@@ -839,7 +849,10 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
                               <input type="checkbox" aria-label={`${w.name} present`} checked={mk.present} onChange={(e) => setMark(w, { present: e.target.checked })} />
                             </td>
                             <td className="px-3 py-1.5 font-medium text-ink">{w.name}{w.code ? <span className="ml-1 text-ink-subtle">({w.code})</span> : null}</td>
-                            <td className="px-3 py-1.5 text-ink-muted">{w.trade}</td>
+                            <td className="px-3 py-1.5 text-ink-muted">
+                              {w.trade}
+                              {!logForm.contractor_id && <span className="block text-[11px] text-ink-subtle">{w.contractorName}</span>}
+                            </td>
                             <td className="px-3 py-1.5 text-right">
                               <input type="number" min="0" step="any" aria-label={`${w.name} daily rate`} value={mk.rate}
                                 onChange={(e) => setMark(w, { rate: e.target.value })}
