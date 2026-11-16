@@ -21,3 +21,9 @@ function vehicleSql(column) {
 }
 
 module.exports = { normalizeVehicle, vehiclesMatch, vehicleSql };
+
+/** Bilty / AWB numbers are compared the same forgiving way (case, spaces, dashes ignored). */
+const normalizeBilty = normalizeVehicle;
+const biltyMatch = vehiclesMatch;
+module.exports.normalizeBilty = normalizeBilty;
+module.exports.biltyMatch = biltyMatch;

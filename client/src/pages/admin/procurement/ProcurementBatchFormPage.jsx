@@ -6,6 +6,7 @@ import { Card, CardHeader, CardBody } from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import Alert from '../../../components/ui/Alert';
 import { InputField, SelectField, TextAreaField } from '../../../components/ui/Field';
+import MultiCheckSelect from '../../../components/ui/MultiCheckSelect';
 import { procurementApi } from '../../../api/procurementApi';
 import { projectsApi } from '../../../api/projectsApi';
 import { tasksApi } from '../../../api/tasksApi';
@@ -91,6 +92,8 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
   const [flow, setFlow] = useState(flows[0].value);
   const [defaults, setDefaults] = useState({
     project_id: '', site_id: '', task_id: '', subtask_id: '', vendor_id: '', source_contractor_id: '',
+    // Several tasks at once ([] = all tasks of the project / site).
+    task_ids: [],
   });
   const [header, setHeader] = useState({
     required_date: '', priority: 'medium', notes: '',
@@ -111,11 +114,11 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
   useEffect(() => {
     const projectsLoad = role === ROLES.PROJECT_MANAGER
       ? procurementApi.lookups().then((d) => d.projects ?? [])
-      : projectsApi.list({ pageSize: 50 }).then((d) => d.projects ?? []);
+      : projectsApi.listAll();
     projectsLoad.then(setProjects).catch(() => setProjects([]));
     materialsApi.listAll().then(setMaterials).catch(() => setMaterials([]));
-    toolApi.list({ pageSize: 100 }).then((d) => setTools(d.tools ?? [])).catch(() => setTools([]));
-    vendorApi.list({ status: 'active', pageSize: 200 }).then((d) => setVendors(d.vendors ?? [])).catch(() => setVendors([]));
+    toolApi.listAll().then(setTools).catch(() => setTools([]));
+    vendorApi.listAll({ status: 'active' }).then(setVendors).catch(() => setVendors([]));
     procurementApi.lookups().then((d) => setContractors(d.contractors ?? [])).catch(() => setContractors([]));
   }, [role]);
 
@@ -185,13 +188,31 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
   const setTool = (row, toolId) => {
     const plan = plannedToolsOf(row).find((p) => String(p.toolId) === String(toolId));
     updateRow(row.key, {
-      tool_id: toolId, unit: 'unit', quantity: '1',
+      tool_id: toolId, unit: 'unit', quantity: row.quantity || '1',
       rental_days: String(plan?.plannedDays || row.rental_days || 1),
       rate: row.rate || (plan?.plannedRate ? String(plan.plannedRate) : ''),
     });
   };
 
   const addRow = () => setRows((list) => [...list, newRow(defaults)]);
+  /** Ticked tasks (or every task of the project / site when "All tasks" is chosen). */
+  const chosenTasks = () => {
+    const all = tasksOf(defaults);
+    return defaults.task_ids.length ? all.filter((t) => defaults.task_ids.includes(String(t.id))) : all;
+  };
+  /** One new line per chosen task, each already linked to its task. */
+  const addLinesForTasks = () => {
+    const tasks = chosenTasks();
+    if (!tasks.length) return;
+    setRows((list) => {
+      // An untouched first line is replaced rather than left empty.
+      const keep = list.filter((r) => r.material_id || r.tool_id || r.quantity);
+      return [...keep, ...tasks.map((t) => newRow({ ...defaults, task_id: String(t.id), subtask_id: '' }))];
+    });
+  };
+  const setTaskIds = (ids) => setDefaults((d) => ({
+    ...d, task_ids: ids, task_id: ids.length === 1 ? ids[0] : '', subtask_id: '',
+  }));
   const duplicateRow = (row) => setRows((list) => {
     const i = list.findIndex((r) => r.key === row.key);
     rowSeq += 1;
@@ -204,8 +225,8 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
     const value = e.target.value;
     setDefaults((d) => {
       const next = { ...d, [field]: value };
-      if (field === 'project_id') { next.site_id = ''; next.task_id = ''; next.subtask_id = ''; }
-      if (field === 'site_id') { next.task_id = ''; next.subtask_id = ''; }
+      if (field === 'project_id') { next.site_id = ''; next.task_id = ''; next.subtask_id = ''; next.task_ids = []; }
+      if (field === 'site_id') { next.task_id = ''; next.subtask_id = ''; next.task_ids = []; }
       if (field === 'task_id') next.subtask_id = '';
       return next;
     });
@@ -260,7 +281,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       if (!(Number(r.quantity) > 0)) e.quantity = 'Enter a quantity.';
       if (r.transport_cost !== '' && !(Number(r.transport_cost) >= 0)) e.transport_cost = 'Enter a valid amount.';
       if (a.liquid && r.litres_per_unit !== '' && !(Number(r.litres_per_unit) >= 0)) e.litres_per_unit = 'Enter litres as a number.';
-      if (a.isTool && Number(r.quantity) !== 1) e.quantity = 'One machine per line (quantity 1).';
+      if (a.isTool && !(Number.isInteger(Number(r.quantity)) && Number(r.quantity) >= 1 && Number(r.quantity) <= 50)) e.quantity = 'Enter whole units (1 - 50).';
       if (hasLinks(flow) && !r.project_id) e.project_id = 'Select a project.';
       if (flow === 'central_site' && r.project_id && !r.site_id) e.site_id = 'Select the site it goes to.';
       if (materialsOnly(flow) && a.isTool) e.item = 'Central Warehouse → Site carries materials only.';
@@ -467,8 +488,13 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
               <SelectField label="Site" value={defaults.site_id} onChange={setDefault('site_id')} disabled={!defaults.project_id}
                 placeholder={defaults.project_id ? 'Any / select site' : 'Select project first'}
                 options={sitesOf(defaults).map((s) => ({ value: String(s.id), label: s.name }))} />
-              <SelectField label="Task" value={defaults.task_id} onChange={setDefault('task_id')} disabled={!defaults.project_id}
-                placeholder="Select task" options={tasksOf(defaults).map((t) => ({ value: String(t.id), label: t.name }))} />
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-ink">Tasks</span>
+                <MultiCheckSelect label="Tasks" allLabel="All tasks" noun="tasks" className="[&>button]:h-11 [&>button]:rounded-xl"
+                  disabled={!defaults.project_id} placeholder={defaults.project_id ? 'All tasks' : 'Select project first'}
+                  value={defaults.task_ids} onChange={setTaskIds}
+                  options={tasksOf(defaults).map((t) => ({ value: String(t.id), label: t.name }))} />
+              </div>
               <SelectField label="Subtask" value={defaults.subtask_id} onChange={setDefault('subtask_id')} disabled={!defaults.task_id}
                 placeholder="Main task" options={subtasksOf(defaults).map((s) => ({ value: String(s.id), label: s.name }))} />
             </div>
@@ -485,6 +511,12 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
             <SelectField label="Priority" value={header.priority} onChange={(e) => setHeader((h) => ({ ...h, priority: e.target.value }))} options={PRIORITIES} />
           </div>
           <div className="flex flex-wrap gap-2">
+            {hasLinks(flow) && defaults.project_id && tasksOf(defaults).length > 0 && (
+              <Button type="button" size="sm" onClick={addLinesForTasks}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Add a line for {defaults.task_ids.length ? `each selected task (${defaults.task_ids.length})` : `every task (${tasksOf(defaults).length})`}
+              </Button>
+            )}
             {hasLinks(flow) && (
               <Button type="button" size="sm" variant="secondary" onClick={() => applyDefaultsToAll(['project_id', 'site_id', 'task_id', 'subtask_id'])}>
                 Apply project / site / task to all items
@@ -565,8 +597,10 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                     placeholder={isRequester && !r.task_id ? 'Select the task first' : 'Select'}
                     options={itemOptions(r)}
                   />
-                  <InputField className="lg:col-span-2" label={`Qty${r.unit ? ` (${r.unit})` : ''}`} required type="number" min="0" step="any"
-                    value={r.quantity} onChange={(e) => updateRow(r.key, { quantity: e.target.value })} error={err.quantity} disabled={a.isTool} />
+                  <InputField className="lg:col-span-2" label={a.isTool ? 'Units' : `Qty${r.unit ? ` (${r.unit})` : ''}`} required type="number"
+                    min={a.isTool ? '1' : '0'} step={a.isTool ? '1' : 'any'}
+                    value={r.quantity} onChange={(e) => updateRow(r.key, { quantity: e.target.value })} error={err.quantity}
+                    hint={a.isTool && Number(r.quantity) > 1 ? `${r.quantity} units - each tracked by its own serial number` : undefined} />
                   {a.liquid && !a.litreUnit && (
                     <InputField className="lg:col-span-2" label={`Litres per ${r.unit || 'unit'}`} type="number" min="0" step="any"
                       value={r.litres_per_unit} onChange={(e) => updateRow(r.key, { litres_per_unit: e.target.value })} error={err.litres_per_unit}

@@ -44,7 +44,11 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
 
   // Vendor deliveries into the central warehouse (or any delivery with a recorded dispatch vehicle)
   // are verified by vehicle number first; an unrecorded supplier->contractor delivery has nothing to verify.
-  const needsVehicle = request.kind === 'central_purchase' || Boolean(request.vehicleNumber);
+  const needsVehicle = request.kind === 'central_purchase' || Boolean(request.vehicleNumber) || request.verifyBy === 'bilty';
+  // Vendor deliveries confirmed with a Bilty / AWB number are received with that number.
+  const byBilty = request.verifyBy === 'bilty';
+  const field = byBilty ? 'bilty_number' : 'vehicle_number';
+  const plate = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const qty = details?.quantity ?? request.purchaseOrder?.orderedQuantity ?? request.quantity;
   const today = new Date().toISOString().slice(0, 10);
 
@@ -57,7 +61,33 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
   async function fetchDetails() {
     setError(null);
     if (!vehicle.trim()) {
-      setFieldErrors({ vehicle_number: 'Enter the vehicle number to fetch the dispatch details.' });
+      setFieldErrors({ [field]: byBilty ? 'Enter the Bilty / AWB number of this delivery.' : 'Enter the vehicle number to fetch the dispatch details.' });
+      return;
+    }
+    if (byBilty) {
+      // The server re-checks it on receipt; this only shows the recorded dispatch first.
+      if (plate(vehicle) !== plate(request.biltyNumber)) {
+        setDetails(null);
+        setFieldErrors({ bilty_number: 'This Bilty / AWB number does not match the vendor dispatch. Check it with the courier / transporter.' });
+        return;
+      }
+      setFieldErrors({});
+      setDetails({
+        reference: request.requestNumber,
+        material: request.material?.name,
+        quantity: request.purchaseOrder?.orderedQuantity ?? request.quantity,
+        unit: request.unit,
+        biltyNumber: request.biltyNumber,
+        vehicleNumber: request.vehicleNumber,
+        driverName: request.driverName,
+        driverPhone: request.driverPhone,
+        source: request.vendor?.name || request.supplier,
+        destination: request.destination?.name || 'Central Warehouse',
+        dispatchDate: request.vendorConfirmedAt,
+        costPerUnit: request.purchaseRate,
+        totalCost: request.totalAmount,
+      });
+      if (!rate && request.purchaseRate) changeRate(String(request.purchaseRate));
       return;
     }
     setFetching(true);
@@ -88,7 +118,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
     setSaving(true);
     try {
       await procurementApi.fulfil(request.id, {
-        vehicle_number: needsVehicle ? vehicle.trim() : undefined,
+        [field]: needsVehicle ? vehicle.trim() : undefined,
         purchase_rate: Number(rate),
         total_amount: total ? Number(total) : undefined,
         transport_cost: transport !== '' ? Number(transport) : undefined,
@@ -132,13 +162,13 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
 
           {needsVehicle && (
           <InputField
-            label="Vehicle number"
+            label={byBilty ? 'Bilty / AWB number' : 'Vehicle number'}
             required
             value={vehicle}
-            onChange={(e) => { setVehicle(e.target.value); setFieldErrors((c) => ({ ...c, vehicle_number: undefined })); setDetails(null); }}
-            error={fieldErrors.vehicle_number}
-            placeholder="PB 10 AB 1234"
-            hint="Enter the number of the vehicle that has arrived. The recorded dispatch is fetched from it."
+            onChange={(e) => { setVehicle(e.target.value); setFieldErrors((c) => ({ ...c, [field]: undefined })); setDetails(null); }}
+            error={fieldErrors[field]}
+            placeholder={byBilty ? 'As written on the Bilty / AWB' : 'PB 10 AB 1234'}
+            hint={byBilty ? 'Enter the Bilty / AWB number of this delivery. It must match the one recorded when the vendor confirmed.' : 'Enter the number of the vehicle that has arrived. The recorded dispatch is fetched from it.'}
             disabled={Boolean(details)}
           />
           )}
@@ -154,6 +184,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
                 <p className="mb-2 font-medium text-ink">Dispatch details — {details.reference}</p>
                 {row('Material', details.material)}
                 {row('Quantity', `${formatNumber(details.quantity)} ${details.unit}`)}
+                {details.biltyNumber && row('Bilty / AWB', details.biltyNumber)}
                 {row('Vehicle number', details.vehicleNumber)}
                 {row('Driver name', details.driverName)}
                 {row('Driver phone', details.driverPhone)}
@@ -163,7 +194,7 @@ export default function VerifiedReceiptDialog({ request, onClose, onSaved, onErr
                 {row('Recorded cost / unit', details.costPerUnit != null ? formatCurrency(details.costPerUnit) : '—')}
                 {row('Recorded total', details.totalCost != null ? formatCurrency(details.totalCost) : '—')}
                 <button type="button" className="mt-2 text-xs text-brand-700 underline" onClick={() => setDetails(null)}>
-                  Not this delivery? Change the vehicle number
+                  Not this delivery? Change the {byBilty ? 'Bilty / AWB' : 'vehicle'} number
                 </button>
               </div>
 

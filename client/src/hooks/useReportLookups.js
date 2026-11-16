@@ -1,3 +1,4 @@
+import { fetchAllPages } from '../api/fetchAll';
 import { useEffect, useState } from 'react';
 import reportsApi from '../api/reportsApi';
 
@@ -26,9 +27,8 @@ export default function useReportLookups() {
       .then((data) => active && setLookups((l) => ({ ...l, sites: data.sites ?? [] })))
       .catch(() => active && setLookups((l) => ({ ...l, sites: [] })));
 
-    reportsApi
-      .contractors({ pageSize: 50 })
-      .then((data) => active && setLookups((l) => ({ ...l, contractors: data.contractors ?? [] })))
+    fetchAllPages(reportsApi.contractors, 'contractors', {}, 50)
+      .then((contractors) => active && setLookups((l) => ({ ...l, contractors })))
       .catch(() => active && setLookups((l) => ({ ...l, contractors: null })));
 
     return () => {

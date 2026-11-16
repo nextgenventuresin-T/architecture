@@ -55,8 +55,7 @@ export default function ContractorProjectsPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await projectsApi.list({ pageSize: 50 });
-      const list = data.projects || [];
+      const list = await projectsApi.listAll();
       setProjects(list);
       if (list.length > 0 && !selectedProjectId) {
         setSelectedProjectId(list[0].id);

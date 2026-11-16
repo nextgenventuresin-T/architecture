@@ -15,7 +15,7 @@ export function useScopeOptions(value) {
   const [areas, setAreas] = useState([]);
 
   useEffect(() => {
-    projectsApi.list({ pageSize: 50 }).then((d) => setProjects(d.projects || [])).catch(() => setProjects([]));
+    projectsApi.listAll().then(setProjects).catch(() => setProjects([]));
   }, []);
 
   useEffect(() => {

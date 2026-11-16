@@ -199,7 +199,7 @@ async function getDetail(id) {
 async function getLookups() {
   const [lookups, projects] = await Promise.all([
     employeeModel.findDistinctLookups(),
-    projectModel.findAll({ page: 1, pageSize: 100 }),
+    projectModel.findAll({ page: 1, pageSize: 10000 }),
   ]);
 
   return {

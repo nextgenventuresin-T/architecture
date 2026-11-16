@@ -273,7 +273,7 @@ export default function ContractorSiteWarehousePage() {
             </button>
             <button
               type="button"
-              onClick={() => navigate('/contractor/procurement/new')}
+              onClick={() => navigate('/contractor/procurement/new-batch')}
               className="inline-flex items-center gap-1.5 rounded-xl bg-brand-700 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-brand-800 transition-colors"
             >
               <Plus className="h-3.5 w-3.5" />

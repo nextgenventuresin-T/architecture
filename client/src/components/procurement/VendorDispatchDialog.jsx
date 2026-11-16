@@ -8,10 +8,11 @@ import { toApiError } from '../../api/axiosClient';
 import { toDateInputValue } from '../../utils/format';
 
 /**
- * "Vendor confirmed - add vehicle". A vendor purchase can be raised and ordered
- * without a vehicle; once the vendor confirms, Admin / Procurement records the
- * dispatch here. The vehicle number is mandatory - whoever receives the goods
- * verifies it on arrival, and nothing can be received until it is recorded.
+ * "Vendor confirmed - add Bilty / AWB". A vendor purchase can be raised and ordered
+ * without any transport details; once the vendor confirms, Admin / Procurement records
+ * the Bilty / AWB number here (mandatory; vehicle, driver and challan optional).
+ * Whoever receives the goods must enter the same Bilty / AWB number, and nothing can
+ * be received until it is recorded.
  */
 export default function VendorDispatchDialog({ request, onClose, onSaved }) {
   const [values, setValues] = useState({});
@@ -24,6 +25,7 @@ export default function VendorDispatchDialog({ request, onClose, onSaved }) {
     setError(null);
     setFieldErrors({});
     setValues({
+      bilty_number: request.biltyNumber || '',
       vehicle_number: request.vehicleNumber || '',
       driver_name: request.driverName || '',
       driver_phone: request.driverPhone || '',
@@ -34,7 +36,7 @@ export default function VendorDispatchDialog({ request, onClose, onSaved }) {
   }, [request]);
 
   if (!request) return null;
-  const isUpdate = Boolean(request.vehicleNumber);
+  const isUpdate = Boolean(request.biltyNumber);
 
   const set = (key) => (event) => {
     setValues((current) => ({ ...current, [key]: event.target.value }));
@@ -42,22 +44,23 @@ export default function VendorDispatchDialog({ request, onClose, onSaved }) {
   };
 
   async function handleSave() {
-    if (!String(values.vehicle_number || '').trim()) {
-      setFieldErrors({ vehicle_number: "Enter the vendor's vehicle number." });
+    if (!String(values.bilty_number || '').trim()) {
+      setFieldErrors({ bilty_number: 'Enter the Bilty / AWB number.' });
       return;
     }
     setIsSaving(true);
     setError(null);
     try {
       await procurementApi.recordVendorDispatch(request.id, {
-        vehicle_number: values.vehicle_number.trim(),
+        bilty_number: values.bilty_number.trim(),
+        vehicle_number: values.vehicle_number.trim() || null,
         driver_name: values.driver_name.trim() || null,
         driver_phone: values.driver_phone.trim() || null,
         challan_number: values.challan_number.trim() || null,
         challan_date: values.challan_date || null,
         expected_delivery_date: values.expected_delivery_date || null,
       });
-      onSaved(isUpdate ? 'Vendor dispatch updated.' : 'Vendor confirmed - vehicle recorded. It can now be received after the vehicle is verified.');
+      onSaved(isUpdate ? 'Vendor dispatch updated.' : 'Vendor confirmed - Bilty / AWB recorded. It can now be received with that number.');
     } catch (caught) {
       const apiError = toApiError(caught);
       if (apiError.details) setFieldErrors(apiError.details);
@@ -71,7 +74,7 @@ export default function VendorDispatchDialog({ request, onClose, onSaved }) {
     <Modal
       isOpen
       onClose={onClose}
-      title={isUpdate ? 'Update vendor dispatch' : 'Vendor confirmed - add vehicle'}
+      title={isUpdate ? 'Update vendor dispatch' : 'Vendor confirmed - add Bilty / AWB'}
       description={`${request.requestNumber} · ${request.material.name}${request.vendor?.name || request.supplier ? ` · ${request.vendor?.name || request.supplier}` : ''}`}
       footer={
         <>
@@ -82,11 +85,13 @@ export default function VendorDispatchDialog({ request, onClose, onSaved }) {
     >
       {error && !error.details && <Alert tone="error" className="mb-4">{error.message}</Alert>}
       <p className="mb-4 rounded-lg border border-brand-200 bg-brand-50/60 p-3 text-xs text-brand-900">
-        Enter the details the vendor gave when confirming the order. The receiver must enter the same vehicle
-        number to receive the goods.
+        Enter the Bilty / AWB number the vendor gave when confirming the order. The receiver (Project Manager,
+        site engineer or contractor) must enter the same number to receive the goods.
       </p>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <InputField label="Vehicle number" required value={values.vehicle_number} onChange={set('vehicle_number')}
+        <InputField label="Bilty / AWB number" required value={values.bilty_number} onChange={set('bilty_number')}
+          error={fieldErrors.bilty_number} placeholder="e.g. LR-458812 / AWB 7781 2234" />
+        <InputField label="Vehicle number (optional)" value={values.vehicle_number} onChange={set('vehicle_number')}
           error={fieldErrors.vehicle_number} placeholder="e.g. MH-12-AB-1234" />
         <InputField label="Delivery challan no." value={values.challan_number} onChange={set('challan_number')}
           error={fieldErrors.challan_number} placeholder="e.g. DC-9988" />

@@ -10,6 +10,7 @@ import Skeleton from '../ui/Skeleton';
 import Modal from '../ui/Modal';
 import Alert from '../ui/Alert';
 import { projectsApi } from '../../api/projectsApi';
+import { hrApi } from '../../api/hrApi';
 import { formatCurrency, formatNumber, formatDate } from '../../utils/format';
 
 /**
@@ -65,8 +66,77 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
     payment_status: 'verified',
   });
 
+  // Name-wise attendance: people from the Labour Directory, each marked present with
+  // their daily rate (prefilled from the directory, editable).
+  const [logMode, setLogMode] = useState('named'); // 'named' | 'crew'
+  const [directory, setDirectory] = useState([]);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directorySearch, setDirectorySearch] = useState('');
+  const [marks, setMarks] = useState({}); // id -> { present, rate }
+
+  useEffect(() => {
+    if (!isLogOpen || directory.length) return;
+    setDirectoryLoading(true);
+    hrApi.labourDirectory.workforceLookup()
+      .then((list) => setDirectory(list || []))
+      .catch(() => setDirectory([]))
+      .finally(() => setDirectoryLoading(false));
+  }, [isLogOpen, directory.length]);
+
+  // Workers of the chosen contractor (or company labour for a direct crew).
+  const directoryShown = useMemo(() => {
+    const cId = String(logForm.contractor_id || '');
+    const words = directorySearch.toLowerCase().split(/\s+/).filter(Boolean);
+    return directory.filter((w) => {
+      const isCompany = w.workerType === 'company_labour';
+      const inCrew = cId ? String(w.contractorId || '') === cId || isCompany : isCompany || !w.contractorId;
+      const text = `${w.name} ${w.trade} ${w.code || ''}`.toLowerCase();
+      return inCrew && words.every((x) => text.includes(x));
+    });
+  }, [directory, logForm.contractor_id, directorySearch]);
+
+  const markOf = (w) => marks[w.id] || { present: false, rate: String(w.dailyRate ?? 0) };
+  const setMark = (w, patch) => setMarks((m) => ({ ...m, [w.id]: { ...markOf(w), ...patch } }));
+  const presentWorkers = directoryShown.filter((w) => markOf(w).present);
+  const namedTotal = presentWorkers.reduce((sum, w) => sum + (Number(markOf(w).rate) || 0), 0);
+
   const handleLogSubmit = async (e) => {
     e.preventDefault();
+    if (logMode === 'named') {
+      if (!presentWorkers.length) {
+        setLogError('Tick the workers who were present.');
+        return;
+      }
+      try {
+        setLogSubmitting(true);
+        setLogError(null);
+        await projectsApi.logLabour(projectId, {
+          record_date: logForm.record_date,
+          site_id: logForm.site_id ? Number(logForm.site_id) : undefined,
+          task_id: logForm.task_id ? Number(logForm.task_id) : undefined,
+          contractor_id: logForm.contractor_id ? Number(logForm.contractor_id) : undefined,
+          payment_status: logForm.payment_status,
+          workers: presentWorkers.map((w) => ({
+            worker_id: w.workerId,
+            worker_type: w.workerType,
+            name: w.name,
+            trade: w.trade,
+            contractor_id: w.contractorId || undefined,
+            present: true,
+            daily_rate: Number(markOf(w).rate) || 0,
+          })),
+        });
+        setIsLogOpen(false);
+        setMarks({});
+        fetchTracking();
+        if (typeof onChanged === 'function') onChanged();
+      } catch (err) {
+        setLogError(err.response?.data?.error?.message || err.message || 'Failed to log attendance');
+      } finally {
+        setLogSubmitting(false);
+      }
+      return;
+    }
     if (!logForm.category.trim()) {
       setLogError('Please enter or select a trade/category.');
       return;
@@ -623,7 +693,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
         onClose={() => setIsLogOpen(false)}
         title="Log Labour Attendance"
         description="Record on-site workforce deployment and daily attendance."
-        size="md"
+        size={logMode === 'named' ? 'lg' : 'md'}
         footer={
           <>
             <Button variant="secondary" onClick={() => setIsLogOpen(false)}>
@@ -647,6 +717,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
               required
             />
 
+            {logMode === 'crew' ? (
             <Select
               label="Trade / Category *"
               value={logForm.category}
@@ -666,7 +737,21 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
               ]}
               required
             />
+            ) : (
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-ink">Attendance</span>
+                <div className="inline-flex overflow-hidden rounded-lg border border-line text-xs">
+                  <button type="button" className="bg-brand-600 px-3 py-2 font-medium text-white">Name-wise</button>
+                  <button type="button" onClick={() => setLogMode('crew')} className="bg-white px-3 py-2 font-medium text-ink-muted hover:bg-canvas">Crew count</button>
+                </div>
+              </div>
+            )}
           </div>
+          {logMode === 'crew' && (
+            <button type="button" onClick={() => setLogMode('named')} className="text-xs font-medium text-brand-700 underline">
+              Switch to name-wise attendance (pick workers from the Labour Directory)
+            </button>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Select
@@ -709,6 +794,68 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
             />
           </div>
 
+          {logMode === 'named' && (
+            <div className="rounded-lg border border-line">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-canvas/60 px-3 py-2">
+                <span className="text-xs font-semibold text-ink">
+                  Workers ({directoryShown.length}) · {presentWorkers.length} present · {formatCurrency(namedTotal)} for the day
+                </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={directorySearch}
+                    onChange={(e) => setDirectorySearch(e.target.value)}
+                    placeholder="Search name / trade"
+                    className="h-8 w-40 rounded-md border border-line px-2 text-xs focus:border-brand-500 focus:outline-none"
+                  />
+                  <button type="button" className="text-xs font-medium text-brand-700 hover:underline"
+                    onClick={() => setMarks((m) => {
+                      const next = { ...m };
+                      const allOn = directoryShown.every((w) => markOf(w).present);
+                      directoryShown.forEach((w) => { next[w.id] = { ...markOf(w), present: !allOn }; });
+                      return next;
+                    })}>
+                    {directoryShown.length && directoryShown.every((w) => markOf(w).present) ? 'Clear all' : 'Mark all present'}
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-72 overflow-y-auto">
+                {directoryLoading ? (
+                  <p className="px-3 py-4 text-xs text-ink-subtle">Loading the Labour Directory…</p>
+                ) : !directoryShown.length ? (
+                  <p className="px-3 py-4 text-xs text-ink-subtle">
+                    No workers in the Labour Directory for this {logForm.contractor_id ? 'contractor' : 'company crew'}. Add them in Labour Directory, or use Crew count.
+                  </p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead className="text-[11px] uppercase text-ink-subtle">
+                      <tr><th className="px-3 py-1.5 text-left">Present</th><th className="px-3 py-1.5 text-left">Name</th><th className="px-3 py-1.5 text-left">Trade</th><th className="px-3 py-1.5 text-right">Daily rate (₹)</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-line">
+                      {directoryShown.map((w) => {
+                        const mk = markOf(w);
+                        return (
+                          <tr key={w.id} className={mk.present ? 'bg-emerald-50/50' : ''}>
+                            <td className="px-3 py-1.5">
+                              <input type="checkbox" aria-label={`${w.name} present`} checked={mk.present} onChange={(e) => setMark(w, { present: e.target.checked })} />
+                            </td>
+                            <td className="px-3 py-1.5 font-medium text-ink">{w.name}{w.code ? <span className="ml-1 text-ink-subtle">({w.code})</span> : null}</td>
+                            <td className="px-3 py-1.5 text-ink-muted">{w.trade}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              <input type="number" min="0" step="any" aria-label={`${w.name} daily rate`} value={mk.rate}
+                                onChange={(e) => setMark(w, { rate: e.target.value })}
+                                className="h-7 w-24 rounded-md border border-line px-2 text-right tabular-nums focus:border-brand-500 focus:outline-none" />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
+
+          {logMode === 'crew' && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <TextField
               label="Total Crew Size"
@@ -736,6 +883,7 @@ export default function LabourTab({ detail, projectId: propProjectId, siteId: pr
               onChange={(e) => setLogForm({ ...logForm, daily_rate: e.target.value })}
             />
           </div>
+          )}
 
           <Select
             label="Verification / Payment Status"

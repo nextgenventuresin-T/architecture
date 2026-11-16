@@ -44,15 +44,20 @@ export default function VendorReceiveDialog({ request, onClose, onSaved }) {
   // A dispatched machine is received the same way, but as one serial-numbered unit.
   const isMachine = request.itemType === 'tool';
   const remaining = request.receiving?.remainingQuantity ?? null;
-  const recorded = request.vehicleNumber;
+  // Vendor deliveries are received with their Bilty / AWB number; machines and older
+  // deliveries with the vehicle number.
+  const byBilty = !isMachine && request.verifyBy === 'bilty';
+  const field = byBilty ? 'bilty_number' : 'vehicle_number';
+  const noun = byBilty ? 'Bilty / AWB number' : 'vehicle number';
+  const recorded = byBilty ? request.biltyNumber : request.vehicleNumber;
 
   function verify() {
     if (!vehicle.trim()) {
-      setFieldErrors({ vehicle_number: 'Enter the number of the vehicle that has arrived.' });
+      setFieldErrors({ [field]: byBilty ? 'Enter the Bilty / AWB number of this delivery.' : 'Enter the number of the vehicle that has arrived.' });
       return;
     }
     if (recorded && plate(vehicle) !== plate(recorded)) {
-      setFieldErrors({ vehicle_number: 'This vehicle does not match the dispatch Admin recorded. Check the number with the driver.' });
+      setFieldErrors({ [field]: `This ${noun} does not match the dispatch Admin recorded. Check it with the driver / courier.` });
       return;
     }
     setFieldErrors({});
@@ -92,8 +97,8 @@ export default function VendorReceiveDialog({ request, onClose, onSaved }) {
       await procurementApi.receive(request.id, {
         received_quantity: qty,
         receiving_date: values.receiving_date,
-        vehicle_number: vehicle.trim(),
-        notes: [`Vehicle: ${vehicle.trim()}`, request.driverName ? `Driver: ${request.driverName}` : '', values.notes.trim()]
+        [field]: vehicle.trim(),
+        notes: [`${byBilty ? 'Bilty / AWB' : 'Vehicle'}: ${vehicle.trim()}`, request.driverName ? `Driver: ${request.driverName}` : '', values.notes.trim()]
           .filter(Boolean).join(' | '),
       });
       const isFull = remaining !== null && qty >= remaining;
@@ -102,7 +107,7 @@ export default function VendorReceiveDialog({ request, onClose, onSaved }) {
       const apiError = toApiError(caught);
       if (apiError.details) {
         setFieldErrors(apiError.details);
-        if (apiError.details.vehicle_number) setVerified(false);
+        if (apiError.details.vehicle_number || apiError.details.bilty_number) setVerified(false);
       }
       setError(apiError);
     } finally {
@@ -129,7 +134,7 @@ export default function VendorReceiveDialog({ request, onClose, onSaved }) {
           {verified ? (
             <Button onClick={handleConfirm} isLoading={isSaving} loadingText="Receiving…">Confirm receipt</Button>
           ) : (
-            <Button onClick={verify}>Verify vehicle</Button>
+            <Button onClick={verify}>{byBilty ? 'Verify Bilty / AWB' : 'Verify vehicle'}</Button>
           )}
         </>
       }
@@ -137,21 +142,22 @@ export default function VendorReceiveDialog({ request, onClose, onSaved }) {
       {error && !error.details && <Alert tone="error" className="mb-4">{error.message}</Alert>}
 
       <InputField
-        label="Vehicle number"
+        label={byBilty ? 'Bilty / AWB number' : 'Vehicle number'}
         required
         value={vehicle}
         onChange={(e) => { setVehicle(e.target.value); setVerified(false); setFieldErrors({}); }}
-        error={fieldErrors.vehicle_number}
-        placeholder="e.g. MH-12-AB-1234"
-        hint="Enter the number of the vehicle that has arrived. It must match the vendor dispatch Admin recorded."
+        error={fieldErrors[field]}
+        placeholder={byBilty ? 'As written on the Bilty / AWB' : 'e.g. MH-12-AB-1234'}
+        hint={`Enter the ${noun} of this delivery. It must match the vendor dispatch Admin recorded.`}
       />
 
       {verified && (
         <>
           <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-sm">
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">Vehicle verified - dispatch details</p>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">{byBilty ? 'Bilty / AWB' : 'Vehicle'} verified - dispatch details</p>
             <dl className="divide-y divide-emerald-100">
-              {row('Vehicle number', recorded || vehicle.trim())}
+              {byBilty && row('Bilty / AWB', recorded || vehicle.trim())}
+              {row('Vehicle number', byBilty ? request.vehicleNumber : (recorded || vehicle.trim()))}
               {row('Driver name', request.driverName)}
               {row('Driver phone', request.driverPhone)}
               {row('Delivery challan', request.challanNumber)}

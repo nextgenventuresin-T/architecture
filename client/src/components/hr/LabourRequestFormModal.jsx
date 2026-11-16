@@ -55,10 +55,10 @@ export default function LabourRequestFormModal({ isOpen, onClose, onCreated }) {
     setValues({ ...EMPTY, requiredDate: today() });
     setError(null);
     setFieldErrors({});
-    projectsApi.list({ pageSize: 50 }).then((d) => setProjects(d.projects ?? [])).catch(() => setProjects([]));
+    projectsApi.listAll().then(setProjects).catch(() => setProjects([]));
     if (!isContractor) {
-      contractorsApi.list({ pageSize: 100 })
-        .then((d) => setContractors(d.contractors ?? d.rows ?? []))
+      contractorsApi.listAll()
+        .then(setContractors)
         .catch(() => setContractors([]));
     }
   }, [isOpen, isContractor]);

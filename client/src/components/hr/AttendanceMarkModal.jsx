@@ -70,9 +70,9 @@ export default function AttendanceMarkModal({ isOpen, onClose, onSaved, record }
           }
         : EMPTY
     );
-    projectsApi.list({ pageSize: 50 }).then((d) => setProjects(d.projects ?? [])).catch(() => setProjects([]));
-    employeesApi.list({ pageSize: 50 }).then((d) => setEmployees(d.employees ?? [])).catch(() => setEmployees([]));
-    contractorsApi.list({ pageSize: 50 }).then((d) => setContractors(d.contractors ?? [])).catch(() => setContractors([]));
+    projectsApi.listAll().then(setProjects).catch(() => setProjects([]));
+    employeesApi.listAll().then(setEmployees).catch(() => setEmployees([]));
+    contractorsApi.listAll().then(setContractors).catch(() => setContractors([]));
   }, [isOpen, record]);
 
   // Sites cascade

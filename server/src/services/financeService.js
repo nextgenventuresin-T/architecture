@@ -950,8 +950,8 @@ async function recordMaterialConsumption(payload, hrScope, userId) {
 async function getLookups(hrScope) {
   const isContractor = hrScope?.role === ROLES.CONTRACTOR;
   const [projects, contractors, categories, suppliers, summary] = await Promise.all([
-    projectModel.findAll({ page: 1, pageSize: 100, ...(isContractor ? { contractorId: hrScope.contractorId } : {}) }),
-    contractorModel.findAll({ page: 1, pageSize: 100 }),
+    projectModel.findAll({ page: 1, pageSize: 10000, ...(isContractor ? { contractorId: hrScope.contractorId } : {}) }),
+    contractorModel.findAll({ page: 1, pageSize: 10000 }),
     financeModel.findExpenseCategories(),
     financeModel.findSuppliers(),
     getSummary(),

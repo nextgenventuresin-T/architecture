@@ -126,7 +126,7 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
             )}
             {nVendorConfirm > 0 && (
               <Button onClick={() => setDialog('vendor_confirm')}>
-                <Truck className="h-4 w-4" aria-hidden="true" /> Vendor confirmed – add vehicle ({nVendorConfirm})
+                <Truck className="h-4 w-4" aria-hidden="true" /> Vendor confirmed – add Bilty / AWB ({nVendorConfirm})
               </Button>
             )}
             {nDispatch > 0 && (
@@ -136,7 +136,7 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
             )}
             {awaitingVehicle.length > 0 && (
               <Button onClick={() => setDialog('receive')}>
-                <PackageCheck className="h-4 w-4" aria-hidden="true" /> Receive by vehicle
+                <PackageCheck className="h-4 w-4" aria-hidden="true" /> Receive by Bilty / vehicle no.
               </Button>
             )}
             {!nSubmit && !nApprove && !nConfirm && !nOrder && !nVendorConfirm && !nDispatch && !awaitingVehicle.length && (
@@ -215,7 +215,8 @@ export default function ProcurementBatchPage({ basePath = '/admin' }) {
                     <Badge tone={PROCUREMENT_STATUS_TONE[r.status] ?? 'neutral'}>{PROCUREMENT_STATUS_LABELS[r.status] ?? r.status}</Badge>
                     {r.movement?.status === 'in_transit' && <p className="mt-1 text-xs text-amber-700">In transit · {r.movement.vehicleNumber}</p>}
                     {r.status === 'ordered' && r.vehicleNumber && !r.movement && <p className="mt-1 text-xs text-ink-subtle">Vehicle {r.vehicleNumber}</p>}
-                    {r.awaitingVendorDispatch && <p className="mt-1 text-xs text-amber-700">Awaiting vendor confirmation (no vehicle yet)</p>}
+                    {r.awaitingVendorDispatch && <p className="mt-1 text-xs text-amber-700">Awaiting vendor confirmation (no Bilty / AWB yet)</p>}
+                    {r.biltyNumber && <p className="mt-1 text-xs text-ink-subtle">Bilty / AWB {r.biltyNumber}</p>}
                     {r.totalLitres != null && <p className="mt-1 text-xs text-ink-subtle">{formatNumber(r.totalLitres)} L</p>}
                   </td>
                 </tr>
@@ -246,7 +247,7 @@ const DIALOG_LABEL = {
 /** Shared vehicle / driver details for ordering, sending or receiving many items at once. */
 function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit }) {
   const [v, setV] = useState({
-    vehicle_number: '', driver_name: '', driver_phone: '', challan_number: '',
+    vehicle_number: '', bilty_number: '', driver_name: '', driver_phone: '', challan_number: '',
     order_date: today(), expected_delivery_date: '',
     transport_cost: kind === 'dispatch' && quotedTransport > 0 ? String(quotedTransport) : '',
     receiving_date: today(),
@@ -256,12 +257,16 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
   const set = (k) => (e) => { setV((c) => ({ ...c, [k]: e.target.value })); setErr(null); };
 
   const matching = kind === 'receive' && plate(v.vehicle_number)
-    ? items.filter((r) => [r.movement?.vehicleNumber, r.vehicleNumber].some((x) => x && plate(x) === plate(v.vehicle_number)))
+    ? items.filter((r) => [r.movement?.vehicleNumber, r.vehicleNumber, r.biltyNumber].some((x) => x && plate(x) === plate(v.vehicle_number)))
     : [];
 
   function submit() {
-    // Placing orders no longer needs the vehicle: it is added when the vendor confirms.
-    if (kind !== 'order' && !v.vehicle_number.trim()) {
+    // Placing orders needs no vehicle; the vendor confirmation needs the Bilty / AWB number.
+    if (kind === 'vendor_confirm' && !v.bilty_number.trim()) {
+      setErr('Enter the Bilty / AWB number.');
+      return;
+    }
+    if (kind !== 'order' && kind !== 'vendor_confirm' && !v.vehicle_number.trim()) {
       setErr('Enter the vehicle number.');
       return;
     }
@@ -271,7 +276,8 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
       transport_cost: v.transport_cost ? Number(v.transport_cost) : null,
     });
     else if (kind === 'vendor_confirm') onSubmit({
-      vehicle_number: v.vehicle_number.trim(), driver_name: v.driver_name.trim() || null, driver_phone: v.driver_phone.trim() || null,
+      bilty_number: v.bilty_number.trim(),
+      vehicle_number: v.vehicle_number.trim() || null, driver_name: v.driver_name.trim() || null, driver_phone: v.driver_phone.trim() || null,
       challan_number: v.challan_number.trim() || null, expected_delivery_date: v.expected_delivery_date || null,
     });
     else onSubmit({
@@ -280,21 +286,28 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
     });
   }
 
-  const title = kind === 'order' ? 'Place vendor orders' : kind === 'vendor_confirm' ? 'Vendor confirmed – add vehicle' : kind === 'dispatch' ? 'Send items' : 'Receive by vehicle';
+  const title = kind === 'order' ? 'Place vendor orders' : kind === 'vendor_confirm' ? 'Vendor confirmed – add Bilty / AWB' : kind === 'dispatch' ? 'Send items' : 'Receive by Bilty / vehicle no.';
   const description = kind === 'order'
-    ? 'One PO per item. The vehicle is optional now - if the vendor has not confirmed yet, add it later with "Vendor confirmed".'
+    ? 'One PO per item. No vehicle or Bilty is needed now - add the Bilty / AWB number when the vendor confirms.'
     : kind === 'vendor_confirm'
-      ? 'The vendor confirmed the order. This vehicle is recorded on every vendor item still waiting for it; the receiver must verify it.'
+      ? 'The vendor confirmed the order. This Bilty / AWB number is recorded on every vendor item still waiting for it; the receiver must enter the same number.'
     : kind === 'dispatch'
       ? 'Everything goes on one vehicle. The receiver verifies this vehicle number. Freight is booked once, not per item.'
-      : 'Enter the vehicle that arrived. Every item on it that you may receive is received in full, after the vehicle is verified.';
+      : 'Enter the Bilty / AWB number (vendor deliveries) or the vehicle number (stock sent from a warehouse). Every matching item you may receive is received in full.';
 
   return (
     <Modal isOpen onClose={onClose} title={title} description={description}
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={submit} isLoading={busy}>{title}</Button></>}>
       {err && <Alert tone="error" className="mb-3">{err}</Alert>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <InputField label="Vehicle number" required={kind !== 'order'} value={v.vehicle_number} onChange={set('vehicle_number')} placeholder="MH-12-AB-1234" />
+        {kind === 'vendor_confirm' && (
+          <InputField label="Bilty / AWB number" required value={v.bilty_number} onChange={set('bilty_number')} placeholder="e.g. LR-458812" />
+        )}
+        {kind !== 'order' && (
+          <InputField label={kind === 'receive' ? 'Bilty / AWB or vehicle number' : kind === 'vendor_confirm' ? 'Vehicle number (optional)' : 'Vehicle number'}
+            required={kind === 'dispatch' || kind === 'receive'} value={v.vehicle_number} onChange={set('vehicle_number')}
+            placeholder={kind === 'receive' ? 'Bilty / AWB no. or MH-12-AB-1234' : 'MH-12-AB-1234'} />
+        )}
         {kind === 'receive' ? (
           <InputField label="Receiving date" type="date" value={v.receiving_date} onChange={set('receiving_date')} />
         ) : (
@@ -319,7 +332,7 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
         <div className="mt-3 rounded-lg border border-line bg-canvas/60 p-3 text-xs">
           {matching.length ? (
             <>
-              <p className="font-semibold text-emerald-700">On this vehicle ({matching.length}):</p>
+              <p className="font-semibold text-emerald-700">Matching items ({matching.length}):</p>
               <ul className="mt-1 space-y-0.5 text-ink">
                 {matching.map((r) => (
                   <li key={r.id}>{r.requestNumber} · {r.itemType === 'tool' ? r.tool?.name : `${formatNumber(r.movement?.sentQuantity ?? r.receiving?.remainingQuantity ?? r.quantity)} ${r.unit} ${r.material?.name}`}
@@ -328,7 +341,7 @@ function BatchDialog({ kind, items, quotedTransport = 0, busy, onClose, onSubmit
               </ul>
             </>
           ) : (
-            <p className="text-amber-700">No item in this request is on that vehicle. Check the number with the driver.</p>
+            <p className="text-amber-700">No item in this request matches that number. Check it with the driver / courier.</p>
           )}
           {matching.length > 0 && quotedOnVehicle > 0 && (
             <p className="mt-2 text-ink-muted">Transport quoted on these items is booked with their receipt, once.</p>

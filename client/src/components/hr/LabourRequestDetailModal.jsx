@@ -63,8 +63,8 @@ export default function LabourRequestDetailModal({ requestId, onClose }) {
   // Load contractors list once for assign panel
   useEffect(() => {
     if (!showAssign || !isHrOrAdmin) return;
-    contractorsApi.list({ pageSize: 50 })
-      .then((d) => setContractors(d.contractors ?? []))
+    contractorsApi.listAll()
+      .then(setContractors)
       .catch(() => setContractors([]));
   }, [showAssign, isHrOrAdmin]);
 

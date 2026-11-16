@@ -149,7 +149,7 @@ export default function AppRoutes() {
             before the placeholder loop so these paths win over the generic
             module screen. */}
         <Route path="procurement" element={<ProcurementListPage />} />
-        <Route path="procurement/new" element={<ProcurementFormPage mode="create" />} />
+        <Route path="procurement/new" element={<Navigate to="/admin/procurement/new-batch" replace />} />
         <Route path="procurement/new-batch" element={<ProcurementBatchFormPage />} />
         <Route path="procurement/batch/:batchId" element={<ProcurementBatchPage />} />
         <Route path="procurement/:id" element={<ProcurementDetailPage />} />
@@ -249,7 +249,7 @@ export default function AppRoutes() {
         <Route path="my-portal" element={<MyPortalPage />} />
         <Route path="approvals" element={<ApprovalsPage basePath="/procurement" />} />
         <Route path=":id" element={<ProcurementDetailPage basePath="/procurement" />} />
-        <Route path="new" element={<ProcurementFormPage mode="create" basePath="/procurement" />} />
+        <Route path="new" element={<Navigate to="/procurement/new-batch" replace />} />
         <Route path="new-batch" element={<ProcurementBatchFormPage basePath="/procurement" />} />
         <Route path="batch/:batchId" element={<ProcurementBatchPage basePath="/procurement" />} />
         <Route path=":id/edit" element={<ProcurementFormPage mode="edit" basePath="/procurement" />} />
@@ -283,7 +283,7 @@ export default function AppRoutes() {
         <Route path="daily-work/log" element={<ContractorDailyWorkPage workspace="pm" />} />
         <Route path="site-warehouse" element={<PmSiteWarehousePage />} />
         <Route path="procurement" element={<PmProcurementPage />} />
-        <Route path="procurement/new" element={<ProcurementFormPage mode="create" basePath="/pm/procurement" />} />
+        <Route path="procurement/new" element={<Navigate to="/pm/procurement/new-batch" replace />} />
         <Route path="procurement/new-batch" element={<ProcurementBatchFormPage basePath="/pm/procurement" />} />
         <Route path="procurement/batch/:batchId" element={<ProcurementBatchPage basePath="/pm/procurement" />} />
         <Route path="procurement/:id" element={<ProcurementDetailPage basePath="/pm/procurement" />} />
@@ -321,7 +321,7 @@ export default function AppRoutes() {
               <Route path="site-warehouse" element={<ContractorSiteWarehousePage />} />
               <Route path="tools" element={<ContractorToolsPage />} />
               <Route path="procurement" element={<ProcurementListPage basePath="/contractor/procurement" />} />
-              <Route path="procurement/new" element={<ProcurementFormPage mode="create" basePath="/contractor/procurement" />} />
+              <Route path="procurement/new" element={<Navigate to="/contractor/procurement/new-batch" replace />} />
               <Route path="procurement/new-batch" element={<ProcurementBatchFormPage basePath="/contractor/procurement" />} />
               <Route path="procurement/batch/:batchId" element={<ProcurementBatchPage basePath="/contractor/procurement" />} />
               <Route path="procurement/:id" element={<ProcurementDetailPage basePath="/contractor/procurement" />} />

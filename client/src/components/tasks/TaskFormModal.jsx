@@ -151,8 +151,8 @@ export default function TaskFormModal({
       .catch((err) => console.error('Failed to load materials catalogue:', err));
 
     toolApi
-      .list({ pageSize: 100 })
-      .then((data) => setToolsMaster(data.tools || []))
+      .listAll()
+      .then(setToolsMaster)
       .catch((err) => console.error('Failed to load tools catalogue:', err));
 
     hrApi.labourDirectory

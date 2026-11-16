@@ -11,6 +11,8 @@ const { pool } = require('../config/db');
 const STARTUP_MIGRATIONS = [
   '20261115_area_measure_engineer_receiving',
   '20261115_litres_vendor_dispatch',
+  '20261116_bilty_awb',
+  '20261116_named_attendance',
 ];
 
 async function ensureSchema() {

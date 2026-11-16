@@ -49,8 +49,8 @@ export default function AddStockDialog({ material, onClose, onSaved }) {
     setSites([]);
     setIsLoadingProjects(true);
     projectsApi
-      .list({ pageSize: 50 })
-      .then((data) => setProjects(data.projects ?? []))
+      .listAll()
+      .then(setProjects)
       .catch((caught) => setError(toApiError(caught)))
       .finally(() => setIsLoadingProjects(false));
   }, [material]);

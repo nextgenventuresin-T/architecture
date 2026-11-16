@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Eye, Pencil, PackageCheck, ShoppingCart, LayoutGrid, Table as TableIcon, Layers } from 'lucide-react';
+import { Eye, Pencil, PackageCheck, ShoppingCart, LayoutGrid, Table as TableIcon, Layers } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
 import DataTable from '../../../components/ui/DataTable';
@@ -40,6 +40,7 @@ const INITIAL_FILTERS = {
   deliveryMode: 'all',
   projectId: 'all',
   siteId: 'all',
+  taskIds: [],
   supplier: 'all',
   page: 1,
 };
@@ -85,11 +86,12 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
         deliveryMode: filters.deliveryMode !== 'all' ? filters.deliveryMode : undefined,
         projectId: filters.projectId !== 'all' ? filters.projectId : undefined,
         siteId: filters.siteId !== 'all' ? filters.siteId : undefined,
+        taskIds: filters.taskIds?.length ? filters.taskIds.join(',') : undefined,
         supplier: filters.supplier !== 'all' ? filters.supplier : undefined,
         page: filters.page,
         pageSize: viewMode === 'table' ? 50 : 10,
       }),
-    [filters.search, filters.status, filters.priority, filters.kind, filters.deliveryMode, filters.projectId, filters.siteId, filters.supplier, filters.page, viewMode]
+    [filters.search, filters.status, filters.priority, filters.kind, filters.deliveryMode, filters.projectId, filters.siteId, filters.taskIds, filters.supplier, filters.page, viewMode]
   );
 
   const { data, isLoading, error, reload } = useAsync(load, [load]);
@@ -203,12 +205,6 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
               <Button>
                 <Layers className="h-4 w-4" aria-hidden="true" />
                 New multi-item request
-              </Button>
-            </Link>
-            <Link to={`${modulePath}/new`}>
-              <Button variant="secondary">
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                Single item
               </Button>
             </Link>
           </div>

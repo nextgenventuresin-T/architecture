@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
 import Select from '../ui/Select';
 import { projectsApi } from '../../api/projectsApi';
+import { tasksApi } from '../../api/tasksApi';
+import MultiCheckSelect from '../ui/MultiCheckSelect';
 import { PROCUREMENT_STATUS_OPTIONS, PRIORITIES } from '../../utils/procurementOptions';
 
 /**
@@ -11,6 +13,19 @@ import { PROCUREMENT_STATUS_OPTIONS, PRIORITIES } from '../../utils/procurementO
  */
 export default function ProcurementFilters({ filters, onChange, projects = [], suppliers = [] }) {
   const [sites, setSites] = useState([]);
+  const [tasks, setTasks] = useState([]);
+
+  // Tasks of the chosen project / site (all tasks when no project is chosen).
+  useEffect(() => {
+    let active = true;
+    const params = {};
+    if (filters.projectId && filters.projectId !== 'all') params.projectId = filters.projectId;
+    if (filters.siteId && filters.siteId !== 'all') params.siteId = filters.siteId;
+    tasksApi.list(params)
+      .then((list) => active && setTasks(list ?? []))
+      .catch(() => active && setTasks([]));
+    return () => { active = false; };
+  }, [filters.projectId, filters.siteId]);
 
   useEffect(() => {
     if (!filters.projectId || filters.projectId === 'all') {
@@ -30,7 +45,7 @@ export default function ProcurementFilters({ filters, onChange, projects = [], s
   const set = (key) => (event) => onChange({ ...filters, [key]: event.target.value, page: 1 });
 
   /** Changing project clears any site chosen under the previous project. */
-  const setProject = (event) => onChange({ ...filters, projectId: event.target.value, siteId: 'all', page: 1 });
+  const setProject = (event) => onChange({ ...filters, projectId: event.target.value, siteId: 'all', taskIds: [], page: 1 });
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -85,6 +100,21 @@ export default function ProcurementFilters({ filters, onChange, projects = [], s
           { value: 'all', label: filters.projectId === 'all' ? 'All sites' : 'All sites in project' },
           ...sites.map((s) => ({ value: String(s.id), label: s.name })),
         ]}
+      />
+
+      <MultiCheckSelect
+        label="Filter by tasks"
+        allLabel="All tasks"
+        noun="tasks"
+        className="w-[190px]"
+        value={filters.taskIds || []}
+        onChange={(taskIds) => onChange({ ...filters, taskIds, page: 1 })}
+        options={tasks.map((t) => ({
+          value: String(t.id),
+          label: filters.projectId && filters.projectId !== 'all'
+            ? `${t.name}${t.siteName ? ` · ${t.siteName}` : ''}`
+            : `${t.name}${t.projectName ? ` · ${t.projectName}` : ''}`,
+        }))}
       />
 
       <Select

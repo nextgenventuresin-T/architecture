@@ -50,7 +50,7 @@ export default function PmDailyWorkPage() {
   const [flash, setFlash] = useState(null);
 
   useEffect(() => {
-    projectsApi.list({ pageSize: 100 }).then((res) => setProjects(res.projects || [])).catch(() => {});
+    projectsApi.listAll().then(setProjects).catch(() => {});
   }, []);
 
   const load = useCallback(() => {

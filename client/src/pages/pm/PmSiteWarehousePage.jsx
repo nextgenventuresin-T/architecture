@@ -38,7 +38,7 @@ export default function PmSiteWarehousePage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    projectsApi.list({ pageSize: 100 }).then((res) => setProjects(res.projects || [])).catch(() => {});
+    projectsApi.listAll().then(setProjects).catch(() => {});
   }, []);
 
   const load = useCallback(() => {

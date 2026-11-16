@@ -17,7 +17,7 @@ const taskModel = require('../models/taskModel');
 const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 const toolUnitService = require('./toolUnitService');
 const pmScope = require('./pmScopeService');
-const { normalizeVehicle, vehiclesMatch } = require('../utils/vehicle');
+const { normalizeVehicle, vehiclesMatch, normalizeBilty, biltyMatch } = require('../utils/vehicle');
 const warehouseService = require('./warehouseService');
 const materialMovementService = require('./materialMovementService');
 const { getActualMaterialRate } = require('../utils/materialPricing');
@@ -212,7 +212,60 @@ const isVendorPurchase = (row) => row.source_type === 'supplier'
 function awaitingVendorDispatch(row) {
   if (!isVendorPurchase(row)) return false;
   if (!VENDOR_DISPATCH_STATUSES.includes(row.status)) return false;
-  return !normalizeVehicle(row.vehicle_number);
+  return !row.vendor_confirmed_at && !normalizeBilty(row.bilty_number);
+}
+
+/**
+ * What the receiver must enter to receive a delivery:
+ *   'bilty'   - a vendor delivery confirmed with a Bilty / AWB number
+ *   'vehicle' - anything else carrying a recorded vehicle (stock moves, older vendor deliveries)
+ *   null      - nothing to verify
+ */
+function verifyByOf(row) {
+  if (isVendorPurchase(row) && normalizeBilty(row.bilty_number)) return 'bilty';
+  if (normalizeVehicle(row.vehicle_number)) return 'vehicle';
+  return null;
+}
+
+/**
+ * Server-side arrival check for a vendor delivery (receive / fulfil). Returns what to
+ * store on the receipt. Throws a field error when the delivery is not yet confirmed or
+ * the entered Bilty / AWB (or, for older deliveries, vehicle) does not match.
+ */
+function verifyVendorArrival(request, payload, { vehicleRequired = false } = {}) {
+  const enteredVehicle = String(payload.vehicle_number ?? '').trim();
+  const enteredBilty = String(payload.bilty_number ?? '').trim();
+  if (isVendorPurchase(request)) {
+    if (!request.vendor_confirmed_at && !normalizeBilty(request.bilty_number)) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        bilty_number: 'The vendor has not confirmed this delivery yet. Admin must record the Bilty / AWB number (Vendor confirmed) before it can be received.',
+      });
+    }
+    if (normalizeBilty(request.bilty_number)) {
+      if (!normalizeBilty(enteredBilty)) {
+        throw ApiError.badRequest('Check the highlighted fields.', { bilty_number: 'Enter the Bilty / AWB number of this delivery.' });
+      }
+      if (!biltyMatch(enteredBilty, request.bilty_number)) {
+        throw ApiError.badRequest('Check the highlighted fields.', { bilty_number: 'Bilty / AWB number does not match the vendor dispatch.' });
+      }
+      return { vehicle: enteredVehicle || request.vehicle_number || null, bilty: enteredBilty };
+    }
+  }
+  // Older deliveries confirmed by vehicle, and non-vendor flows: the vehicle check.
+  if (vehicleRequired || normalizeVehicle(request.vehicle_number)) {
+    if (!normalizeVehicle(request.vehicle_number)) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        vehicle_number: 'No vehicle was recorded for this delivery, so it cannot be verified.',
+      });
+    }
+    if (!normalizeVehicle(enteredVehicle)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Enter the arriving vehicle number to verify the dispatch.' });
+    }
+    if (!vehiclesMatch(enteredVehicle, request.vehicle_number)) {
+      throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Vehicle number does not match the dispatch.' });
+    }
+  }
+  return { vehicle: enteredVehicle || request.vehicle_number || null, bilty: null };
 }
 
 /** Admin / Procurement record (or correct) the vendor's dispatch until it is fully received. */
@@ -368,6 +421,9 @@ function toRequest(row, viewer) {
     // Vendor deliveries: the vendor's confirmation + dispatch (vehicle etc.) is recorded
     // before the goods can be received.
     vendorConfirmedAt: row.vendor_confirmed_at || null,
+    biltyNumber: row.bilty_number || null,
+    receivedBiltyNumber: row.received_bilty_number || null,
+    verifyBy: verifyByOf(row),
     awaitingVendorDispatch: awaitingVendorDispatch(row),
     canRecordVendorDispatch: canRecordVendorDispatch(row, viewer),
     estimatedRate: Number(row.purchase_rate) > 0
@@ -459,7 +515,8 @@ function toReceipt(row) {
 
 async function list(query) {
   const page = Math.max(1, Number(query.page) || 1);
-  const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 10));
+  // A multi-item request lists all its items (machine units can make it longer than a page).
+  const pageSize = Math.min(query.batchId ? 2500 : 50, Math.max(1, Number(query.pageSize) || 10));
 
   const { rows, total } = await procurementModel.findAll({ ...query, page, pageSize });
 
@@ -484,7 +541,8 @@ function contractorScope(hrScope, userId) {
 
 async function listScoped(query, hrScope, userId) {
   const page = Math.max(1, Number(query.page) || 1);
-  const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 10));
+  // A multi-item request lists all its items (machine units can make it longer than a page).
+  const pageSize = Math.min(query.batchId ? 2500 : 50, Math.max(1, Number(query.pageSize) || 10));
   const { rows, total } = await procurementModel.findAll({
     ...query,
     ...contractorScope(hrScope, userId),
@@ -1229,9 +1287,9 @@ async function create(payload, userId, hrScope, options = {}) {
     transport_cost: quotedTransport,
     // Bucket / liquid material: litres per unit and total litres ordered.
     ...litresColumns(payload, { quantity: payload.quantity, unit: unitToUse, material }),
-    // A vehicle given up front means the vendor's dispatch is already confirmed.
-    ...(normalizeVehicle(payload.vehicle_number) && (flow.source_type || payload.source_type) === 'supplier'
-      ? { vendor_confirmed_at: new Date(), vendor_confirmed_by: userId ?? null } : {}),
+    // A Bilty / AWB given up front means the vendor's dispatch is already confirmed.
+    ...(normalizeBilty(payload.bilty_number) && (flow.source_type || payload.source_type) === 'supplier'
+      ? { bilty_number: String(payload.bilty_number).trim(), vendor_confirmed_at: new Date(), vendor_confirmed_by: userId ?? null } : {}),
     ...flow,
   });
 
@@ -1641,15 +1699,9 @@ async function placeOrder(id, payload) {
       [dispatch.vehicle_number, dispatch.driver_name, dispatch.driver_phone, dispatch.challan_number, id]
     );
   }
-  if (normalizeVehicle(vehicle)) {
-    await pool.query(
-      'UPDATE procurement_requests SET vendor_confirmed_at = COALESCE(vendor_confirmed_at, NOW()) WHERE id = ?',
-      [id]
-    );
-  }
-  // Dispatch already known (given now, or recorded when the vendor confirmed earlier):
-  // tell the receiver what to expect. Otherwise they are told when it is recorded.
-  if (normalizeVehicle(vehicle || request.vehicle_number)) {
+  // Vendor already confirmed (Bilty / AWB recorded earlier): tell the receiver what to
+  // expect. Otherwise they are told when the vendor confirmation is recorded.
+  if (request.vendor_confirmed_at || normalizeBilty(request.bilty_number)) {
     await notifyVendorDispatch(
       { ...request, vehicle_number: vehicle || request.vehicle_number },
       { ...dispatch, vehicle_number: vehicle || request.vehicle_number, poNumber, orderedQuantity, expectedDeliveryDate: payload.expected_delivery_date }
@@ -1673,6 +1725,7 @@ async function notifyVendorDispatch(request, dispatch) {
   const payload = { expected_delivery_date: dispatch.expectedDeliveryDate || request.expected_delivery_date || null };
   if (payload.expected_delivery_date instanceof Date) payload.expected_delivery_date = payload.expected_delivery_date.toISOString().slice(0, 10);
   dispatch = {
+    bilty_number: dispatch.bilty_number || request.bilty_number || null,
     vehicle_number: dispatch.vehicle_number || request.vehicle_number,
     driver_name: dispatch.driver_name ?? request.driver_name ?? null,
     driver_phone: dispatch.driver_phone ?? request.driver_phone ?? null,
@@ -1688,8 +1741,8 @@ async function notifyVendorDispatch(request, dispatch) {
         userId: c.user_id,
         title: 'Vendor dispatch confirmed - material on its way to you',
         message: `${poNumber}: ${orderedQuantity} ${request.unit || ''} ${item?.name || ''} from ${request.supplier || 'the vendor'}. `
-          + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}`
-          + `${payload.expected_delivery_date ? `, expected ${payload.expected_delivery_date}` : ''}. Verify the vehicle and receive it when it arrives.`,
+          + `${dispatch.bilty_number ? `Bilty / AWB ${dispatch.bilty_number}` : `Vehicle ${dispatch.vehicle_number || '-'}`}${dispatch.vehicle_number && dispatch.bilty_number ? `, vehicle ${dispatch.vehicle_number}` : ''}${driver ? `, driver ${driver}` : ''}`
+          + `${payload.expected_delivery_date ? `, expected ${payload.expected_delivery_date}` : ''}. Receive it with the ${dispatch.bilty_number ? 'Bilty / AWB number' : 'vehicle number'} when it arrives.`,
         type: 'material',
         category: 'material',
         actionUrl: `/contractor/procurement/${id}`,
@@ -1703,7 +1756,7 @@ async function notifyVendorDispatch(request, dispatch) {
     await notifyProjectManagers(request.project_id, {
       title: 'Vendor dispatch confirmed - material on its way to your site',
       message: `${poNumber}: ${orderedQuantity} ${request.unit || ''} ${item?.name || ''} from ${request.supplier || 'the vendor'}. `
-        + `Vehicle ${dispatch.vehicle_number}${driver ? `, driver ${driver}` : ''}. Verify the vehicle and receive it into the Site Store.`,
+        + `${dispatch.bilty_number ? `Bilty / AWB ${dispatch.bilty_number}` : `Vehicle ${dispatch.vehicle_number || '-'}`}${driver ? `, driver ${driver}` : ''}. Receive it into the Site Store with that number.`,
       actionUrl: `/pm/procurement/${id}`,
       metadata: { module: 'procurement', procurementRequestId: id, poNumber, ...dispatch },
     });
@@ -1727,15 +1780,16 @@ async function recordVendorDispatch(id, payload = {}, userId) {
       `The vendor dispatch can be recorded once the request is approved and until it is received (this one is ${request.status.replace('_', ' ')}).`
     );
   }
-  const vehicle = String(payload.vehicle_number ?? '').trim();
-  if (!normalizeVehicle(vehicle)) {
+  const bilty = String(payload.bilty_number ?? '').trim();
+  if (!normalizeBilty(bilty)) {
     throw ApiError.badRequest('Check the highlighted fields.', {
-      vehicle_number: 'Enter the vendor\'s vehicle number - it is verified when the material arrives.',
+      bilty_number: 'Enter the Bilty / AWB number - the receiver must enter the same number to receive the goods.',
     });
   }
   const clean = (v) => (v === undefined ? undefined : (String(v ?? '').trim() || null));
   const fields = {
-    vehicle_number: vehicle,
+    bilty_number: bilty,
+    vehicle_number: clean(payload.vehicle_number),
     driver_name: clean(payload.driver_name),
     driver_phone: clean(payload.driver_phone),
     challan_number: clean(payload.challan_number),
@@ -1841,25 +1895,11 @@ async function receive(id, payload, userId, hrScope, options = {}) {
     const isCentral = request.procurement_kind === 'central_purchase' ||
       request.source_type === 'central_warehouse' ||
       request.destination_type === 'central_warehouse';
-    if (isVendorPurchase(request) && !normalizeVehicle(request.vehicle_number)) {
-      throw ApiError.badRequest('Check the highlighted fields.', {
-        vehicle_number: 'The vendor has not confirmed this delivery yet. Admin must record the vendor\'s vehicle number (Vendor confirmed) before it can be received.',
-      });
-    }
-    const enteredVehicle = String(payload.vehicle_number ?? '').trim();
-    if (isCentral || normalizeVehicle(request.vehicle_number)) {
-      if (!normalizeVehicle(enteredVehicle)) {
-        throw ApiError.badRequest('Check the highlighted fields.', {
-          vehicle_number: 'Enter the arriving vehicle number to verify the dispatch.',
-        });
-      }
-      if (normalizeVehicle(request.vehicle_number) && !vehiclesMatch(enteredVehicle, request.vehicle_number)) {
-        throw ApiError.badRequest('Check the highlighted fields.', {
-          vehicle_number: 'Vehicle number does not match the dispatch.',
-        });
-      }
-    }
-    const vehicleForRecord = enteredVehicle || request.vehicle_number || null;
+    // Vendor deliveries: confirmed with a Bilty / AWB number, which the receiver must
+    // enter; older vehicle-confirmed deliveries and stock moves keep the vehicle check.
+    const arrival = verifyVendorArrival(request, payload, { vehicleRequired: isCentral && !isVendorPurchase(request) });
+    const vehicleForRecord = arrival.vehicle;
+    const biltyForRecord = arrival.bilty;
 
     // Where the stock lands.
     let targetWarehouseId = request.destination_warehouse_id
@@ -1897,6 +1937,7 @@ async function receive(id, payload, userId, hrScope, options = {}) {
         reference: request.po_number || request.request_number,
         transaction_date: receivingDate,
         vehicle_number: vehicleForRecord,
+        bilty_number: biltyForRecord,
         notes: payload.notes || `Received from vendor ${request.vendor_id ? `(ID ${request.vendor_id})` : (request.supplier || '')}`,
         unit_cost: rate,
         total_cost: rate ? Number((rate * receivedQuantity).toFixed(2)) : null,
@@ -1911,9 +1952,9 @@ async function receive(id, payload, userId, hrScope, options = {}) {
 
     const newStatus = newTotal >= orderedQuantity ? 'received' : 'partially_received';
     await conn.query(
-      `UPDATE procurement_requests SET status = ?, received_by = ?, received_vehicle_number = COALESCE(?, received_vehicle_number),
+      `UPDATE procurement_requests SET received_bilty_number = COALESCE(?, received_bilty_number), status = ?, received_by = ?, received_vehicle_number = COALESCE(?, received_vehicle_number),
          fulfilled_at = CASE WHEN ? = 'received' THEN NOW() ELSE fulfilled_at END WHERE id = ?`,
-      [newStatus, userId ?? null, vehicleForRecord, newStatus, id]
+      [biltyForRecord, newStatus, userId ?? null, vehicleForRecord, newStatus, id]
     );
 
     await conn.commit();
@@ -2001,12 +2042,12 @@ async function getLookups(hrScope, userId) {
   const scope = contractorScope(hrScope, userId);
   const isContractor = hrScope?.role === ROLES.CONTRACTOR;
   const [projects, suppliers, summary, scopes, materials, tools] = await Promise.all([
-    projectModel.findAll({ ...scope, page: 1, pageSize: 100 }),
+    projectModel.findAll({ ...scope, page: 1, pageSize: 10000 }),
     procurementModel.findSuppliers(scope),
     isContractor ? Promise.resolve(null) : procurementModel.findSummary(),
     warehouseModel.findScopes().catch(() => ({ central: [], contractors: [] })),
-    materialModel.findAll({ page: 1, pageSize: 200 }).catch(() => ({ rows: [] })),
-    toolModel.findAll({ status: 'active', page: 1, pageSize: 200 }).catch(() => ({ rows: [] })),
+    materialModel.findAll({ page: 1, pageSize: 10000 }).catch(() => ({ rows: [] })),
+    toolModel.findAll({ status: 'active', page: 1, pageSize: 10000 }).catch(() => ({ rows: [] })),
   ]);
 
   return {
@@ -2095,26 +2136,9 @@ async function fulfil(id, payload = {}, userId) {
   }
 
   // --- vehicle verification (server-side: the UI check is only a convenience)
+  const arrival = verifyVendorArrival(peek, payload, { vehicleRequired: kind === 'central_purchase' && !isVendorPurchase(peek) });
   const recordedVehicle = peek.vehicle_number;
-  const enteredVehicle = String(payload.vehicle_number ?? '').trim();
-  const mustVerify = kind === 'central_purchase' || normalizeVehicle(recordedVehicle);
-  if (mustVerify) {
-    if (!normalizeVehicle(recordedVehicle)) {
-      throw ApiError.badRequest('Check the highlighted fields.', {
-        vehicle_number: 'The vendor has not confirmed this delivery yet - record the vendor\'s vehicle number (Vendor confirmed) first, then receive it.',
-      });
-    }
-    if (!normalizeVehicle(enteredVehicle)) {
-      throw ApiError.badRequest('Check the highlighted fields.', {
-        vehicle_number: 'Enter the arriving vehicle number to fetch and verify the dispatch.',
-      });
-    }
-    if (!vehiclesMatch(enteredVehicle, recordedVehicle)) {
-      throw ApiError.badRequest('Check the highlighted fields.', {
-        vehicle_number: 'Vehicle number does not match the recorded dispatch.',
-      });
-    }
-  }
+  const enteredVehicle = arrival.vehicle && arrival.vehicle !== recordedVehicle ? arrival.vehicle : String(payload.vehicle_number ?? '').trim();
 
   const conn = await pool.getConnection();
   try {
@@ -2186,7 +2210,9 @@ async function fulfil(id, payload = {}, userId) {
       reference: request.po_number || request.request_number,
       transaction_date: receivingDate,
       vehicle_number: vehicleForRecord,
+      bilty_number: arrival.bilty,
       notes: [
+        arrival.bilty ? `Bilty / AWB: ${arrival.bilty}` : '',
         vehicleForRecord ? `Vehicle: ${vehicleForRecord}` : '',
         request.driver_name ? `Driver: ${request.driver_name}` : '',
         request.reason || request.notes || '',
@@ -2205,11 +2231,11 @@ async function fulfil(id, payload = {}, userId) {
            purchase_rate = ?, total_amount = ?, bill_reference = COALESCE(?, bill_reference),
            purchase_date = COALESCE(?, purchase_date, CURDATE()),
            amount_due = GREATEST(COALESCE(?, 0) - COALESCE(amount_paid, 0), 0),
-           received_by = ?, received_vehicle_number = ?
+           received_by = ?, received_vehicle_number = ?, received_bilty_number = ?
        WHERE id = ?`,
       [
         tx.id, purchaseRate > 0 ? purchaseRate : null, totalAmount, payload.bill_reference ?? null,
-        payload.purchase_date ?? null, totalAmount, userId ?? null, vehicleForRecord, id,
+        payload.purchase_date ?? null, totalAmount, userId ?? null, vehicleForRecord, arrival.bilty, id,
       ]
     );
 

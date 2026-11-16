@@ -45,8 +45,8 @@ export default function ContractorWorkersTab() {
   // Load contractors list for filtering
   useEffect(() => {
     if (!isContractor) {
-      contractorsApi.list({ pageSize: 100 })
-        .then((res) => setContractorsList(res.contractors ?? []))
+      contractorsApi.listAll()
+        .then(setContractorsList)
         .catch(() => setContractorsList([]));
     }
   }, [isContractor]);

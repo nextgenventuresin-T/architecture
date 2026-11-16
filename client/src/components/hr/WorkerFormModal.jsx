@@ -54,7 +54,7 @@ export default function WorkerFormModal({ isOpen, onClose, onSaved, worker }) {
         : EMPTY
     );
     if (!isContractorUser) {
-      contractorsApi.list({ pageSize: 50 }).then((d) => setContractors(d.contractors ?? [])).catch(() => setContractors([]));
+      contractorsApi.listAll().then(setContractors).catch(() => setContractors([]));
     }
   }, [isOpen, worker, isContractorUser]);
 

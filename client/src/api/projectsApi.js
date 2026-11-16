@@ -1,3 +1,4 @@
+import { fetchAllPages } from './fetchAll';
 import axiosClient from './axiosClient';
 
 /**
@@ -6,6 +7,8 @@ import axiosClient from './axiosClient';
  */
 export const projectsApi = {
   list: (params) => axiosClient.get('/projects', { params }).then((r) => r.data.data),
+  /** Every project (all pages) - for dropdowns. */
+  listAll: (params = {}) => fetchAllPages(projectsApi.list, 'projects', params, 100),
   lookups: () => axiosClient.get('/projects/lookups').then((r) => r.data.data),
   detail: (id) => axiosClient.get(`/projects/${id}`).then((r) => r.data.data),
   create: (payload) => axiosClient.post('/projects', payload).then((r) => r.data.data.project),

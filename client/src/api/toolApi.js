@@ -1,7 +1,10 @@
+import { fetchAllPages } from './fetchAll';
 import axiosClient from './axiosClient';
 
 export const toolApi = {
   list: (params) => axiosClient.get('/tools', { params }).then((r) => r.data.data),
+  /** Every machine / tool (all pages) - for dropdowns. */
+  listAll: (params = {}) => fetchAllPages(toolApi.list, 'tools', params, 100),
   detail: (id) => axiosClient.get(`/tools/${id}`).then((r) => r.data.data.tool),
   checkAvailability: (id, quantity) =>
     axiosClient.get(`/tools/${id}/availability`, { params: { quantity } }).then((r) => r.data.data),

@@ -1,8 +1,11 @@
+import { fetchAllPages } from './fetchAll';
 import axiosClient from './axiosClient';
 
 /** Every contractor list/detail/write call. Components never touch axios directly. */
 export const contractorsApi = {
   list: (params) => axiosClient.get('/contractors', { params }).then((r) => r.data.data),
+  /** Every contractor (all pages) - for dropdowns. */
+  listAll: (params = {}) => fetchAllPages(contractorsApi.list, 'contractors', params, 200),
   detail: (id) => axiosClient.get(`/contractors/${id}`).then((r) => r.data.data),
   create: (payload) => axiosClient.post('/contractors', payload).then((r) => r.data.data.contractor),
   update: (id, payload) => axiosClient.patch(`/contractors/${id}`, payload).then((r) => r.data.data.contractor),

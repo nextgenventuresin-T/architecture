@@ -71,7 +71,7 @@ export default function MaterialListPage() {
   const loadTools = useCallback(async () => {
     setLoadingTools(true);
     try {
-      const data = await toolApi.list({ search: toolSearch.trim() || undefined, pageSize: 100 });
+      const data = { tools: await toolApi.listAll({ search: toolSearch.trim() || undefined }) };
       setTools(data.tools ?? []);
     } catch (_) {
       setTools([]);

@@ -101,7 +101,7 @@ export default function SiteReceivingPage({ basePath = '/employee' }) {
                     </p>
                   </div>
                   <Button size="sm" onClick={() => { setBanner(null); setActive(d); }} disabled={!d.vehicleRecorded}
-                    title={d.vehicleRecorded ? undefined : 'Admin has not recorded the vehicle for this delivery yet'}>
+                    title={d.vehicleRecorded ? undefined : 'Waiting for the vendor to confirm - Admin has not recorded the Bilty / AWB number yet'}>
                     <PackageCheck className="h-4 w-4" aria-hidden="true" /> Receive
                   </Button>
                 </li>
@@ -142,11 +142,15 @@ function ReceiveDialog({ delivery, onClose, onDone }) {
     setFieldErrors((f) => ({ ...f, [k]: undefined }));
   };
 
+  // Vendor deliveries are received with their Bilty / AWB number; stock moves by vehicle.
+  const byBilty = delivery?.kind === 'vendor_order' && delivery?.verifyBy === 'bilty';
+  const codeField = byBilty ? 'bilty_number' : 'vehicle_number';
+
   async function submit(e) {
     e?.preventDefault?.();
     const errs = {};
     const qty = Number(values.received_quantity);
-    if (!values.vehicle_number.trim()) errs.vehicle_number = 'Enter the vehicle number of the arriving truck.';
+    if (!values.vehicle_number.trim()) errs[codeField] = byBilty ? 'Enter the Bilty / AWB number of this delivery.' : 'Enter the vehicle number of the arriving truck.';
     if (!(qty > 0)) errs.received_quantity = 'Enter the quantity received.';
     else if (qty > Number(delivery.remainingQuantity)) errs.received_quantity = `Only ${formatNumber(delivery.remainingQuantity)} ${delivery.unit} remain to be received.`;
     if (!values.receiving_date) errs.receiving_date = 'Enter the receiving date.';
@@ -156,7 +160,7 @@ function ReceiveDialog({ delivery, onClose, onDone }) {
     setSaving(true);
     setFormError(null);
     const payload = {
-      vehicle_number: values.vehicle_number.trim(),
+      [codeField]: values.vehicle_number.trim(),
       received_quantity: qty,
       receiving_date: values.receiving_date,
       notes: values.notes.trim() || null,
@@ -214,8 +218,9 @@ function ReceiveDialog({ delivery, onClose, onDone }) {
           ))}
         </dl>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <InputField label="Arriving vehicle no." required value={values.vehicle_number} onChange={set('vehicle_number')}
-            error={fieldErrors.vehicle_number} placeholder="As written on the truck" hint="Read it off the truck - it must match the dispatch." />
+          <InputField label={byBilty ? 'Bilty / AWB no.' : 'Arriving vehicle no.'} required value={values.vehicle_number} onChange={set('vehicle_number')}
+            error={fieldErrors[codeField]} placeholder={byBilty ? 'As written on the Bilty / AWB' : 'As written on the truck'}
+            hint={byBilty ? 'Must match the Bilty / AWB number the vendor gave.' : 'Read it off the truck - it must match the dispatch.'} />
           <InputField label={`Received qty (${delivery.unit})`} required type="number" min="0" step="any" max={delivery.remainingQuantity}
             value={values.received_quantity} onChange={set('received_quantity')} error={fieldErrors.received_quantity}
             hint={`Up to ${formatNumber(delivery.remainingQuantity)}`} />

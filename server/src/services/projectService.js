@@ -1158,7 +1158,10 @@ async function getLabourTracking(projectId, query = {}) {
       subcategory_name: r.category,
       labour_count: r.present_count,
       working_hours: 8,
-      work_description: `${r.category} deployment (${r.present_count}/${r.worker_count} present)`,
+      work_description: r.worker_name
+        ? `${r.worker_name} (${r.category}) - ${Number(r.present_count) > 0 ? 'present' : 'absent'} @ Rs.${Number(r.daily_rate || 0)}/day`
+        : `${r.category} deployment (${r.present_count}/${r.worker_count} present)`,
+      worker_name: r.worker_name || null,
       verified_by_engineer: r.payment_status === 'verified' || r.payment_status === 'paid',
       daily_cost: Number(r.daily_cost || 0),
     })),
@@ -1235,6 +1238,12 @@ async function logLabour(projectId, payload) {
     }
   }
 
+  // Name-wise attendance: one row per person picked from the Labour Directory, each
+  // present / absent with their own (editable) daily rate.
+  if (Array.isArray(payload.workers) && payload.workers.length) {
+    return logNamedAttendance(pId, project, siteId, payload);
+  }
+
   const workerCount = Number(payload.worker_count || 1);
   const presentCount = payload.present_count !== undefined ? Number(payload.present_count) : workerCount;
   const dailyRate = Number(payload.daily_rate || 500);
@@ -1278,6 +1287,48 @@ async function logLabour(projectId, payload) {
   }
 
   return { id: result.insertId, site_id: siteId, ...payload };
+}
+
+/** Name-wise attendance rows (see logLabour). Present workers also go into the task log. */
+async function logNamedAttendance(pId, project, siteId, payload) {
+  const recordDate = payload.record_date || new Date().toISOString().slice(0, 10);
+  const contractorId = payload.contractor_id || project.contractor_id || null;
+  const conn = await pool.getConnection();
+  const ids = [];
+  try {
+    await conn.beginTransaction();
+    for (const w of payload.workers) {
+      const name = String(w.name || '').trim();
+      if (!name) continue;
+      const present = w.present !== false && w.present !== 0 && w.present !== 'false';
+      const rate = Math.max(0, Number(w.daily_rate ?? w.dailyRate ?? 0) || 0);
+      const trade = String(w.trade || payload.category || 'General Labour').trim().slice(0, 80);
+      const [res] = await conn.query(
+        `INSERT INTO labour_records (site_id, contractor_id, category, worker_count, present_count, record_date, daily_rate, payment_status,
+                                     worker_id, worker_name, worker_type)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+        [siteId, w.contractor_id || contractorId, trade, present ? 1 : 0, recordDate, rate, payload.payment_status || 'verified',
+          w.worker_id ? Number(w.worker_id) : null, name.slice(0, 150), w.worker_type ? String(w.worker_type).slice(0, 30) : null]
+      );
+      ids.push(res.insertId);
+      if (present && payload.task_id) {
+        await conn.query(
+          `INSERT INTO task_worker_logs (task_id, project_id, site_id, contractor_id, worker_name, labour_type, work_date, hours_worked, daily_wage, work_performed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 8, ?, ?)`,
+          [Number(payload.task_id), pId, siteId, w.contractor_id || contractorId, name, trade, recordDate, rate,
+            payload.work_description || `Attendance logged: ${trade}`]
+        );
+      }
+    }
+    if (!ids.length) throw ApiError.badRequest('Pick at least one worker from the Labour Directory.');
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+  return { ids, site_id: siteId, count: ids.length };
 }
 
 module.exports = {

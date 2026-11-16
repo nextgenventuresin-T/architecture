@@ -221,16 +221,19 @@ async function mkEmployee(user, name, designation) {
   check('approved', r.status === 200, show(r));
   r = await api('POST', `/procurement/${vreqId}/order`, admin.token, { vehicle_number: 'HR26 AB 0001', driver_name: 'Sonu' });
   check('order placed', r.status === 200, show(r));
+  // 2026-11-16: the vendor confirms with a Bilty / AWB number, which is what the receiver enters.
+  r = await api('POST', `/procurement/${vreqId}/vendor-dispatch`, admin.token, { bilty_number: 'HR26-BILTY-0001', vehicle_number: 'HR26 AB 0001' });
+  check('vendor confirmed with Bilty', r.status === 200, show(r));
   const destBeforeV = await stock(cWh.id, material.id);
   r = await api('GET', '/site-receiving/incoming', engUser.token);
   check('engineer sees the vendor order', (r.data?.deliveries || []).some((d) => d.kind === 'vendor_order' && d.id === vreqId && d.remainingQuantity === 8), show(r));
-  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { vehicle_number: 'HR26 AB 0001', received_quantity: 3 });
+  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { bilty_number: 'HR26-BILTY-0001', received_quantity: 3 });
   check('partial delivery 3 of 8', r.status === 200 && r.data.status === 'partially_received' && r.data.remainingQuantity === 5, show(r));
-  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { vehicle_number: 'HR26 AB 0001', received_quantity: 6 });
+  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { bilty_number: 'HR26-BILTY-0001', received_quantity: 6 });
   check('cannot receive more than remains', r.status === 400 && r.details.received_quantity, show(r));
-  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { vehicle_number: 'HR26 AB 0001', received_quantity: 5 });
+  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { bilty_number: 'HR26-BILTY-0001', received_quantity: 5 });
   check('rest delivered, order received', r.status === 200 && r.data.status === 'received', show(r));
-  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { vehicle_number: 'HR26 AB 0001', received_quantity: 1 });
+  r = await api('POST', `/site-receiving/orders/${vreqId}/receive`, engUser.token, { bilty_number: 'HR26-BILTY-0001', received_quantity: 1 });
   check('no receipt after fully received', r.status === 400, show(r));
   check('site stock +8 in total', near(await stock(cWh.id, material.id), destBeforeV + 8));
   const receipts = await q('SELECT COUNT(*) n, SUM(transport_cost) t FROM procurement_receipts WHERE procurement_request_id=?', [vreqId]);

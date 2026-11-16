@@ -206,7 +206,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
   useEffect(() => {
     (isPmWorkspace
       ? pmApi.scope().then((d) => ({ projects: d?.projects || [] }))
-      : projectsApi.list({ pageSize: 50 }))
+      : projectsApi.listAll().then((projects) => ({ projects })))
       .then((data) => {
         const list = data.projects || [];
         setProjects(list);

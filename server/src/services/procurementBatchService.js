@@ -22,6 +22,8 @@ const pmScope = require('./pmScopeService');
  */
 
 const MAX_ITEMS = 50;
+/** Units of one machine on a single line (each becomes its own tracked request). */
+const MAX_UNITS_PER_LINE = 50;
 const ADMIN_ROLES = [ROLES.ADMIN, ROLES.PROCUREMENT];
 const RECEIVE_ROLES = [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE];
 const isTool = (r) => r.itemType === 'tool';
@@ -91,8 +93,22 @@ async function createBatch(payload, userId, hrScope) {
 
   const status = payload.status === 'draft' ? 'draft' : 'requested';
   const prepared = items.map((raw) => ({ ...raw, ...FLOW_ITEM[flow], status, request_number: undefined }));
+  // Machines / tools: a line may ask for several UNITS. Each unit is still tracked on
+  // its own (its own serial number, allocation and receipt), so a line of N units
+  // becomes N one-unit requests in this batch.
+  const unitsOf = prepared.map((item) => {
+    const isTool = item.item_type === 'tool' || (!item.material_id && item.tool_id);
+    if (!isTool) return 1;
+    const n = Math.floor(Number(item.quantity));
+    item.quantity = 1;
+    return n;
+  });
 
   const errors = {};
+  unitsOf.forEach((n, i) => {
+    if (!(n >= 1)) errors[`items.${i}.quantity`] = 'Enter the number of units (1 or more).';
+    else if (n > MAX_UNITS_PER_LINE) errors[`items.${i}.quantity`] = `At most ${MAX_UNITS_PER_LINE} units on one line.`;
+  });
   if (flow === 'central_site') {
     // Central Warehouse -> Site: each line names its project + site, and is delivered to
     // whoever holds stock for that site - its contractor, or (no contractor) its Site
@@ -147,8 +163,10 @@ async function createBatch(payload, userId, hrScope) {
   const createdIds = [];
   for (let i = 0; i < prepared.length; i += 1) {
     try {
-      const request = await procurementService.create({ ...prepared[i] }, userId, hrScope, { batchId: batch.id });
-      createdIds.push(Number(request.id));
+      for (let u = 0; u < unitsOf[i]; u += 1) {
+        const request = await procurementService.create({ ...prepared[i] }, userId, hrScope, { batchId: batch.id });
+        createdIds.push(Number(request.id));
+      }
     } catch (error) {
       await procurementModel.discardBatch(batch.id, createdIds);
       if (!(error instanceof ApiError)) throw error;
@@ -165,7 +183,7 @@ async function createBatch(payload, userId, hrScope) {
 async function getBatch(id, hrScope, userId) {
   const batch = await procurementModel.findBatchById(Number(id));
   if (!batch) throw ApiError.notFound('That multi-item request does not exist.');
-  const { requests } = await procurementService.listScoped({ batchId: batch.id, pageSize: MAX_ITEMS }, hrScope, userId);
+  const { requests } = await procurementService.listScoped({ batchId: batch.id, pageSize: MAX_ITEMS * MAX_UNITS_PER_LINE }, hrScope, userId);
   if (!requests.length) throw ApiError.notFound('That multi-item request does not exist.');
   const items = await Promise.all(requests.map(async (r) => {
     const detail = await procurementService.getDetail(r.id, hrScope, userId).catch(() => null);
@@ -247,14 +265,16 @@ async function runBatchAction(id, action, payload, user, hrScope) {
       break;
     }
     case 'vendor_confirm': {
-      // The vendor confirmed: one vehicle / driver / challan recorded on every vendor
-      // item still waiting for it (or being corrected), so the receiver can verify it.
+      // The vendor confirmed: one Bilty / AWB number (plus optional vehicle, driver,
+      // challan) recorded on every vendor item still waiting for it, so the receiver
+      // can receive with that number.
       if (!ADMIN_ROLES.includes(role)) throw ApiError.forbidden('Only Admin / Procurement can record the vendor dispatch.');
-      if (!normalizeVehicle(payload.vehicle_number)) {
-        throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: "Enter the vendor's vehicle number." });
+      if (!normalizeVehicle(payload.bilty_number)) {
+        throw ApiError.badRequest('Check the highlighted fields.', { bilty_number: 'Enter the Bilty / AWB number.' });
       }
       for (const item of items.filter((r) => r.canRecordVendorDispatch)) {
         await run(item, () => procurementService.recordVendorDispatch(item.id, {
+          bilty_number: payload.bilty_number,
           vehicle_number: payload.vehicle_number,
           driver_name: payload.driver_name,
           driver_phone: payload.driver_phone,
@@ -292,20 +312,24 @@ async function runBatchAction(id, action, payload, user, hrScope) {
       break;
     }
     case 'receive': {
-      // Everything that arrived on this vehicle and that this viewer may receive.
-      const vehicle = String(payload.vehicle_number || '').trim();
+      // Everything that arrived under this number and that this viewer may receive:
+      // vendor deliveries by their Bilty / AWB number, stock moves by vehicle number.
+      const vehicle = String(payload.bilty_number || payload.vehicle_number || '').trim();
       if (!normalizeVehicle(vehicle)) {
-        throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Enter the arriving vehicle number.' });
+        throw ApiError.badRequest('Check the highlighted fields.', { vehicle_number: 'Enter the Bilty / AWB or vehicle number.' });
       }
+      // A vendor item is matched on what it is verified by (Bilty / AWB, or vehicle for older ones).
+      const vendorMatch = (item) => (item.verifyBy === 'bilty' ? vehiclesMatch(vehicle, item.biltyNumber) : vehiclesMatch(vehicle, item.vehicleNumber));
+      const vendorProof = (item) => (item.verifyBy === 'bilty' ? { bilty_number: vehicle } : { vehicle_number: vehicle });
       const receivingDate = payload.receiving_date || new Date().toISOString().slice(0, 10);
       for (const item of items) {
         const mv = item.movement;
         if (item.kind === 'central_purchase') {
           // Vendor -> Central Warehouse: verified against the vehicle recorded on the purchase.
           if (item.status === 'approved' && !item.warehouseTransactionId && RECEIVE_ROLES.includes(role)
-            && vehiclesMatch(vehicle, item.vehicleNumber)) {
+            && vendorMatch(item)) {
             await run(item, () => procurementService.fulfil(item.id, {
-              vehicle_number: vehicle, receiving_date: receivingDate, transport_cost: quoteOf(item),
+              ...vendorProof(item), receiving_date: receivingDate, transport_cost: quoteOf(item),
             }, user.id));
           }
           continue;
@@ -317,17 +341,17 @@ async function runBatchAction(id, action, payload, user, hrScope) {
           await run(item, () => procurementService.toolReceive(item.id, { vehicle_number: vehicle, receiving_date: receivingDate }, user.id, hrScope));
         } else if (!isTool(item) && !mv && ['ordered', 'partially_received'].includes(item.status)
           && (item.canReceiveOrder || RECEIVE_ROLES.includes(role))
-          && (!normalizeVehicle(item.vehicleNumber) || vehiclesMatch(vehicle, item.vehicleNumber))) {
+          && !item.awaitingVendorDispatch && vendorMatch(item)) {
           const remaining = item.receiving?.remainingQuantity;
           if (!(Number(remaining) > 0)) continue;
           await run(item, () => procurementService.receive(item.id, {
-            received_quantity: Number(remaining), receiving_date: receivingDate, vehicle_number: vehicle,
+            received_quantity: Number(remaining), receiving_date: receivingDate, ...vendorProof(item),
             transport_cost: quoteOf(item),
           }, user.id, hrScope, { useQuotedTransport: true }));
         }
       }
       if (!results.length) {
-        throw ApiError.badRequest('Nothing in this request is waiting on that vehicle for you to receive.', { vehicle_number: 'No item matches this vehicle.' });
+        throw ApiError.badRequest('Nothing in this request is waiting on that number for you to receive.', { vehicle_number: 'No item matches this Bilty / AWB or vehicle number.' });
       }
       break;
     }

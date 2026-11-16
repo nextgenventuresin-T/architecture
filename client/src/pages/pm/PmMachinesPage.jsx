@@ -14,7 +14,7 @@ import { toolApi } from '../../api/toolApi';
 export default function PmMachinesPage() {
   const [tools, setTools] = useState([]);
   useEffect(() => {
-    toolApi.list({ pageSize: 100 }).then((d) => setTools(d.tools ?? [])).catch(() => setTools([]));
+    toolApi.listAll().then(setTools).catch(() => setTools([]));
   }, []);
   return (
     <>
@@ -22,7 +22,7 @@ export default function PmMachinesPage() {
         title="Machines & Tools"
         description="Each physical machine is tracked by its unique serial number. Update health for machines on your projects or request one for a site."
         actions={(
-          <Link to="/pm/procurement/new">
+          <Link to="/pm/procurement/new-batch">
             <Button className="gap-2"><Plus className="h-4 w-4" /> Request machine / material</Button>
           </Link>
         )}

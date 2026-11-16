@@ -59,6 +59,8 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
     request.destinationType === 'central_warehouse' ||
     request.source?.type === 'central_warehouse' ||
     request.destination?.type === 'central_warehouse';
+  // Vendor deliveries confirmed with a Bilty / AWB are received with that number.
+  const byBilty = request.verifyBy === 'bilty';
 
   function validate() {
     const errors = {};
@@ -67,7 +69,9 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
     else if (remaining !== null && qty > remaining) {
       errors.received_quantity = `Only ${formatNumber(remaining)} ${request.unit} remains to be received.`;
     }
-    if ((isCentral || request.vehicleNumber) && !values.vehicle_number?.trim()) {
+    if (byBilty && !values.vehicle_number?.trim()) {
+      errors.bilty_number = 'Enter the Bilty / AWB number of this delivery.';
+    } else if (!byBilty && (isCentral || request.vehicleNumber) && !values.vehicle_number?.trim()) {
       errors.vehicle_number = 'Enter the arriving vehicle number - it is verified against the recorded dispatch.';
     }
     if (values.transport_cost !== '' && !(Number(values.transport_cost) >= 0)) errors.transport_cost = 'Enter a valid amount.';
@@ -88,7 +92,7 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
     setError(null);
     try {
       const combinedNotes = [
-        values.vehicle_number ? `Vehicle: ${values.vehicle_number}` : '',
+        values.vehicle_number ? `${byBilty ? 'Bilty / AWB' : 'Vehicle'}: ${values.vehicle_number}` : '',
         values.challan_number ? `Challan: ${values.challan_number}` : '',
         values.driver_name ? `Driver: ${values.driver_name}` : '',
         values.notes ? values.notes.trim() : '',
@@ -97,7 +101,7 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
       await procurementApi.receive(request.id, {
         received_quantity: Number(values.received_quantity),
         receiving_date: values.receiving_date,
-        vehicle_number: values.vehicle_number ? values.vehicle_number.trim() : null,
+        [byBilty ? 'bilty_number' : 'vehicle_number']: values.vehicle_number ? values.vehicle_number.trim() : null,
         challan_number: values.challan_number ? values.challan_number.trim() : null,
         driver_name: values.driver_name ? values.driver_name.trim() : null,
         transport_cost: values.transport_cost !== '' ? Number(values.transport_cost) : null,
@@ -159,13 +163,13 @@ export default function ReceiveDialog({ request, onClose, onSaved }) {
           error={fieldErrors.receiving_date}
         />
         <InputField
-          label={isCentral ? "Vehicle Number" : "Vehicle Number (optional)"}
-          required={isCentral}
+          label={byBilty ? 'Bilty / AWB number' : (isCentral || request.vehicleNumber ? 'Vehicle Number' : 'Vehicle Number (optional)')}
+          required={byBilty || isCentral}
           value={values.vehicle_number}
           onChange={set('vehicle_number')}
-          error={fieldErrors.vehicle_number}
-          placeholder="e.g. MH-12-AB-1234"
-          description={isCentral ? "Mandatory for Central Warehouse deliveries" : undefined}
+          error={byBilty ? fieldErrors.bilty_number : fieldErrors.vehicle_number}
+          placeholder={byBilty ? 'As written on the Bilty / AWB' : 'e.g. MH-12-AB-1234'}
+          description={byBilty ? 'Must match the Bilty / AWB number recorded when the vendor confirmed.' : (isCentral ? 'Mandatory for Central Warehouse deliveries' : undefined)}
         />
         <InputField
           label="Delivery Challan No (optional)"

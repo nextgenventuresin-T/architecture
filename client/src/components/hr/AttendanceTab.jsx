@@ -63,12 +63,12 @@ export default function AttendanceTab({ readOnly = false }) {
   useEffect(() => {
     // An employee only sees their own attendance and cannot list contractors.
     if (!isContractor && user?.role !== ROLES.EMPLOYEE) {
-      contractorsApi.list({ pageSize: 100 })
-        .then((r) => setContractorsList(r.contractors ?? []))
+      contractorsApi.listAll()
+        .then(setContractorsList)
         .catch(() => setContractorsList([]));
     }
-    projectsApi.list({ pageSize: 100 })
-      .then((r) => setProjectsList(r.projects ?? []))
+    projectsApi.listAll()
+      .then(setProjectsList)
       .catch(() => setProjectsList([]));
   }, [isContractor, user?.role]);
 

@@ -126,7 +126,12 @@ router.post(
     param('id').isInt({ min: 1 }),
     optionalId('site_id'),
     optionalId('contractor_id'),
-    body('category').trim().notEmpty().withMessage('Enter category or trade.'),
+    // Crew-count entry needs a trade; name-wise entry sends `workers` instead.
+    body('category').if((v, { req }) => !Array.isArray(req.body.workers) || !req.body.workers.length)
+      .trim().notEmpty().withMessage('Enter category or trade.'),
+    body('workers').optional().isArray({ max: 500 }),
+    body('workers.*.name').optional().trim().isLength({ max: 150 }),
+    body('workers.*.daily_rate').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('Daily rate cannot be negative.'),
     body('worker_count').optional().isInt({ min: 1 }).toInt(),
     body('present_count').optional().isInt({ min: 0 }).toInt(),
     body('record_date').isISO8601().withMessage('Enter a valid date.'),

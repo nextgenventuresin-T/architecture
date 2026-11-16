@@ -32,7 +32,7 @@ async function pendingVendorOrders(siteIds) {
   if (!siteIds.length) return [];
   const [rows] = await pool.query(
     `SELECT r.id, r.request_number, r.po_number, r.status, r.unit, r.quantity, r.ordered_quantity,
-            r.vehicle_number, r.driver_name, r.driver_phone, r.challan_number, r.order_date, r.expected_delivery_date,
+            r.vehicle_number, r.bilty_number, r.vendor_confirmed_at, r.driver_name, r.driver_phone, r.challan_number, r.order_date, r.expected_delivery_date,
             r.supplier, v.name AS vendor_name, m.name AS material_name,
             p.id AS project_id, p.name AS project_name, s.id AS site_id, s.name AS site_name,
             t.name AS task_name,
@@ -64,8 +64,10 @@ async function pendingVendorOrders(siteIds) {
       sentQuantity: ordered,
       receivedQuantity: received,
       remainingQuantity: Number(Math.max(0, ordered - received).toFixed(2)),
-      // The plate itself is not sent: the receiver must read it off the arriving truck.
-      vehicleRecorded: Boolean(String(r.vehicle_number || '').trim()),
+      // The number itself is not sent: the receiver must read it off the Bilty / AWB
+      // (or, for older deliveries, the arriving truck).
+      verifyBy: String(r.bilty_number || '').trim() ? 'bilty' : 'vehicle',
+      vehicleRecorded: Boolean(String(r.bilty_number || '').trim() || (r.vendor_confirmed_at && String(r.vehicle_number || '').trim())),
       driverName: r.driver_name || null,
       driverPhone: r.driver_phone || null,
       challanNumber: r.challan_number || null,
@@ -148,6 +150,7 @@ async function receiveVendorOrder(id, payload, hrScope, userId) {
     received_quantity: payload.received_quantity,
     receiving_date: payload.receiving_date,
     vehicle_number: payload.vehicle_number,
+    bilty_number: payload.bilty_number,
     notes: payload.notes,
   }, userId, hrScope, { useQuotedTransport: false });
   return {

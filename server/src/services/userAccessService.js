@@ -530,7 +530,7 @@ async function getLookups() {
   const [roles, departments, projects, summary] = await Promise.all([
     model.findAllRoles(),
     model.findDepartments(),
-    projectModel.findAll({ page: 1, pageSize: 100 }),
+    projectModel.findAll({ page: 1, pageSize: 10000 }),
     model.findUserSummary(),
   ]);
 

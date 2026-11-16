@@ -85,9 +85,6 @@ export default function PmProcurementPage() {
             <Link to="/pm/procurement/new-batch">
               <Button>New multi-item request</Button>
             </Link>
-            <Link to="/pm/procurement/new">
-              <Button variant="secondary">Single item</Button>
-            </Link>
             <Button variant="secondary" onClick={load} isLoading={loading}>
               <RefreshCw className="h-4 w-4 mr-1.5" />
               Refresh

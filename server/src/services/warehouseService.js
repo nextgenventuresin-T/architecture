@@ -417,7 +417,8 @@ async function receiveStock(payload, userId, opts = {}) {
   const isCentral = warehouse.type === 'central' || warehouse.name?.toLowerCase().includes('central');
   if (isCentral) {
     const vNum = payload.vehicle_number || (payload.notes && payload.notes.match(/Vehicle:\s*([^|]+)/i)?.[1]);
-    if (!vNum || !String(vNum).trim()) {
+    // A vendor delivery verified by its Bilty / AWB number needs no vehicle.
+    if ((!vNum || !String(vNum).trim()) && !String(payload.bilty_number || '').trim()) {
       throw ApiError.badRequest('Check the highlighted fields.', {
         vehicle_number: 'Vehicle number is mandatory for Central Warehouse movements.',
       });
@@ -818,9 +819,9 @@ async function adjustStock(payload, userId) {
  */
 async function getLookups() {
   const [warehouses, materials, projects, locations, summary, pendingReceipts, [stockBalances]] = await Promise.all([
-    warehouseModel.findAll({ page: 1, pageSize: 100 }),
-    materialModel.findAll({ page: 1, pageSize: 200 }),
-    projectModel.findAll({ page: 1, pageSize: 100 }),
+    warehouseModel.findAll({ page: 1, pageSize: 10000 }),
+    materialModel.findAll({ page: 1, pageSize: 10000 }),
+    projectModel.findAll({ page: 1, pageSize: 10000 }),
     warehouseModel.findLocations(),
     getSummary(),
     findPendingProcurementReceipts(),

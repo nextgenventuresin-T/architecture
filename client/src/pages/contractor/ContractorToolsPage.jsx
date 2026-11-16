@@ -60,7 +60,7 @@ export default function ContractorToolsPage() {
         description="Explore available tools, machinery and equipment available for allocation to your projects and sites."
         actions={
           <div className="flex items-center gap-2">
-            <Link to="/contractor/procurement/new">
+            <Link to="/contractor/procurement/new-batch">
               <Button className="gap-2">
                 <Plus className="h-4 w-4" />
                 Request Equipment / Tool
@@ -168,7 +168,7 @@ export default function ContractorToolsPage() {
                             Log Daily Use
                           </Link>
                           <Link
-                            to={`/contractor/procurement/new?toolId=${t.id}`}
+                            to={`/contractor/procurement/new-batch?toolId=${t.id}`}
                             className="inline-flex items-center gap-1 rounded-lg border border-brand-200 bg-brand-50/70 px-2.5 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
                             title="Request tool procurement or dispatch"
                           >

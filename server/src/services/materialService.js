@@ -86,7 +86,7 @@ async function getLookups() {
   const [categories, units, projects, summary] = await Promise.all([
     materialModel.findCategories(),
     materialModel.findUnits(),
-    projectModel.findAll({ page: 1, pageSize: 100 }),
+    projectModel.findAll({ page: 1, pageSize: 10000 }),
     materialModel.findStockSummary(),
   ]);
 

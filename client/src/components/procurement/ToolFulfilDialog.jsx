@@ -32,7 +32,7 @@ export default function ToolFulfilDialog({ request, onClose, onSaved }) {
 
   useEffect(() => {
     if (!request) return;
-    vendorApi.list().then((d) => setVendors(d.vendors ?? [])).catch(() => setVendors([]));
+    vendorApi.listAll().then(setVendors).catch(() => setVendors([]));
     setErrors({});
     setError(null);
     const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };

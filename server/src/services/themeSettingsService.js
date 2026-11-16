@@ -161,7 +161,7 @@ async function getActiveTheme(companyId = null) {
 async function listAllCompanyThemes() {
   const [savedThemes, clientsResult] = await Promise.all([
     themeSettingsModel.findAll(),
-    clientModel.findAll ? clientModel.findAll({ pageSize: 100 }) : { rows: [] },
+    clientModel.findAll ? clientModel.findAll({ pageSize: 10000 }) : { rows: [] },
   ]);
 
   const clientRows = Array.isArray(clientsResult) ? clientsResult : clientsResult?.rows || [];

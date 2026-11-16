@@ -132,7 +132,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
     buttons.push(
       <Button key="vendor-dispatch" type="button" variant={awaitingVendor ? 'primary' : 'secondary'} onClick={() => setIsRecordingDispatch(true)}>
         <Truck className="h-4 w-4" aria-hidden="true" />
-        {awaitingVendor ? 'Vendor confirmed – add vehicle' : 'Update vendor vehicle'}
+        {awaitingVendor ? 'Vendor confirmed – add Bilty / AWB' : 'Update Bilty / AWB'}
       </Button>
     );
   }
@@ -140,7 +140,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   if (awaitingVendor && (status !== 'approved' || request.kind === 'central_purchase')) {
     buttons.push(
       <span key="awaiting-vendor" className="text-sm text-amber-700">
-        Waiting for the vendor to confirm - receiving opens once the vehicle number is recorded.
+        Waiting for the vendor to confirm - receiving opens once the Bilty / AWB number is recorded.
       </span>
     );
   }

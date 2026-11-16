@@ -185,8 +185,7 @@ export default function LabourManagementTab() {
   // Load contractors for filtering
   useAsync(async () => {
     try {
-      const res = await contractorsApi.list({ pageSize: 100 });
-      setContractorsList(res.contractors ?? []);
+      setContractorsList(await contractorsApi.listAll());
     } catch {
       setContractorsList([]);
     }

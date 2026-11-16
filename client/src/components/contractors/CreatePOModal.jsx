@@ -105,8 +105,8 @@ export default function CreatePOModal({
   // Load projects list
   useEffect(() => {
     setIsLoadingProjects(true);
-    projectsApi.list({ pageSize: 100 })
-      .then((data) => setProjects(data.projects ?? []))
+    projectsApi.listAll()
+      .then(setProjects)
       .catch((err) => console.error('Failed to load projects:', err))
       .finally(() => setIsLoadingProjects(false));
   }, []);

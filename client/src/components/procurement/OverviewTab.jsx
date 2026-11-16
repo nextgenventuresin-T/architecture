@@ -86,8 +86,8 @@ export default function OverviewTab({ request, movement }) {
               ...(request.sourceType === 'supplier' && request.itemType !== 'tool' ? [{
                 label: 'Vendor confirmation',
                 value: request.vendorConfirmedAt
-                  ? <span className="text-emerald-700">Confirmed {formatDate(request.vendorConfirmedAt)}{request.vehicleNumber ? ` · vehicle ${request.vehicleNumber}` : ''}</span>
-                  : <span className="text-amber-700">Awaiting vendor - vehicle number not recorded yet</span>,
+                  ? <span className="text-emerald-700">Confirmed {formatDate(request.vendorConfirmedAt)}{request.biltyNumber ? ` · Bilty / AWB ${request.biltyNumber}` : ''}</span>
+                  : <span className="text-amber-700">Awaiting vendor - Bilty / AWB number not recorded yet</span>,
               }] : []),
               {
                 label: 'Cost per unit',
@@ -109,7 +109,7 @@ export default function OverviewTab({ request, movement }) {
         </CardBody>
       </Card>
 
-      {(request.vehicleNumber || request.driverName || request.challanNumber || request.invoiceNumber || request.remarks || request.transportCost != null || request.transportPaid > 0) && (
+      {(request.biltyNumber || request.vehicleNumber || request.driverName || request.challanNumber || request.invoiceNumber || request.remarks || request.transportCost != null || request.transportPaid > 0) && (
         <Card>
           <CardHeader title="Transport & Delivery Challan" description="Vehicle, driver, challan and tax invoice details." />
           <CardBody>
@@ -118,6 +118,7 @@ export default function OverviewTab({ request, movement }) {
               items={[
                 ...(request.transportCost != null ? [{ label: 'Transport (quoted)', value: formatCurrency(request.transportCost) }] : []),
                 ...(request.transportPaid > 0 ? [{ label: 'Transport paid', value: <span>{formatCurrency(request.transportPaid)} <span className="text-xs text-ink-subtle">· booked as {request.transportCategory}</span></span> }] : []),
+                ...(request.biltyNumber ? [{ label: 'Bilty / AWB No', value: <span className="font-mono font-bold text-ink">{request.biltyNumber}</span> }] : []),
                 ...(request.vehicleNumber ? [{ label: 'Vehicle Number', value: <span className="font-mono font-bold text-ink">{request.vehicleNumber}</span> }] : []),
                 ...(request.driverName ? [{ label: 'Driver', value: `${request.driverName}${request.driverPhone ? ` (${request.driverPhone})` : ''}` }] : []),
                 ...(request.challanNumber ? [{ label: 'Delivery Challan No', value: <span className="font-mono">{request.challanNumber}</span> }] : []),

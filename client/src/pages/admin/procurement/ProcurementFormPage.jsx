@@ -104,12 +104,12 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
     if (basePath.startsWith('/pm')) {
       procurementApi.lookups().then((data) => setProjects(data.projects ?? [])).catch(() => setProjects([]));
     } else {
-      projectsApi.list({ pageSize: 50 }).then((data) => setProjects(data.projects ?? [])).catch(() => setProjects([]));
+      projectsApi.listAll().then(setProjects).catch(() => setProjects([]));
     }
     materialsApi.listAll().then(setMaterials).catch(() => setMaterials([]));
-    toolApi.list({ pageSize: 100 }).then((data) => setTools(data.tools ?? [])).catch(() => setTools([]));
+    toolApi.listAll().then(setTools).catch(() => setTools([]));
     procurementApi.lookups().then((data) => setContractors(data.contractors ?? [])).catch(() => setContractors([]));
-    vendorApi.list({ status: 'active', pageSize: 200 }).then((data) => setVendors(data.vendors ?? [])).catch(() => setVendors([]));
+    vendorApi.listAll({ status: 'active' }).then(setVendors).catch(() => setVendors([]));
   }, []);
 
   // Areas (floor / room / zone) of the selected project, for area-wise procurement.

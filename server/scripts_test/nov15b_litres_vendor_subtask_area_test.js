@@ -142,21 +142,26 @@ async function approve(id, token) {
   check('litres per unit + total litres stored', r.data?.request?.isLiquid === true && r.data.request.litresPerUnit === 20 && r.data.request.totalLitres === 200, JSON.stringify(r.data?.request && { l: r.data.request.isLiquid, p: r.data.request.litresPerUnit, t: r.data.request.totalLitres }));
   r = await approve(cpId, admin.token);
   check('approved and awaiting vendor confirmation', r.status === 200 && r.data.request.awaitingVendorDispatch === true && r.data.request.canRecordVendorDispatch === true, show(r));
-  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { vehicle_number: 'MH12 AB 1111', purchase_rate: 1500, receiving_date: '2026-11-15' });
-  check('cannot receive before the vendor dispatch is recorded', r.status === 400 && /not confirmed/.test(r.details.vehicle_number || ''), show(r));
-  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, admin.token, { driver_name: 'Raju' });
-  check('vendor confirmation needs the vehicle number', r.status === 400 && r.details.vehicle_number, show(r));
-  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, cToken, { vehicle_number: 'MH12 AB 1111' });
+  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { bilty_number: 'LR-1111', purchase_rate: 1500, receiving_date: '2026-11-15' });
+  check('cannot receive before the vendor confirms', r.status === 400 && /not confirmed/.test(r.details.bilty_number || ''), show(r));
+  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, admin.token, { vehicle_number: 'MH12 AB 1111' });
+  check('vendor confirmation needs the Bilty / AWB number', r.status === 400 && r.details.bilty_number, show(r));
+  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, cToken, { bilty_number: 'LR-1111' });
   check('contractor cannot record a vendor dispatch', r.status === 403, show(r));
-  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, admin.token, { vehicle_number: 'MH12 AB 1111', driver_name: 'Raju', driver_phone: '9811111111', challan_number: 'DC-77' });
-  check('vendor confirmed - vehicle recorded', r.status === 200 && r.data.request.vehicleNumber === 'MH12 AB 1111' && r.data.request.vendorConfirmedAt && r.data.request.awaitingVendorDispatch === false && r.data.request.challanNumber === 'DC-77', show(r));
+  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, admin.token, { bilty_number: 'LR-1111', driver_name: 'Raju', challan_number: 'DC-77' });
+  check('vendor confirmed with Bilty only (no vehicle)', r.status === 200 && r.data.request.biltyNumber === 'LR-1111' && !r.data.request.vehicleNumber
+    && r.data.request.verifyBy === 'bilty' && r.data.request.vendorConfirmedAt && r.data.request.awaitingVendorDispatch === false && r.data.request.challanNumber === 'DC-77', show(r));
   const centralBefore = await stock(central.id, paintId);
-  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { vehicle_number: 'MH12 XX 0000', purchase_rate: 1500, receiving_date: '2026-11-15' });
-  check('wrong vehicle still rejected', r.status === 400 && r.details.vehicle_number, show(r));
-  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { vehicle_number: 'mh12ab1111', purchase_rate: 1500, receiving_date: '2026-11-15', bill_reference: 'INV-1' });
-  check('received after the vehicle is verified', r.status === 200 || r.status === 201, show(r));
+  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { bilty_number: 'LR-9999', purchase_rate: 1500, receiving_date: '2026-11-15' });
+  check('wrong Bilty rejected', r.status === 400 && r.details.bilty_number, show(r));
+  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { purchase_rate: 1500, receiving_date: '2026-11-15' });
+  check('Bilty is required to receive', r.status === 400 && r.details.bilty_number, show(r));
+  r = await api('POST', `/procurement/${cpId}/fulfil`, admin.token, { bilty_number: 'lr 1111', purchase_rate: 1500, receiving_date: '2026-11-15', bill_reference: 'INV-1' });
+  check('received with the matching Bilty', r.status === 200 || r.status === 201, show(r));
+  const rb = await one('SELECT received_bilty_number FROM procurement_requests WHERE id=?', [cpId]);
+  check('received Bilty stored', rb.received_bilty_number === 'lr 1111', JSON.stringify(rb));
   check('central stock +10 buckets', near(await stock(central.id, paintId), centralBefore + 10), `${centralBefore} -> ${await stock(central.id, paintId)}`);
-  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, admin.token, { vehicle_number: 'MH12 AB 2222' });
+  r = await api('POST', `/procurement/${cpId}/vendor-dispatch`, admin.token, { bilty_number: 'LR-2222' });
   check('dispatch cannot be changed once received', r.status === 400, show(r));
 
   // A non-liquid material carries no litres.
@@ -178,20 +183,30 @@ async function approve(id, token) {
   r = await api('POST', `/procurement/${vsId}/order`, admin.token, { order_date: '2026-11-15' });
   check('order placed without a vehicle', r.status === 200 && r.data.request.status === 'ordered' && r.data.request.awaitingVendorDispatch === true, show(r));
   const notesBefore = Number((await one('SELECT COUNT(*) n FROM notifications WHERE user_id=?', [cUser.id])).n);
-  r = await api('POST', `/procurement/${vsId}/receiving`, cToken, { received_quantity: 4, receiving_date: '2026-11-15', vehicle_number: 'DL01 ZZ 0001' });
-  check('contractor cannot receive before the vendor confirms', r.status === 400 && /not confirmed/.test(r.details.vehicle_number || ''), show(r));
-  r = await api('POST', `/site-receiving/orders/${vsId}/receive`, engUser.token, { vehicle_number: 'DL01 ZZ 0001', received_quantity: 4 });
+  r = await api('POST', `/procurement/${vsId}/receiving`, cToken, { received_quantity: 4, receiving_date: '2026-11-15', bilty_number: 'AWB-1' });
+  check('contractor cannot receive before the vendor confirms', r.status === 400 && /not confirmed/.test(r.details.bilty_number || ''), show(r));
+  r = await api('POST', `/site-receiving/orders/${vsId}/receive`, engUser.token, { bilty_number: 'AWB-1', received_quantity: 4 });
   check('site engineer cannot receive before the vendor confirms', r.status === 400, show(r));
-  r = await api('POST', `/procurement/${vsId}/vendor-dispatch`, admin.token, { vehicle_number: 'DL01 AB 4444', driver_name: 'Mohan', expected_delivery_date: '2026-11-18' });
-  check('vendor confirmed on the order', r.status === 200 && r.data.request.vehicleNumber === 'DL01 AB 4444', show(r));
+  r = await api('GET', '/site-receiving/incoming', engUser.token);
+  const inc = (r.data?.deliveries || []).find((d) => d.kind === 'vendor_order' && d.id === vsId);
+  check('engineer sees it as not yet receivable', inc && inc.vehicleRecorded === false, JSON.stringify(inc));
+  r = await api('POST', `/procurement/${vsId}/vendor-dispatch`, admin.token, { bilty_number: 'AWB 7781-2234', vehicle_number: 'DL01 AB 4444', driver_name: 'Mohan', expected_delivery_date: '2026-11-18' });
+  check('vendor confirmed on the order with Bilty / AWB', r.status === 200 && r.data.request.biltyNumber === 'AWB 7781-2234', show(r));
+  r = await api('GET', '/site-receiving/incoming', engUser.token);
+  const inc2 = (r.data?.deliveries || []).find((d) => d.kind === 'vendor_order' && d.id === vsId);
+  check('engineer now told to receive by Bilty', inc2 && inc2.vehicleRecorded === true && inc2.verifyBy === 'bilty' && inc2.vehicleNumber === undefined, JSON.stringify(inc2));
   const notesAfter = Number((await one('SELECT COUNT(*) n FROM notifications WHERE user_id=?', [cUser.id])).n);
   check('receiving contractor notified with the vehicle', notesAfter === notesBefore + 1, `${notesBefore} -> ${notesAfter}`);
   const cWh = await one('SELECT id FROM warehouses WHERE contractor_id=? LIMIT 1', [contractorId]);
   const siteBefore = await stock(cWh.id, paintId);
-  r = await api('POST', `/procurement/${vsId}/receiving`, cToken, { received_quantity: 4, receiving_date: '2026-11-15', vehicle_number: 'DL01 XX 4444' });
-  check('wrong vehicle rejected on receipt', r.status === 400 && r.details.vehicle_number, show(r));
-  r = await api('POST', `/procurement/${vsId}/receiving`, cToken, { received_quantity: 4, receiving_date: '2026-11-15', vehicle_number: 'dl01ab4444' });
-  check('contractor receives after verification', r.status === 201 || r.status === 200, show(r));
+  r = await api('POST', `/procurement/${vsId}/receiving`, cToken, { received_quantity: 4, receiving_date: '2026-11-15', vehicle_number: 'DL01 AB 4444' });
+  check('vehicle alone no longer receives a Bilty delivery', r.status === 400 && r.details.bilty_number, show(r));
+  r = await api('POST', `/site-receiving/orders/${vsId}/receive`, engUser.token, { bilty_number: 'AWB 0000', received_quantity: 1 });
+  check('engineer: wrong Bilty rejected', r.status === 400 && r.details.bilty_number, show(r));
+  r = await api('POST', `/site-receiving/orders/${vsId}/receive`, engUser.token, { bilty_number: 'awb77812234', received_quantity: 1 });
+  check('engineer receives 1 with the Bilty', r.status === 200 && r.data.status === 'partially_received', show(r));
+  r = await api('POST', `/procurement/${vsId}/receiving`, cToken, { received_quantity: 3, receiving_date: '2026-11-15', bilty_number: 'AWB 7781 2234' });
+  check('contractor receives the rest with the Bilty', r.status === 201 || r.status === 200, show(r));
   check('site stock +4 buckets', near(await stock(cWh.id, paintId), siteBefore + 4));
 
   // Placing an order WITH the vehicle up front still works (already confirmed).
@@ -201,8 +216,8 @@ async function approve(id, token) {
   });
   const vs2 = r.data?.request?.id;
   await approve(vs2, admin.token);
-  r = await api('POST', `/procurement/${vs2}/order`, admin.token, { vehicle_number: 'HR55 CD 1234' });
-  check('order with a vehicle = already confirmed', r.status === 200 && r.data.request.awaitingVendorDispatch === false && r.data.request.vendorConfirmedAt, show(r));
+  r = await api('POST', `/procurement/${vs2}/order`, admin.token, {});
+  check('order placed with no vehicle and no Bilty', r.status === 200 && r.data.request.awaitingVendorDispatch === true, show(r));
 
   // ------------------------------------------------------------ 4. litres sent / received
   section('4. Litres sent and received on a movement');
@@ -253,6 +268,63 @@ async function approve(id, token) {
   const used = (r.data?.materialUsage || r.data?.task?.materialUsage || []);
   const anyLitres = JSON.stringify(r.data || {}).includes('"litresUsed":15');
   check('task detail reports litres used', r.status === 200 && (anyLitres || used.some((u) => u.litresUsed === 15)), show(r));
+
+  // ------------------------------------------------------------ 6. machine units
+  section('6. Machines: several units on one line');
+  const [[toolRow]] = await pool.query("SELECT id FROM tools WHERE status='active' ORDER BY id LIMIT 1");
+  r = await api('POST', '/procurement/batches', admin.token, {
+    flow: 'vendor_site', status: 'requested', items: [
+      { item_type: 'tool', tool_id: toolRow.id, quantity: 3, project_id: projectId, site_id: siteId, task_id: taskId, tool_procurement_type: 'to_be_purchased', estimated_rate: 5000, procurement_kind: 'project_site' },
+      { item_type: 'material', material_id: bags.id, quantity: 2, unit: bags.unit, project_id: projectId, site_id: siteId, task_id: taskId, procurement_kind: 'project_site', excess_reason: 'Extra for test' },
+    ],
+  });
+  const tb = r.data?.batch?.id;
+  check('batch with 3 machine units created', (r.status === 201 || r.status === 200) && tb, show(r));
+  const tItems = tb ? await q("SELECT quantity FROM procurement_requests WHERE batch_id=? AND item_type='tool'", [tb]) : [];
+  check('3 units become 3 tracked one-unit requests', tItems.length === 3 && tItems.every((x) => Number(x.quantity) === 1), JSON.stringify(tItems));
+  check('batch view lists all 4 items', r.data?.items?.length === 4, `items=${r.data?.items?.length}`);
+  r = await api('POST', '/procurement/batches', admin.token, {
+    flow: 'vendor_site', status: 'requested', items: [{ item_type: 'tool', tool_id: toolRow.id, quantity: 0, project_id: projectId, procurement_kind: 'project_site' }],
+  });
+  check('0 units rejected', r.status === 400, show(r));
+
+  // ------------------------------------------------------------ 7. task multi filter
+  section('7. Procurement list filtered by several tasks');
+  r = await api('POST', '/tasks', admin.token, { project_id: projectId, site_id: siteId, name: 'Plumbing' });
+  const task2 = r.data?.task?.id || r.data?.id;
+  r = await api('GET', `/procurement?taskIds=${taskId}&pageSize=50`, admin.token);
+  const oneTask = r.data?.requests || [];
+  check('filter by one task', r.status === 200 && oneTask.length > 0 && oneTask.every((x) => x.task?.id === taskId), show(r));
+  r = await api('GET', `/procurement?taskIds=${task2}&pageSize=50`, admin.token);
+  check('task with no requests -> empty', r.status === 200 && (r.data?.requests || []).length === 0, show(r));
+  r = await api('GET', `/procurement?taskIds=${taskId},${task2}&pageSize=50`, admin.token);
+  check('several tasks at once', r.status === 200 && (r.data?.requests || []).length === oneTask.length, show(r));
+  r = await api('GET', '/procurement?taskIds=abc', admin.token);
+  check('bad task list rejected', r.status === 400, show(r));
+
+  // ------------------------------------------------------------ 8. name-wise attendance
+  section('8. Name-wise labour attendance');
+  const [w1] = await pool.query("INSERT INTO contractor_workers (contractor_id, full_name, skill_category, daily_rate, status) VALUES (?, 'Ramesh Kumar', 'Mason', 750, 'active')", [contractorId]);
+  const [w2] = await pool.query("INSERT INTO contractor_workers (contractor_id, full_name, skill_category, daily_rate, status) VALUES (?, 'Suresh Pal', 'Helper', 500, 'active')", [contractorId]);
+  r = await api('GET', '/hr/labour-directory/lookup', admin.token);
+  const dir = (r.data?.workforce || []).filter((x) => [w1.insertId, w2.insertId].includes(x.workerId));
+  check('directory lookup gives name, trade and rate', dir.length === 2 && dir.some((x) => x.name === 'Ramesh Kumar' && x.dailyRate === 750 && x.trade === 'Mason'), show(r));
+  r = await api('POST', `/projects/${projectId}/labour`, admin.token, {
+    record_date: '2026-11-16', site_id: siteId, contractor_id: contractorId, task_id: taskId, payment_status: 'verified',
+    workers: [
+      { worker_id: w1.insertId, worker_type: 'daily_wage', name: 'Ramesh Kumar', trade: 'Mason', present: true, daily_rate: 800 },
+      { worker_id: w2.insertId, worker_type: 'daily_wage', name: 'Suresh Pal', trade: 'Helper', present: true, daily_rate: 500 },
+    ],
+  });
+  check('attendance saved name-wise', (r.status === 201 || r.status === 200), show(r));
+  const att = await q("SELECT worker_name, daily_rate, present_count FROM labour_records WHERE site_id=? AND record_date='2026-11-16' AND worker_name IS NOT NULL ORDER BY worker_name", [siteId]);
+  check('one row per worker with the edited rate', att.length === 2 && att[0].worker_name === 'Ramesh Kumar' && Number(att[0].daily_rate) === 800 && Number(att[1].daily_rate) === 500, JSON.stringify(att));
+  const tl = await q("SELECT worker_name FROM task_worker_logs WHERE task_id=? AND work_date='2026-11-16'", [taskId]);
+  check('present workers logged on the task by name', tl.length === 2 && tl.some((x) => x.worker_name === 'Suresh Pal'), JSON.stringify(tl));
+  r = await api('POST', `/projects/${projectId}/labour`, admin.token, { record_date: '2026-11-16', workers: [{ name: '', present: true }] });
+  check('empty worker list rejected', r.status === 400, show(r));
+  r = await api('POST', `/projects/${projectId}/labour`, admin.token, { record_date: '2026-11-16', site_id: siteId, category: 'Mason', worker_count: 3, present_count: 3, daily_rate: 650 });
+  check('crew-count entry still works', r.status === 201 || r.status === 200, show(r));
 
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);

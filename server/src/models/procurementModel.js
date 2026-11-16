@@ -63,6 +63,7 @@ const LIST_SELECT = `
     r.area_id, pa.name AS area_name, pa.area_type, r.transport_cost,
     r.batch_id, pb.batch_number,
     r.litres_per_unit, r.total_litres, r.vendor_confirmed_at, r.vendor_confirmed_by,
+    r.bilty_number, r.received_bilty_number,
     COALESCE((
       SELECT SUM(te.amount) FROM expenses te
       WHERE te.status NOT IN ('rejected', 'cancelled') AND (
@@ -100,7 +101,7 @@ const COUNT_FROM = `
   LEFT JOIN tools t ON t.id = r.tool_id
 `;
 
-function buildFilters({ search, status, projectId, siteId, materialId, toolId, itemType, supplier, priority, kind, contractorId, userId, pmProjectIds, areaId, deliveryMode, batchId }) {
+function buildFilters({ search, status, projectId, siteId, taskIds, materialId, toolId, itemType, supplier, priority, kind, contractorId, userId, pmProjectIds, areaId, deliveryMode, batchId }) {
   const where = [];
   const params = [];
 
@@ -124,6 +125,12 @@ function buildFilters({ search, status, projectId, siteId, materialId, toolId, i
   if (siteId) {
     where.push('r.site_id = ?');
     params.push(Number(siteId));
+  }
+  // One or more tasks ("1,4,9"); absent = all tasks.
+  const taskList = String(taskIds || '').split(',').map((v) => Number(v)).filter((v) => v > 0);
+  if (taskList.length) {
+    where.push(`r.task_id IN (${taskList.map(() => '?').join(',')})`);
+    params.push(...taskList);
   }
   if (materialId) {
     where.push('r.material_id = ?');
@@ -272,7 +279,7 @@ const WRITABLE = [
   'item_type', 'tool_id', 'amount_paid', 'amount_due', 'payment_status',
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'tool_unit_id', 'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'requester_role', 'contractor_id',
-  'area_id', 'transport_cost', 'batch_id', 'litres_per_unit', 'total_litres', 'vendor_confirmed_at', 'vendor_confirmed_by',
+  'area_id', 'transport_cost', 'batch_id', 'litres_per_unit', 'total_litres', 'vendor_confirmed_at', 'vendor_confirmed_by', 'bilty_number',
 ];
 
 // ---------------------------------------------------------------- batches

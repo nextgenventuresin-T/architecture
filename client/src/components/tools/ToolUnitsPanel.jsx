@@ -228,7 +228,7 @@ function UnitFormModal({ tools, unit, onClose, onSaved }) {
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { vendorApi.list().then((d) => setVendors(d.vendors ?? [])).catch(() => setVendors([])); }, []);
+  useEffect(() => { vendorApi.listAll().then(setVendors).catch(() => setVendors([])); }, []);
   const set = (k) => (e) => { setV((c) => ({ ...c, [k]: e.target.value })); setErrors((c) => ({ ...c, [k]: undefined })); };
 
   async function save() {
@@ -358,8 +358,8 @@ function AllocateModal({ unit, transfer, onClose, onSaved }) {
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    projectsApi.list({ pageSize: 50 }).then((d) => setProjects(d.projects ?? [])).catch(() => {});
-    contractorsApi.list({ pageSize: 50 }).then((d) => setContractors(d.contractors ?? [])).catch(() => {});
+    projectsApi.listAll().then(setProjects).catch(() => {});
+    contractorsApi.listAll().then(setContractors).catch(() => {});
   }, []);
   useEffect(() => {
     if (!v.project_id) { setSites([]); setTasks([]); return; }
