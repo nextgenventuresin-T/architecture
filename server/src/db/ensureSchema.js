@@ -13,6 +13,7 @@ const STARTUP_MIGRATIONS = [
   '20261115_litres_vendor_dispatch',
   '20261116_bilty_awb',
   '20261116_named_attendance',
+  '20261117_tool_requests_nullable_material',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };
