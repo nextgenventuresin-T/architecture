@@ -1,7 +1,9 @@
 'use strict';
 
 /**
- * Migration 20261117 — machine / tool requests have no material.
+ * Migration 20261117 — columns the code saves as NULL but the Hostinger import kept NOT NULL.
+ *
+ * 1. Machine / tool requests have no material.
  *
  * A machine or tool line is saved with material_id = NULL and tool_id set. The Hostinger
  * database (imported from TiDB) still had procurement_requests.material_id NOT NULL, so
@@ -14,6 +16,14 @@
 const COLUMNS = [
   ['procurement_requests', 'material_id'],
   ['material_movements', 'material_id'],
+  // Daily work logged against a TASK has no phase (phases are the older way of logging),
+  // and the code saves these as NULL. The Hostinger import still had them NOT NULL, so
+  // every task-based daily log failed with ER_BAD_NULL_ERROR (phase_number).
+  ['daily_work_updates', 'phase_number'],
+  ['daily_work_updates', 'phase_title'],
+  ['daily_work_updates', 'subcategory'],
+  ['daily_work_photos', 'phase_number'],
+  ['daily_work_photos', 'subcategory'],
 ];
 
 async function up(conn) {
