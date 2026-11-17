@@ -14,6 +14,7 @@ const STARTUP_MIGRATIONS = [
   '20261116_bilty_awb',
   '20261116_named_attendance',
   '20261117_tool_requests_nullable_material',
+  '20261117_restore_failed_daily_log_stock',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };

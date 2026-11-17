@@ -421,7 +421,49 @@ async function getById(id, hrScope) {
   };
 }
 
+/**
+ * Undoes what a daily-log save already wrote when the log row itself then fails: the stock
+ * issued for the material used (put back into the same warehouse) and the expenses recorded.
+ * Without this, a failed save left the material consumed with no log - "0 available".
+ */
+async function undoPartialSave({ issueTx, expenseIds }) {
+  if (expenseIds.length) await pool.query('DELETE FROM expenses WHERE id IN (?)', [expenseIds]);
+  if (!issueTx?.id) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[tx]] = await conn.query("SELECT * FROM warehouse_transactions WHERE id = ? AND transaction_type = 'issue' FOR UPDATE", [issueTx.id]);
+    if (tx) {
+      await warehouseModel.adjustStockSlot({
+        warehouseId: tx.warehouse_id, materialId: tx.material_id,
+        projectId: tx.project_id, siteId: tx.site_id, delta: Number(tx.quantity),
+      }, conn);
+      await conn.query('DELETE FROM warehouse_transactions WHERE id = ?', [tx.id]);
+    }
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
 async function create(payload, files, hrScope, userId) {
+  const track = { issueTx: null, expenseIds: [], saved: false };
+  try {
+    return await createUnsafe(payload, files, hrScope, userId, track);
+  } catch (error) {
+    if (!track.saved && (track.issueTx || track.expenseIds.length)) {
+      await undoPartialSave(track).catch((undoError) => {
+        console.error(`Daily work: could not undo a failed save (tx ${track.issueTx?.id}): ${undoError.message}`);
+      });
+    }
+    throw error;
+  }
+}
+
+async function createUnsafe(payload, files, hrScope, userId, track) {
   const projectId = Number(payload.project_id);
   const siteId = payload.site_id ? Number(payload.site_id) : null;
   const taskId = payload.task_id ? Number(payload.task_id) : null;
@@ -659,7 +701,7 @@ async function create(payload, files, hrScope, userId) {
 
     const taskLabel = task ? `Task: ${task.name}${subtask ? ` › ${subtask.name}` : ''}` : `Phase ${phaseNumber || ''} (${subcategory})`;
 
-    issueTx = await warehouseService.issueStock({
+    issueTx = track.issueTx = await warehouseService.issueStock({
       material_id: materialId,
       warehouse_id: warehouse.id,
       project_id: projectId,
@@ -698,6 +740,7 @@ async function create(payload, files, hrScope, userId) {
       created_by: userId,
       source_type: 'daily_work_material',
     });
+    track.expenseIds.push(expenseId);
   }
 
   const workDoneText = payload.work_done?.trim()
@@ -706,7 +749,7 @@ async function create(payload, files, hrScope, userId) {
   // Machine / Tool expense processing
   if (toolCost > 0) {
     const toolExpenseNumber = `EXP-TOOL-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
-    await financeModel.createExpense({
+    track.expenseIds.push(await financeModel.createExpense({
       expense_number: toolExpenseNumber,
       project_id: projectId,
       site_id: siteId,
@@ -724,7 +767,7 @@ async function create(payload, files, hrScope, userId) {
       status: 'approved',
       notes: toolRemarks || null,
       created_by: userId,
-    });
+    }));
   }
 
   // Miscellaneous expense processing
@@ -734,7 +777,7 @@ async function create(payload, files, hrScope, userId) {
 
   if (miscAmount > 0) {
     const miscExpenseNumber = `EXP-MISC-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
-    await financeModel.createExpense({
+    track.expenseIds.push(await financeModel.createExpense({
       expense_number: miscExpenseNumber,
       project_id: projectId,
       site_id: siteId,
@@ -752,7 +795,7 @@ async function create(payload, files, hrScope, userId) {
       status: 'approved',
       notes: miscRemarks || null,
       created_by: userId,
-    });
+    }));
   }
 
   // Area of today's work: chosen on the form, else the subtask's / task's own area.
@@ -797,6 +840,7 @@ async function create(payload, files, hrScope, userId) {
     unit_cost: consumptionUnitCost,
     material_cost: consumptionTotal,
   });
+  track.saved = true; // the log row exists: later steps (photos, workers) never undo stock
 
   if (expenseId) {
     await pool.query('UPDATE expenses SET source_id = ? WHERE id = ?', [updateId, expenseId]);
