@@ -90,11 +90,12 @@ export default function AppRoutes() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/unauthorised" element={<UnauthorisedPage />} />
 
-      {/* Admin area: one guarded layout, every module nested inside it */}
+      {/* Admin area: one guarded layout, every module nested inside it. Admin only -
+          a Project Manager works in /pm, scoped to their own projects and sites. */}
       <Route
         path="/admin"
         element={
-          <ProtectedRoute allowedRoles={[ROLES.ADMIN, ROLES.PROJECT_MANAGER]}>
+          <ProtectedRoute allowedRoles={[ROLES.ADMIN]}>
             <AdminLayout />
           </ProtectedRoute>
         }

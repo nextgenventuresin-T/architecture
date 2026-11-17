@@ -53,9 +53,9 @@ async function list(query, hrScope) {
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 10));
 
-  const scopedQuery = hrScope?.role === 'contractor'
-    ? { ...query, contractorId: hrScope.contractorId }
-    : query;
+  let scopedQuery = query;
+  if (hrScope?.role === 'contractor') scopedQuery = { ...query, contractorId: hrScope.contractorId };
+  if (hrScope?.role === 'project_manager') scopedQuery = { ...query, projectIds: hrScope.pmProjectIds || [] };
   const { rows, total } = await projectModel.findAll({ ...scopedQuery, page, pageSize });
 
   return {

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
+import { useAuth } from '../../hooks/useAuth';
 import { procurementApi } from '../../api/procurementApi';
 import { Card, CardHeader, CardBody } from '../ui/Card';
 import Badge from '../ui/Badge';
@@ -10,6 +11,8 @@ import { PRIORITY_LABELS, PRIORITY_TONE, PROCUREMENT_KIND_LABELS, procurementFlo
 
 /** Project/site, material, supplier and the request's own quantity/cost details. */
 export default function OverviewTab({ request, movement }) {
+  // Project / site pages live in the Admin area, so only an admin gets links to them.
+  const isAdmin = useAuth()?.user?.role === 'admin';
   return (
     <div className="space-y-6">
       <Card>
@@ -26,15 +29,15 @@ export default function OverviewTab({ request, movement }) {
               { label: 'Destination', value: request.destination?.name || (request.project ? `${request.project.name}${request.site ? ` · ${request.site.name}` : ''}` : '—') },
               {
                 label: 'Project',
-                value: request.project ? (
+                value: request.project ? (isAdmin ? (
                   <Link to={`/admin/projects/${request.project.id}`} className="text-brand-700 hover:underline">
                     {request.project.code} — {request.project.name}
                   </Link>
-                ) : '—',
+                ) : `${request.project.code} — ${request.project.name}`) : '—',
               },
               {
                 label: 'Site',
-                value: request.site && request.project ? (
+                value: request.site && request.project && isAdmin ? (
                   <Link
                     to={`/admin/projects/${request.project.id}/sites/${request.site.id}`}
                     className="text-brand-700 hover:underline"

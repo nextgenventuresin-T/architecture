@@ -30,11 +30,20 @@ async function loadContext(req) {
   const userId = req.user?.id;
   if (!userId) throw ApiError.unauthorized();
 
-  const [permissions, projectIds, siteIds] = await Promise.all([
+  let [permissions, projectIds, siteIds] = await Promise.all([
     userAccessModel.findPermissionsForUser(userId),
     userAccessModel.findUserProjectIds(userId),
     userAccessModel.findUserSiteIds(userId),
   ]);
+
+  // A Project Manager sees only the projects / sites they are assigned to - deny by
+  // default, like a contractor. "No grants = unrestricted" applies to other roles only.
+  const isPm = req.user.role === ROLES.PROJECT_MANAGER;
+  if (isPm) {
+    const pm = await require('../services/pmScopeService').resolve(userId);
+    projectIds = pm.projectIds;
+    siteIds = pm.siteIds;
+  }
 
   req.accessContext = {
     userId,
@@ -47,8 +56,8 @@ async function loadContext(req) {
     // existed, so every pre-existing user has no rows — defaulting to "denied"
     // would lock the whole organisation out. Scoping switches on per user the
     // moment an admin grants their first explicit project.
-    projectScoped: projectIds.length > 0,
-    siteScoped: siteIds.length > 0,
+    projectScoped: isPm || projectIds.length > 0,
+    siteScoped: isPm || siteIds.length > 0,
   };
 
   return req.accessContext;

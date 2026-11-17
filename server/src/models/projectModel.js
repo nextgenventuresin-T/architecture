@@ -32,7 +32,7 @@ const LIST_SELECT = `
 `;
 
 /** Paginated, filterable project list. */
-async function findAll({ search, status, contractorId, clientId, page = 1, pageSize = 10 }) {
+async function findAll({ search, status, contractorId, clientId, projectIds, page = 1, pageSize = 10 }) {
   // Automatically evaluate and mark delayed projects server-side
   await pool.query(
     "UPDATE projects SET status = 'delayed' WHERE expected_completion < CURDATE() AND status NOT IN ('completed', 'delayed', 'on-hold') AND is_archived = 0"
@@ -54,6 +54,11 @@ async function findAll({ search, status, contractorId, clientId, page = 1, pageS
   if (contractorId && contractorId !== 'all') {
     where.push('(p.contractor_id = ? OR p.id IN (SELECT project_id FROM sites WHERE contractor_id = ?))');
     params.push(Number(contractorId), Number(contractorId));
+  }
+  // Project Manager: only the projects they are assigned to (an empty list shows none).
+  if (Array.isArray(projectIds)) {
+    if (!projectIds.length) where.push('1 = 0');
+    else { where.push('p.id IN (?)'); params.push(projectIds.map(Number)); }
   }
   if (clientId && clientId !== 'all') {
     where.push('p.client_id = ?');
