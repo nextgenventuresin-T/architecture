@@ -27,7 +27,7 @@ import { projectsApi } from '../../api/projectsApi';
 import { dailyWorkApi } from '../../api/dailyWorkApi';
 import DailyWorkDetailModal from '../../components/dailyWork/DailyWorkDetailModal';
 import PmWorkUpdateModal from '../../components/dailyWork/PmWorkUpdateModal';
-import { formatNumber, formatDate } from '../../utils/format';
+import { formatNumber, formatDate, formatDateTime } from '../../utils/format';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 
 export default function PmDailyWorkPage() {
@@ -180,6 +180,11 @@ export default function PmDailyWorkPage() {
                     <span className="text-xs text-ink-subtle">
                       📅 {formatDate(up.work_date)}
                     </span>
+                    {up.created_at && (
+                      <span className="text-xs text-ink-subtle">
+                        · Saved {formatDateTime(up.created_at)}{up.recorded_by_name ? ` by ${up.recorded_by_name}` : ''}
+                      </span>
+                    )}
                   </div>
 
                   <p className="text-sm text-ink line-clamp-3">

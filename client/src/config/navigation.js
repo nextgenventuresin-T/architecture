@@ -20,6 +20,7 @@ import {
   UserCheck,
   CalendarCheck,
   CalendarClock,
+  ClipboardList,
 } from 'lucide-react';
 
 /**
@@ -31,6 +32,7 @@ export const ADMIN_NAV = [
   { label: 'Dashboard', path: '/admin', icon: LayoutDashboard, end: true },
   { label: 'My Portal', path: '/admin/my-portal', icon: CalendarCheck },
   { label: 'Projects / Sites', path: '/admin/projects', icon: Building2 },
+  { label: 'Daily Work Updates', path: '/admin/daily-work', icon: ClipboardList },
   { label: 'Clients', path: '/admin/clients', icon: Briefcase },
   { label: 'Contractors', path: '/admin/contractors', icon: HardHat },
   { label: 'Project Managers', path: '/admin/project-managers', icon: UserCheck },

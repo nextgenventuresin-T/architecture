@@ -103,6 +103,8 @@ export default function AppRoutes() {
         <Route index element={<AdminDashboardPage />} />
         <Route path="my-portal" element={<MyPortalPage />} />
         <Route path="staff-attendance" element={<StaffAttendancePage />} />
+        {/* Every site's daily work log, newest saved first (the same list a PM sees for their sites). */}
+        <Route path="daily-work" element={<PmDailyWorkPage />} />
 
         {/* Interface 3 — Projects & Sites. Declared before the placeholder
             loop so these paths win over the generic module screen. */}
@@ -204,6 +206,7 @@ export default function AppRoutes() {
             m.path !== '/admin/projects' &&
             m.path !== '/admin/my-portal' &&
             m.path !== '/admin/staff-attendance' &&
+            m.path !== '/admin/daily-work' &&
             m.path !== '/admin/clients' &&
             m.path !== '/admin/contractors' &&
             m.path !== '/admin/project-managers' &&

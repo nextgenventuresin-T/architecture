@@ -497,6 +497,7 @@ async function getWorkUpdates(query, userId, role) {
             s.name AS site_name,
             ct.name AS contractor_name,
             pt.name AS task_name,
+            u.full_name AS recorded_by_name,
             (SELECT COUNT(*) FROM daily_work_photos WHERE work_update_id = dw.id) AS photo_count,
             (SELECT COUNT(*) FROM task_worker_logs WHERE daily_work_id = dw.id) AS worker_count
      FROM daily_work_updates dw
@@ -504,8 +505,9 @@ async function getWorkUpdates(query, userId, role) {
      LEFT JOIN sites s ON s.id = dw.site_id
      LEFT JOIN contractors ct ON ct.id = dw.contractor_id
      LEFT JOIN project_tasks pt ON pt.id = dw.task_id
+     LEFT JOIN users u ON u.id = dw.created_by
      WHERE ${where.join(' AND ')}
-     ORDER BY dw.work_date DESC, dw.id DESC
+     ORDER BY dw.created_at DESC, dw.id DESC
      LIMIT 50`,
     params
   );
