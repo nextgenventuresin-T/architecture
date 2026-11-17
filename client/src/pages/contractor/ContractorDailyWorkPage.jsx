@@ -1508,6 +1508,8 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                         {taskInventory.map((item) => (
                           <option key={item.material_id} value={item.material_id}>
                             {item.name} ({item.code}) — {formatNumber(item.availableStock)} {item.unit} available
+                            {/* Why it is short: received for this task, already logged, and actually in stock. */}
+                            {Number(item.availableStock) <= 0 && ` (received ${formatNumber(item.procured)}, used ${formatNumber(item.used)}, in stock ${formatNumber(item.inStock ?? 0)})`}
                           </option>
                         ))}
                       </SearchableSelect>

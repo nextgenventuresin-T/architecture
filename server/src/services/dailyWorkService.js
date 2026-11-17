@@ -101,7 +101,7 @@ async function scopedTaskMaterialLines(taskId, holder, subtaskId) {
       isLiquid: isLiquidMaterial({ unit: r.unit, category: r.category, name: r.name }),
       litresPerUnit: r.litres_per_unit != null ? Number(r.litres_per_unit) : null,
       procured: Number(r.procured), used: Number(u.used), taskAvailable: left,
-      availableStock: Math.min(left, stock), costPerUnit: cost || 0,
+      availableStock: Math.min(left, stock), inStock: stock, costPerUnit: cost || 0,
     });
   }
   return out.filter((x) => x.procured > 0);
