@@ -323,7 +323,20 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
 
         // Pre-populate workers list from actual assigned workers
         if (assigned.length > 0) {
-          const initialWorkers = assigned.map((l) => ({
+          const initialWorkers = assigned.map(assignedToRow);
+          setWorkers(initialWorkers);
+        } else {
+          setWorkers([]);
+        }
+      })
+      .catch((err) => {
+        console.error('Error fetching task details for labour:', err);
+      });
+  }, [taskId, subtaskId]);
+
+  // A labour Admin assigned to this task / subtask, as a row of "Workers on Site Today".
+  function assignedToRow(l) {
+    return ({
             workerId: l.workerId || l.worker_id || null,
             workerType: l.workerType || l.worker_type || 'daily_wage',
             workerName: l.workerName || l.labourName || l.person_name || 'Worker',
@@ -335,16 +348,8 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
             dailyWage: (l.workerType === 'company_labour' || l.workerType === 'company_employee' || l.isCompanyLabour || String(l.labourType).toLowerCase().includes('company')) ? 0 : Number(l.dailyWage || l.daily_wage || 750),
             workPerformed: '',
             isPresent: true,
-          }));
-          setWorkers(initialWorkers);
-        } else {
-          setWorkers([]);
-        }
-      })
-      .catch((err) => {
-        console.error('Error fetching task details for labour:', err);
-      });
-  }, [taskId, subtaskId]);
+    });
+  }
 
   const handleTaskChange = (selectedId) => {
     setTaskId(selectedId);
@@ -1281,6 +1286,29 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
 
                     <div className="flex flex-wrap items-center gap-2">
                       {/* My registered workers (contractor's own) */}
+                      {/* Labour Admin assigned to this task / subtask (Labour Directory -> Assign) */}
+                      {taskAssignedLabour.some((l) => l.workerId || l.worker_id) && (
+                        <SearchableSelect
+                          value=""
+                          onChange={(e) => {
+                            const l = taskAssignedLabour.find((x) => String(x.workerId || x.worker_id) === e.target.value);
+                            if (l) setWorkers((prev) => [...prev, assignedToRow(l)]);
+                          }}
+                          aria-label="Add assigned labour"
+                          searchPlaceholder="Search assigned labour…"
+                          className="min-w-[13rem] rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-1.5 text-xs text-emerald-900"
+                        >
+                          <option value="">+ Assigned labour…</option>
+                          {taskAssignedLabour
+                            .filter((l) => (l.workerId || l.worker_id) && !workers.some((w) => String(w.workerId) === String(l.workerId || l.worker_id)))
+                            .map((l) => (
+                              <option key={l.workerId || l.worker_id} value={l.workerId || l.worker_id}>
+                                {l.workerName || l.labourName || 'Worker'}{l.trade ? ` · ${l.trade}` : ''}{l.subtaskName ? ` (${l.subtaskName})` : ''}
+                              </option>
+                            ))}
+                        </SearchableSelect>
+                      )}
+
                       <SearchableSelect
                         value=""
                         onChange={(e) => {

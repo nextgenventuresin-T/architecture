@@ -24,7 +24,10 @@ import {
   CreditCard,
   Pencil,
   Trash2,
+  Link2,
 } from 'lucide-react';
+import AssignToTaskModal from '../../../components/labour/AssignToTaskModal';
+import Alert from '../../../components/ui/Alert';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card, CardBody, CardHeader } from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
@@ -64,6 +67,9 @@ export default function LabourDirectoryPage() {
 
   // Edit Worker Modal
   const [selectedWorkerForEdit, setSelectedWorkerForEdit] = useState(null);
+  // Assign a labour to Project -> Site -> Task -> Subtask (shows in that task's daily log).
+  const [workerToAssign, setWorkerToAssign] = useState(null);
+  const [assignNotice, setAssignNotice] = useState(null);
 
   // Delete Worker State
   const [workerToDelete, setWorkerToDelete] = useState(null);
@@ -444,6 +450,8 @@ export default function LabourDirectoryPage() {
           </div>
         }
       />
+
+      {assignNotice && <Alert tone="success" className="mb-4">{assignNotice}</Alert>}
 
       {/* Top Main Navigation Tabs */}
       <div className="border-b border-line">
@@ -871,6 +879,16 @@ export default function LabourDirectoryPage() {
                             >
                               <History className="h-3.5 w-3.5" />
                               <span className="hidden xl:inline">History</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => { setAssignNotice(null); setWorkerToAssign(row); }}
+                              className="h-7 text-xs px-2 gap-1 text-brand-700 hover:border-brand-300"
+                              title="Assign to a project / task / subtask"
+                            >
+                              <Link2 className="h-3.5 w-3.5" />
+                              <span className="hidden xl:inline">Assign</span>
                             </Button>
                             <Button
                               size="sm"
@@ -1563,6 +1581,13 @@ export default function LabourDirectoryPage() {
         onCreated={() => {
           loadDirectory();
         }}
+      />
+
+      {/* ASSIGN TO TASK MODAL */}
+      <AssignToTaskModal
+        worker={workerToAssign}
+        onClose={() => setWorkerToAssign(null)}
+        onAssigned={(message) => { setWorkerToAssign(null); setAssignNotice(message); loadDirectory(); }}
       />
 
       {/* EDIT WORKER MODAL */}
