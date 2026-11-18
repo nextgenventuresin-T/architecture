@@ -95,8 +95,10 @@ export default function AssignToTaskModal({ worker, onClose, onAssigned }) {
       try {
         await tasksApi.assignWorker(t.taskId, {
           subtask_id: t.subtaskId,
-          worker_id: worker.id,
-          worker_type: isCompany ? 'company_labour' : 'daily_wage',
+          // A directory row's `id` is a label like "daily_wage-12"; the worker number is workerId.
+          worker_id: Number(worker.workerId ?? worker.id),
+          worker_type: ['daily_wage', 'company_labour', 'company_employee'].includes(worker.workerType)
+            ? worker.workerType : (isCompany ? 'company_labour' : 'daily_wage'),
           worker_name: worker.fullName || worker.name,
           worker_code: worker.workerCode || null,
           phone: worker.phone || null,
@@ -112,7 +114,10 @@ export default function AssignToTaskModal({ worker, onClose, onAssigned }) {
         });
         ok += 1;
       } catch (caught) {
-        failed.push({ key: t.key, label: t.label, message: caught.response?.data?.error?.message || caught.message || 'Could not assign.' });
+        // Show the field's own reason (e.g. "Valid worker ID is required.") rather than the generic one.
+        const apiError = caught.response?.data?.error;
+        const detail = apiError?.details && Object.values(apiError.details)[0];
+        failed.push({ key: t.key, label: t.label, message: detail || apiError?.message || caught.message || 'Could not assign.' });
       }
     }
     setSaving(false);
