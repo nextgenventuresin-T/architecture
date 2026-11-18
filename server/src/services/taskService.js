@@ -47,13 +47,8 @@ async function getTaskDetail(taskId, hrScope) {
 }
 
 async function isContractorAssignedToProjectOrSite(contractorId, projectId, siteId) {
-  if (siteId) {
-    const site = await siteModel.findById(siteId);
-    if (site && Number(site.contractor_id) === Number(contractorId)) return true;
-  }
-  const project = await projectModel.findById(projectId);
-  if (project && Number(project.contractor_id) === Number(contractorId)) return true;
-  return false;
+  // Any contractor on the site's (or, with no site, the project's) team.
+  return require('./siteTeam').contractorWorksOn(contractorId, projectId, siteId || null);
 }
 
 async function createTask(payload, userId, hrScope) {

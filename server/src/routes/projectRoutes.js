@@ -22,6 +22,12 @@ const TYPES = ['residential', 'commercial', 'industrial', 'institutional', 'infr
 const canCreate = requirePermission('projects', 'create');
 const canEdit = requirePermission('projects', 'edit');
 
+// Several contractors / engineers on one project or site (lists of ids).
+const teamListRules = ['contractor_ids', 'site_engineer_ids'].flatMap((f) => [
+  body(f).optional().isArray().withMessage('Send a list.'),
+  body(`${f}.*`).optional().isInt({ min: 1 }).withMessage('Select a valid option.').toInt(),
+]);
+
 const optionalId = (field) =>
   body(field).optional({ nullable: true }).isInt({ min: 1 }).withMessage('Select a valid option.').toInt();
 
@@ -46,6 +52,7 @@ const projectRules = (isCreate) => {
     optionalId('architect_id'),
     optionalId('site_engineer_id'),
     optionalId('contractor_id'),
+    ...teamListRules,
     ...areaMeasureRules(body),
   ];
 };
@@ -74,7 +81,7 @@ router.delete('/:id', requireRole(ROLES.ADMIN), [param('id').isInt({ min: 1 })],
 router.patch(
   '/:id/team',
   canEdit,
-  [param('id').isInt({ min: 1 }), optionalId('project_manager_id'), optionalId('architect_id'), optionalId('site_engineer_id'), optionalId('contractor_id')],
+  [param('id').isInt({ min: 1 }), optionalId('project_manager_id'), optionalId('architect_id'), optionalId('site_engineer_id'), optionalId('contractor_id'), ...teamListRules],
   validate,
   controller.assignTeam
 );
@@ -88,6 +95,7 @@ router.post(
     body('address').trim().notEmpty().withMessage('Enter the site address.'),
     optionalId('site_engineer_id'),
     optionalId('contractor_id'),
+    ...teamListRules,
     body('labour_count').optional().isInt({ min: 0 }).toInt(),
     body('progress').optional().isInt({ min: 0, max: 100 }).toInt(),
     body('safety_status').optional().isIn(['safe', 'caution', 'incident']),

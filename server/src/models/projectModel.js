@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const siteTeam = require('../services/siteTeam');
 
 /**
  * Read/write access for projects and everything hanging off them.
@@ -52,8 +53,8 @@ async function findAll({ search, status, contractorId, clientId, projectIds, pag
     params.push(status);
   }
   if (contractorId && contractorId !== 'all') {
-    where.push('(p.contractor_id = ? OR p.id IN (SELECT project_id FROM sites WHERE contractor_id = ?))');
-    params.push(Number(contractorId), Number(contractorId));
+    where.push(siteTeam.contractorOnProjectSql('p'));
+    params.push(...siteTeam.contractorOnProjectParams(Number(contractorId)));
   }
   // Project Manager: only the projects they are assigned to (an empty list shows none).
   if (Array.isArray(projectIds)) {
@@ -307,13 +308,15 @@ const relatedQueries = {
            COALESCE(cp.payment_status, 'pending') AS payment_status,
            COALESCE(cp.contract_value - cp.paid_amount, 0) AS outstanding,
            (SELECT COUNT(*) FROM approval_requests a WHERE a.project_id = p.id AND a.status = 'pending') AS pending_approvals,
-           (SELECT COALESCE(AVG(s.progress), 0) FROM sites s WHERE s.project_id = p.id AND s.contractor_id = c.id) AS work_progress
+           (SELECT COALESCE(AVG(s.progress), 0) FROM sites s WHERE s.project_id = p.id AND (s.contractor_id = c.id OR EXISTS (SELECT 1 FROM site_contractors scx WHERE scx.site_id = s.id AND scx.contractor_id = c.id))) AS work_progress
     FROM contractors c
     JOIN projects p ON p.id = ?
     LEFT JOIN contractor_payments cp ON cp.contractor_id = c.id AND cp.project_id = p.id
     WHERE (
       c.id = p.contractor_id
       OR c.id IN (SELECT s2.contractor_id FROM sites s2 WHERE s2.project_id = p.id AND s2.contractor_id IS NOT NULL)
+      OR c.id IN (SELECT pc2.contractor_id FROM project_contractors pc2 WHERE pc2.project_id = p.id)
+      OR c.id IN (SELECT sc2.contractor_id FROM site_contractors sc2 JOIN sites s3 ON s3.id = sc2.site_id WHERE s3.project_id = p.id)
       OR c.id IN (SELECT cp2.contractor_id FROM contractor_payments cp2 WHERE cp2.project_id = p.id)
     )
     GROUP BY c.id, cp.id`,

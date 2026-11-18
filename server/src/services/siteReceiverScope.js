@@ -30,6 +30,12 @@ async function engineerSiteIds(employeeId) {
      SELECT s.id FROM sites s JOIN projects p ON p.id = s.project_id
       WHERE p.site_engineer_id = ? AND p.is_archived = 0
      UNION
+     SELECT se.site_id FROM site_engineers se WHERE se.employee_id = ?
+     UNION
+     SELECT s.id FROM project_engineers pe JOIN sites s ON s.project_id = pe.project_id
+       JOIN projects p ON p.id = pe.project_id AND p.is_archived = 0
+      WHERE pe.employee_id = ?
+     UNION
      SELECT s.id
        FROM employee_assignments a
        JOIN employees e ON e.id = a.employee_id
@@ -37,7 +43,7 @@ async function engineerSiteIds(employeeId) {
                     OR (a.site_id IS NULL AND a.project_id IS NOT NULL AND s.project_id = a.project_id)
       WHERE a.employee_id = ? AND a.is_current = 1
         AND (LOWER(COALESCE(e.designation, '')) LIKE ? OR LOWER(COALESCE(a.role, '')) LIKE ?)`,
-    [employeeId, employeeId, employeeId, ENGINEER_LIKE, ENGINEER_LIKE]
+    [employeeId, employeeId, employeeId, employeeId, employeeId, ENGINEER_LIKE, ENGINEER_LIKE]
   );
   return rows.map((r) => Number(r.id));
 }

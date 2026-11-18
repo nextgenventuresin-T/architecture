@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const siteTeam = require('../services/siteTeam');
 const ApiError = require('../utils/ApiError');
 const { normaliseArea } = require('../config/areaUnits');
 const {
@@ -1323,8 +1324,8 @@ async function findAllTasks({ projectId, siteId, contractorId, status, search, a
   }
 
   if (contractorId) {
-    where.push('(s.contractor_id = ? OR p.contractor_id = ?)');
-    params.push(Number(contractorId), Number(contractorId));
+    where.push(siteTeam.contractorOnSiteSql('s', 'p'));
+    params.push(...siteTeam.contractorOnSiteParams(Number(contractorId)));
   }
 
   if (status && status !== 'all') {

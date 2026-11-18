@@ -67,7 +67,12 @@ async function list(query, hrScope) {
 async function getById(id) {
   const row = await projectModel.findById(id);
   if (!row) throw ApiError.notFound('That project does not exist.');
-  return toProject(row);
+  const project = toProject(row);
+  // Every contractor / engineer on the project (the single fields hold the first).
+  const team = (await require('./siteTeam').teamsFor('project', [project.id]))[project.id];
+  project.contractors = team?.contractors || [];
+  project.team.siteEngineers = team?.engineers || [];
+  return project;
 }
 
 /** Full detail payload backing every tab on the project page. */
@@ -95,11 +100,12 @@ async function getDetail(id, hrScope) {
 
   if (isContractor) {
     const cId = Number(hrScope.contractorId);
-    const isAssignedProject = Number(project.contractor?.id) === cId || sites.some((s) => Number(s.contractor_id) === cId);
-    if (!isAssignedProject) {
+    const siteTeam = require('./siteTeam');
+    if (!(await siteTeam.contractorWorksOn(cId, Number(id), null))) {
       throw ApiError.notFound('That project does not exist.');
     }
-    sites = sites.filter((s) => Number(s.contractor_id) === cId || (!s.contractor_id && Number(project.contractor?.id) === cId));
+    const onSite = await Promise.all(sites.map((s) => siteTeam.contractorWorksOn(cId, Number(id), Number(s.id))));
+    sites = sites.filter((s, i) => onSite[i]);
 
     // Scoped phases for contractor: only titles, subcategories, progress, status, duration
     phases = phases.map((p) => ({
@@ -396,6 +402,10 @@ async function getDetail(id, hrScope) {
     downloadUrl: `/api/projects/${id}/documents/${doc.id}/download`,
   }));
 
+  // Each site's contractors / engineers (several may share a site).
+  const siteTeams = await require('./siteTeam').teamsFor('site', sites.map((s) => s.id));
+  sites = sites.map((s) => ({ ...s, contractors: siteTeams[s.id]?.contractors || [], engineers: siteTeams[s.id]?.engineers || [] }));
+
   return {
     project,
     sites,
@@ -495,6 +505,7 @@ async function create(payload) {
     if (isDuplicateCode(error)) throw ApiError.badRequest('Check the highlighted fields.', CODE_TAKEN);
     throw error;
   }
+  await require('./siteTeam').applyTeam('project', id, payload);
 
   if (payload.tasks && Array.isArray(payload.tasks)) {
     await taskModel.saveProjectTasks(id, payload.tasks, payload.created_by || null);
@@ -535,6 +546,7 @@ async function update(id, payload) {
     if (isDuplicateCode(error)) throw ApiError.badRequest('Check the highlighted fields.', CODE_TAKEN);
     throw error;
   }
+  await require('./siteTeam').applyTeam('project', id, payload);
 
   if (payload.tasks && Array.isArray(payload.tasks)) {
     await taskModel.saveProjectTasks(id, payload.tasks, payload.updated_by || null);
@@ -553,12 +565,14 @@ async function archive(id) {
 async function assignTeam(id, payload) {
   await getById(id);
   await projectModel.updateTeam(id, payload);
+  await require('./siteTeam').applyTeam('project', id, payload);
   return getById(id);
 }
 
 async function addSite(projectId, payload) {
   await getById(projectId);
   const id = await siteModel.create({ ...payload, project_id: projectId });
+  await require('./siteTeam').applyTeam('site', id, payload);
   return siteModel.findById(id);
 }
 

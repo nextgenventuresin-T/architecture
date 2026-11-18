@@ -107,9 +107,8 @@ async function assertContractorOwnsSite(contractorId, projectId, siteId) {
   if (!site || site.project_id !== projectId) throw ApiError.notFound('That site does not exist on this project.');
 
   const project = await projectModel.findById(projectId);
-  const ownsViaSite = site.contractor_id === contractorId;
-  const ownsViaProject = project?.contractor_id === contractorId;
-  if (!ownsViaSite && !ownsViaProject) {
+  // Any contractor on the site's team (several may share a site).
+  if (!(await require('./siteTeam').contractorWorksOn(contractorId, projectId, site.id))) {
     throw ApiError.forbidden('You are not assigned to this project/site.');
   }
   return { project, site };

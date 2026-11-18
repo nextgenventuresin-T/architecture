@@ -350,7 +350,8 @@ async function assertContractorProjectSite(contractorId, projectId, siteId) {
   }
 
   const sites = await projectModel.findRelated(projectId, 'sites');
-  const isAssignedProject = Number(project.contractor_id) === cId || sites.some((s) => Number(s.contractor_id) === cId);
+  const siteTeam = require('./siteTeam');
+  const isAssignedProject = await siteTeam.contractorWorksOn(cId, Number(projectId), null);
   if (!isAssignedProject) {
     throw ApiError.badRequest('Check the highlighted fields.', { project_id: 'You are only allowed to raise expenses for your assigned projects.' });
   }
@@ -360,7 +361,7 @@ async function assertContractorProjectSite(contractorId, projectId, siteId) {
     if (!site) {
       throw ApiError.badRequest('Check the highlighted fields.', { site_id: 'That site does not exist under this project.' });
     }
-    const isAssignedSite = Number(site.contractor_id) === cId || (!site.contractor_id && Number(project.contractor_id) === cId);
+    const isAssignedSite = await siteTeam.contractorWorksOn(cId, Number(projectId), Number(site.id));
     if (!isAssignedSite) {
       throw ApiError.badRequest('Check the highlighted fields.', { site_id: 'You are only allowed to raise expenses for your assigned sites.' });
     }

@@ -653,17 +653,16 @@ async function assertContractorLocation(payload, hrScope) {
   const project = await projectModel.findById(payload.project_id);
   if (!project) throw ApiError.notFound('That project does not exist.');
 
-  const sites = await projectModel.findRelated(payload.project_id, 'sites');
-  const isAssignedProject = Number(project.contractor_id) === cId || sites.some((s) => Number(s.contractor_id) === cId);
-  if (!isAssignedProject) {
+  const siteTeam = require('./siteTeam');
+  if (!(await siteTeam.contractorWorksOn(cId, Number(payload.project_id), null))) {
     throw ApiError.notFound('That project does not exist.');
   }
 
   if (payload.site_id) {
+    const sites = await projectModel.findRelated(payload.project_id, 'sites');
     const site = sites.find((s) => Number(s.id) === Number(payload.site_id));
     if (!site) throw ApiError.notFound('That site does not exist.');
-    const isAssignedSite = Number(site.contractor_id) === cId || (!site.contractor_id && Number(project.contractor_id) === cId);
-    if (!isAssignedSite) {
+    if (!(await siteTeam.contractorWorksOn(cId, Number(payload.project_id), Number(site.id)))) {
       throw ApiError.notFound('That site does not exist.');
     }
   }
@@ -726,19 +725,15 @@ async function resolveFlow(payload, hrScope) {
     await assertContractorLocation(payload, hrScope);
     const { material, tool } = await assertRelationships(payload);
     let destWarehouseId = null;
-    if (payload.site_id) {
-      const site = await siteModel.findById(payload.site_id).catch(() => null);
-      if (site?.contractor_id) {
-        destWarehouseId = await getContractorWarehouseId(site.contractor_id).catch(() => null);
-      }
+    // One contractor on the site: into their warehouse. Several (shared site) or none:
+    // into the site's own Site Store (below).
+    const soleContractor = payload.project_id
+      ? await pmScope.responsibleContractorId(Number(payload.project_id), payload.site_id ? Number(payload.site_id) : null)
+      : null;
+    if (soleContractor) {
+      destWarehouseId = await getContractorWarehouseId(soleContractor).catch(() => null);
     }
-    if (!destWarehouseId && payload.project_id) {
-      const project = await projectModel.findById(payload.project_id).catch(() => null);
-      if (project?.contractor_id) {
-        destWarehouseId = await getContractorWarehouseId(project.contractor_id).catch(() => null);
-      }
-    }
-    // No contractor: the site is run by its Project Manager, into its own Site Store.
+    // No single contractor: the site's own Site Store.
     if (!destWarehouseId && payload.site_id) {
       destWarehouseId = (await warehouseModel.ensureSiteStore(Number(payload.site_id)))?.id || null;
     }
@@ -805,7 +800,9 @@ async function resolveFlow(payload, hrScope) {
     const pmDefault = pmScope.isPm(hrScope) && !payload.destination_contractor_id
       ? await pmScope.responsibleContractorId(Number(payload.project_id), payload.site_id ? Number(payload.site_id) : null)
       : null;
-    const destContractorId = isContractor ? ownContractorId : Number(payload.destination_contractor_id || pmDefault);
+    // A site shared by several contractors keeps one Site Store that all of them use.
+    const sharedStore = payload.site_id ? await pmSiteStoreDestination(payload) : null;
+    const destContractorId = sharedStore ? null : (isContractor ? ownContractorId : Number(payload.destination_contractor_id || pmDefault));
     if (!destContractorId) {
       // A site with no contractor is run by its Project Manager: deliver to its Site Store.
       const store = await pmSiteStoreDestination(payload);
@@ -859,9 +856,10 @@ async function resolveFlow(payload, hrScope) {
     const pmDefault = pmScope.isPm(hrScope) && !payload.destination_contractor_id
       ? await pmScope.responsibleContractorId(Number(payload.project_id), payload.site_id ? Number(payload.site_id) : null)
       : null;
-    const destContractorId = isContractor
+    const sharedStore = payload.site_id ? await pmSiteStoreDestination(payload) : null;
+    const destContractorId = sharedStore ? null : (isContractor
       ? ownContractorId
-      : (payload.destination_contractor_id ? Number(payload.destination_contractor_id) : pmDefault);
+      : (payload.destination_contractor_id ? Number(payload.destination_contractor_id) : pmDefault));
     if (!sourceContractorId) throw ApiError.badRequest('Check the highlighted fields.', { source_contractor_id: 'Select the source contractor.' });
     if (!destContractorId) {
       // Transfer from a contractor INTO a PM-run site's Site Store.

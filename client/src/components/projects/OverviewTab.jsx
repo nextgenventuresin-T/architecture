@@ -29,7 +29,7 @@ export default function OverviewTab({ detail }) {
                 { label: 'Project Area', value: formatArea(project.area) },
                 { label: 'Current phase', value: project.currentPhase },
                 { label: 'Sites', value: `${project.siteCount} site${project.siteCount === 1 ? '' : 's'}` },
-                { label: 'Contractor', value: project.contractor?.name },
+                { label: 'Contractors', value: (project.contractors?.length ? project.contractors.map((c) => c.name).join(', ') : project.contractor?.name) },
               ]}
             />
             {project.description && (
@@ -84,8 +84,8 @@ export default function OverviewTab({ detail }) {
               items={[
                 { label: 'Project manager', value: project.team.projectManager?.name },
                 { label: 'Architect', value: project.team.architect?.name },
-                { label: 'Site engineer', value: project.team.siteEngineer?.name },
-                { label: 'Contractor', value: project.contractor?.name },
+                { label: 'Site engineers', value: (project.team.siteEngineers?.length ? project.team.siteEngineers.map((e) => e.name).join(', ') : project.team.siteEngineer?.name) },
+                { label: 'Contractors', value: (project.contractors?.length ? project.contractors.map((c) => c.name).join(', ') : project.contractor?.name) },
               ]}
             />
           </CardBody>

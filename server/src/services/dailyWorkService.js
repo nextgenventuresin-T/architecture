@@ -17,6 +17,7 @@ const { pool } = require('../config/db');
 const areaService = require('./areaService');
 const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const pmScope = require('./pmScopeService');
+const siteTeam = require('./siteTeam');
 const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 const { isLiquidMaterial, litresOrNull, litresFor } = require('../config/liquidUnits');
 
@@ -42,7 +43,8 @@ function holderClause(holder) {
     return { sql: '(pr.contractor_id = ? OR pr.destination_contractor_id = ?)', params: [holder.contractorId, holder.contractorId] };
   }
   return {
-    sql: 'pr.contractor_id IS NULL AND pr.destination_contractor_id IS NULL AND pr.destination_warehouse_id = ?',
+    // Delivered into this Site Store (a contractor on a shared site may have raised it).
+    sql: 'pr.destination_contractor_id IS NULL AND pr.destination_warehouse_id = ?',
     params: [holder.warehouseId],
   };
 }
@@ -481,17 +483,18 @@ async function createUnsafe(payload, files, hrScope, userId, track) {
   // contractor responsible for that site.
   if (pmScope.isPm(hrScope)) {
     pmScope.assertPmAssigned(hrScope, projectId, siteId);
-    const owner = await pmScope.responsibleContractorId(projectId, siteId);
-    if (contractorId && owner && Number(contractorId) !== Number(owner)) {
-      throw ApiError.badRequest('That contractor is not responsible for this site.');
+    const onSite = await siteTeam.siteContractorIds(projectId, siteId);
+    if (contractorId && !onSite.includes(Number(contractorId))) {
+      throw ApiError.badRequest('That contractor is not assigned to this site.');
     }
-    contractorId = contractorId || owner;
+    contractorId = contractorId || (onSite.length === 1 ? onSite[0] : null);
   }
 
   // Whose stock this update draws on: the contractor's warehouse, or - on a site with
   // no contractor, run by its Project Manager - that site's Site Store.
   let holder = contractorId ? { contractorId, warehouseId: null } : null;
-  if (!holder && pmScope.isPm(hrScope) && siteId) {
+  // A site shared by several contractors (or run by its PM) uses its own Site Store.
+  if (siteId) {
     const siteHolder = await siteHolderFor(projectId, siteId);
     if (siteHolder?.pmRun) holder = siteHolder;
   }
@@ -513,7 +516,7 @@ async function createUnsafe(payload, files, hrScope, userId, track) {
     }
 
     if (hrScope?.role === 'contractor') {
-      const isAssigned = Number(site.contractor_id) === contractorId || Number(project.contractor_id) === contractorId;
+      const isAssigned = await siteTeam.contractorWorksOn(contractorId, projectId, siteId);
       if (!isAssigned) {
         throw ApiError.forbidden('You are not assigned to this project or site.');
       }
@@ -1052,8 +1055,12 @@ async function createUnsafe(payload, files, hrScope, userId, track) {
  * site they run with no contractor - that site's Site Store. Null when nothing applies.
  */
 async function holderForViewer(taskId, hrScope, queryContractorId) {
-  if (hrScope?.role === 'contractor') return { contractorId: Number(hrScope.contractorId), warehouseId: null };
   const [[task]] = await pool.query('SELECT project_id, site_id FROM project_tasks WHERE id = ? LIMIT 1', [taskId]);
+  if (hrScope?.role === 'contractor') {
+    // On a site shared by several contractors everyone draws on its Site Store.
+    const shared = task?.site_id ? await siteHolderFor(task.project_id, task.site_id) : null;
+    return shared?.pmRun ? shared : { contractorId: Number(hrScope.contractorId), warehouseId: null };
+  }
   if (!task) return null;
   if (pmScope.isPm(hrScope)) {
     if (!(hrScope.pmProjectIds || []).includes(Number(task.project_id))) return null;

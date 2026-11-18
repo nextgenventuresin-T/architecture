@@ -27,6 +27,10 @@ router.patch(
     body('labour_count').optional().isInt({ min: 0 }).toInt(),
     body('safety_status').optional().isIn(['safe', 'caution', 'incident']).withMessage('Choose a valid safety status.'),
     body('status').optional().isIn(['on-track', 'attention', 'delayed', 'on-hold', 'completed']),
+    ...['contractor_ids', 'site_engineer_ids'].flatMap((f) => [
+      body(f).optional().isArray(),
+      body(`${f}.*`).optional().isInt({ min: 1 }).toInt(),
+    ]),
     ...areaMeasureRules(body),
   ],
   validate,

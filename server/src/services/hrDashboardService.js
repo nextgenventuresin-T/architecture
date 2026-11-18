@@ -38,7 +38,8 @@ async function getSiteWorkforce(siteId, hrScope) {
   const site = await siteModel.findById(siteId);
   if (!site) throw ApiError.notFound('That site does not exist.');
 
-  if (hrScope.role === 'contractor' && site.contractor_id !== hrScope.contractorId) {
+  if (hrScope.role === 'contractor'
+    && !(await require('./siteTeam').contractorWorksOn(hrScope.contractorId, site.project_id, site.id))) {
     throw ApiError.notFound('That site does not exist.');
   }
 

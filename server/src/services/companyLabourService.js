@@ -429,9 +429,11 @@ async function labourReport({ projectId, siteId, taskId, areaId, workerKind = 'a
   if (contractorId) { where.push('l.contractor_id = ?'); params.push(Number(contractorId)); }
   if (forContractorId) {
     // Their own workers, plus company labour Admin recorded on their sites.
-    where.push(`(l.contractor_id = ? OR (l.attendance_id IS NOT NULL AND (l.site_id IN (SELECT id FROM sites WHERE contractor_id = ?)
-      OR l.project_id IN (SELECT id FROM projects WHERE contractor_id = ?))))`);
-    params.push(Number(forContractorId), Number(forContractorId), Number(forContractorId));
+    const st = require('./siteTeam');
+    where.push(`(l.contractor_id = ? OR (l.attendance_id IS NOT NULL AND (
+      l.site_id IN (SELECT s.id FROM sites s JOIN projects p ON p.id = s.project_id WHERE ${st.contractorOnSiteSql('s', 'p')})
+      OR l.project_id IN (SELECT p.id FROM projects p WHERE ${st.contractorOnProjectSql('p')}))))`);
+    params.push(Number(forContractorId), ...st.contractorOnSiteParams(Number(forContractorId)), ...st.contractorOnProjectParams(Number(forContractorId)));
   }
   if (search && String(search).trim()) {
     where.push('(l.worker_name LIKE ? OR cw.phone LIKE ?)');

@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const siteTeam = require('../services/siteTeam');
 
 /**
  * Read/write access for procurement requests and their receiving records.
@@ -170,8 +171,8 @@ function buildFilters({ search, status, projectId, siteId, taskIds, materialId, 
     where.push("r.procurement_kind = 'internal_transfer'");
   }
   if (contractorId) {
-    where.push('(r.requested_by = ? OR p.contractor_id = ? OR s.contractor_id = ? OR r.source_contractor_id = ? OR r.destination_contractor_id = ?)');
-    params.push(Number(userId), Number(contractorId), Number(contractorId), Number(contractorId), Number(contractorId));
+    where.push(`(r.requested_by = ? OR ${siteTeam.contractorOnSiteSql('s', 'p')} OR r.source_contractor_id = ? OR r.destination_contractor_id = ?)`);
+    params.push(Number(userId), ...siteTeam.contractorOnSiteParams(Number(contractorId)), Number(contractorId), Number(contractorId));
   }
 
   // Project Manager: only requests on their assigned projects. An empty
@@ -443,9 +444,9 @@ async function updateReceipt(id, payload) {
 /** Lookup data for the request/PO forms: projects, sites, materials the caller already has access to. */
 async function findSuppliers({ contractorId, userId } = {}) {
   const scope = contractorId
-    ? 'AND (r.requested_by = ? OR p.contractor_id = ? OR s.contractor_id = ?)'
+    ? `AND (r.requested_by = ? OR ${siteTeam.contractorOnSiteSql('s', 'p')})`
     : '';
-  const params = contractorId ? [Number(userId), Number(contractorId), Number(contractorId)] : [];
+  const params = contractorId ? [Number(userId), ...siteTeam.contractorOnSiteParams(Number(contractorId))] : [];
   const [rows] = await pool.query(
     `SELECT DISTINCT r.supplier FROM procurement_requests r
      LEFT JOIN projects p ON p.id = r.project_id

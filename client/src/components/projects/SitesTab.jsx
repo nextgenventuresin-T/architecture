@@ -14,6 +14,7 @@ import { projectsApi, sitesApi } from '../../api/projectsApi';
 import { SAFETY_TONE, labelFor } from '../../utils/projectOptions';
 import AreaMeasureField, { DEFAULT_AREA_UNIT } from '../ui/AreaMeasureField';
 import { formatArea } from '../../utils/areaUnits';
+import { TeamPicker } from './AssignTeamDialog';
 
 const SAFETY_LABEL = { safe: 'Safe', caution: 'Caution', incident: 'Incident' };
 
@@ -38,6 +39,8 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
     address: project?.location || '',
     site_engineer_id: project?.site_engineer_id || '',
     contractor_id: project?.contractor_id || '',
+    site_engineer_ids: project?.site_engineer_id ? [String(project.site_engineer_id)] : [],
+    contractor_ids: project?.contractor_id ? [String(project.contractor_id)] : [],
     labour_count: 0,
     progress: 0,
     safety_status: 'safe',
@@ -72,6 +75,37 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
 
   const engineers = lookups?.engineers || lookups?.employees || [];
   const contractors = lookups?.contractors || [];
+  const engineerOptions = engineers.map((eng) => ({ value: String(eng.id), label: eng.full_name || eng.name }));
+  const contractorOptions = contractors.map((c) => ({ value: String(c.id), label: c.name }));
+
+  // "Edit team" of an existing site: its engineers and contractors.
+  const [teamEdit, setTeamEdit] = useState(null); // { site, engineerIds, contractorIds }
+  const [teamError, setTeamError] = useState(null);
+  const openTeamEdit = (site) => {
+    setTeamError(null);
+    setTeamEdit({
+      site,
+      engineerIds: (site.engineers?.length ? site.engineers.map((e) => e.id) : [site.site_engineer_id].filter(Boolean)).map(String),
+      contractorIds: (site.contractors?.length ? site.contractors.map((c) => c.id) : [site.contractor_id].filter(Boolean)).map(String),
+    });
+  };
+  const saveTeam = async () => {
+    if (!teamEdit) return;
+    try {
+      setSubmitting(true);
+      setTeamError(null);
+      await sitesApi.update(teamEdit.site.id, {
+        site_engineer_ids: teamEdit.engineerIds.map(Number),
+        contractor_ids: teamEdit.contractorIds.map(Number),
+      });
+      setTeamEdit(null);
+      if (typeof onChanged === 'function') onChanged();
+    } catch (err) {
+      setTeamError(errorText(err, 'Failed to save the site team'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleOpenAdd = () => {
     setFormData({
@@ -79,6 +113,8 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
       address: project?.location || '',
       site_engineer_id: project?.site_engineer_id || '',
       contractor_id: project?.contractor_id || '',
+      site_engineer_ids: project?.site_engineer_id ? [String(project.site_engineer_id)] : [],
+      contractor_ids: project?.contractor_id ? [String(project.contractor_id)] : [],
       labour_count: 0,
       progress: 0,
       safety_status: 'safe',
@@ -133,8 +169,11 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
       setError(null);
       await projectsApi.addSite(projectId, {
         ...formData,
-        site_engineer_id: formData.site_engineer_id ? Number(formData.site_engineer_id) : undefined,
-        contractor_id: formData.contractor_id ? Number(formData.contractor_id) : undefined,
+        site_engineer_id: undefined,
+        contractor_id: undefined,
+        // Several engineers / contractors may share a site.
+        site_engineer_ids: formData.site_engineer_ids.map(Number),
+        contractor_ids: formData.contractor_ids.map(Number),
         labour_count: Number(formData.labour_count || 0),
         progress: Number(formData.progress || 0),
         area_value: formData.area_value === '' ? null : Number(formData.area_value),
@@ -247,9 +286,19 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
                       {site.open_issues} open issue{site.open_issues === 1 ? '' : 's'}
                     </Badge>
                   )}
-                  <span className="text-xs text-ink-subtle">
-                    {site.site_engineer_name ? `Eng: ${site.site_engineer_name}` : 'No engineer'} · {site.contractor_name ? `Contractor: ${site.contractor_name}` : 'No contractor'}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => openTeamEdit(site)}
+                    className="inline-flex items-center gap-1 rounded-full border border-line bg-white px-2 py-0.5 text-xs text-ink-muted hover:border-brand-200 hover:text-brand-700"
+                    title="Edit engineers and contractors"
+                  >
+                    {(() => {
+                      const engs = site.engineers?.length ? site.engineers.map((e) => e.name) : [site.site_engineer_name].filter(Boolean);
+                      const cons = site.contractors?.length ? site.contractors.map((c) => c.name) : [site.contractor_name].filter(Boolean);
+                      return `${engs.length ? `Eng: ${engs.join(', ')}` : 'No engineer'} · ${cons.length ? `Contractors: ${cons.join(', ')}` : 'No contractor'}`;
+                    })()}
+                    <Pencil className="h-3 w-3" aria-hidden="true" />
+                  </button>
                   <div className="ml-auto flex items-center gap-2">
                     <button
                       type="button"
@@ -313,30 +362,21 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
           />
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Select
-              label="Site Engineer"
-              value={formData.site_engineer_id}
-              onChange={(e) => setFormData({ ...formData, site_engineer_id: e.target.value })}
-              options={[
-                { value: '', label: 'Select Site Engineer…' },
-                ...engineers.map((eng) => ({
-                  value: eng.id,
-                  label: eng.full_name || eng.name,
-                })),
-              ]}
+            <TeamPicker
+              label="Site Engineers"
+              noun="engineers"
+              value={formData.site_engineer_ids}
+              onChange={(ids) => setFormData({ ...formData, site_engineer_ids: ids })}
+              options={engineerOptions}
             />
 
-            <Select
-              label="Assigned Contractor"
-              value={formData.contractor_id}
-              onChange={(e) => setFormData({ ...formData, contractor_id: e.target.value })}
-              options={[
-                { value: '', label: 'Select Contractor…' },
-                ...contractors.map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                })),
-              ]}
+            <TeamPicker
+              label="Contractors"
+              noun="contractors"
+              value={formData.contractor_ids}
+              onChange={(ids) => setFormData({ ...formData, contractor_ids: ids })}
+              options={contractorOptions}
+              hint="Several contractors share the site and its Site Store."
             />
           </div>
 
@@ -383,6 +423,32 @@ export default function SitesTab({ detail, projectId, lookups, onChanged }) {
             />
           </div>
         </form>
+      </Modal>
+
+      {/* Edit site team */}
+      <Modal
+        isOpen={Boolean(teamEdit)}
+        onClose={() => setTeamEdit(null)}
+        title="Site team"
+        description={teamEdit ? `Engineers and contractors on ${teamEdit.site.name}. All contractors share the site equally.` : ''}
+        size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setTeamEdit(null)}>Cancel</Button>
+            <Button onClick={saveTeam} disabled={submitting}>{submitting ? 'Saving…' : 'Save team'}</Button>
+          </>
+        }
+      >
+        {teamEdit && (
+          <div className="space-y-4">
+            {teamError && <Alert tone="error">{teamError}</Alert>}
+            <TeamPicker label="Site Engineers" noun="engineers" options={engineerOptions}
+              value={teamEdit.engineerIds} onChange={(ids) => setTeamEdit((t) => ({ ...t, engineerIds: ids }))} />
+            <TeamPicker label="Contractors" noun="contractors" options={contractorOptions}
+              value={teamEdit.contractorIds} onChange={(ids) => setTeamEdit((t) => ({ ...t, contractorIds: ids }))}
+              hint="With more than one contractor the site works from its own Site Store, shared by all of them." />
+          </div>
+        )}
       </Modal>
 
       {/* Edit site area */}

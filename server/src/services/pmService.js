@@ -351,7 +351,7 @@ async function getContractors(userId, role) {
   const projectIds = await resolvePmProjectIds(userId, role);
   if (projectIds && projectIds.length === 0) return { contractors: [] };
 
-  let siteFilter = 's.contractor_id IS NOT NULL';
+  let siteFilter = '1 = 1';
   const siteParams = [];
   if (projectIds && projectIds.length > 0) {
     siteFilter += ` AND s.project_id IN (${projectIds.map(() => '?').join(',')})`;
@@ -365,7 +365,12 @@ async function getContractors(userId, role) {
             ct.phone, ct.email, ct.speciality, ct.is_active
      FROM sites s
      JOIN projects p ON p.id = s.project_id
-     JOIN contractors ct ON ct.id = s.contractor_id
+     -- every contractor on the site's team (or the project's, when the site has none)
+     JOIN contractors ct ON (
+       ct.id = s.contractor_id
+       OR ct.id IN (SELECT sc.contractor_id FROM site_contractors sc WHERE sc.site_id = s.id)
+       OR (s.contractor_id IS NULL AND NOT EXISTS (SELECT 1 FROM site_contractors sc0 WHERE sc0.site_id = s.id)
+           AND (ct.id = p.contractor_id OR ct.id IN (SELECT pc.contractor_id FROM project_contractors pc WHERE pc.project_id = p.id))))
      WHERE ${siteFilter}
      ORDER BY ct.name ASC`,
     siteParams

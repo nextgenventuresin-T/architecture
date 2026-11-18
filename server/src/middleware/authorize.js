@@ -93,9 +93,10 @@ async function canAccessProject(req, projectId) {
   if (projectId === null || projectId === undefined) return true;
   const context = await loadContext(req);
   if (req.hrScope?.role === ROLES.CONTRACTOR) {
+    const siteTeam = require('../services/siteTeam');
     const [[project]] = await pool.query(
-      'SELECT id FROM projects WHERE id = ? AND (contractor_id = ? OR id IN (SELECT project_id FROM sites WHERE contractor_id = ?)) LIMIT 1',
-      [projectId, req.hrScope.contractorId, req.hrScope.contractorId]
+      `SELECT id FROM projects p WHERE p.id = ? AND ${siteTeam.contractorOnProjectSql('p')} LIMIT 1`,
+      [projectId, ...siteTeam.contractorOnProjectParams(Number(req.hrScope.contractorId))]
     );
     return Boolean(project);
   }

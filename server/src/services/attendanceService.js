@@ -144,9 +144,10 @@ async function mark(payload, hrScope, actorUserId) {
     if (!worker) throw ApiError.notFound('That worker does not exist.');
     contractorId = worker.contractor_id;
     if (isPm) {
-      const owner = await pmScope.responsibleContractorId(Number(payload.projectId ?? payload.project_id), Number(payload.siteId ?? payload.site_id));
-      if (!owner || Number(owner) !== Number(contractorId)) {
-        throw ApiError.forbidden('That worker does not belong to the contractor responsible for this site.');
+      // Any contractor on the site's team (several may share a site).
+      const onSite = await require('./siteTeam').siteContractorIds(Number(payload.projectId ?? payload.project_id), Number(payload.siteId ?? payload.site_id));
+      if (!onSite.includes(Number(contractorId))) {
+        throw ApiError.forbidden('That worker does not belong to a contractor on this site.');
       }
     }
   }

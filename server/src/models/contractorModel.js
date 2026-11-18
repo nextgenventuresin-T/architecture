@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const siteTeam = require('../services/siteTeam');
 
 /**
  * Read/write access for contractors and the roll-ups the Contractor
@@ -30,14 +31,19 @@ const LIST_SELECT = `
   FROM contractors c
   LEFT JOIN users lu ON lu.id = c.user_id
   LEFT JOIN (
-    SELECT contractor_id, COUNT(*) AS total
-    FROM projects WHERE is_archived = 0 AND contractor_id IS NOT NULL
-    GROUP BY contractor_id
+    SELECT x.contractor_id, COUNT(DISTINCT x.project_id) AS total FROM (
+      SELECT pc.contractor_id, pc.project_id FROM project_contractors pc
+      UNION SELECT contractor_id, id FROM projects WHERE contractor_id IS NOT NULL
+    ) x JOIN projects pj ON pj.id = x.project_id AND pj.is_archived = 0
+    GROUP BY x.contractor_id
   ) proj ON proj.contractor_id = c.id
   LEFT JOIN (
-    SELECT contractor_id, COUNT(*) AS total, SUM(labour_count) AS labour_total, AVG(progress) AS progress_avg
-    FROM sites WHERE contractor_id IS NOT NULL
-    GROUP BY contractor_id
+    SELECT x.contractor_id, COUNT(*) AS total, SUM(st.labour_count) AS labour_total, AVG(st.progress) AS progress_avg
+    FROM (
+      SELECT sc.contractor_id, sc.site_id FROM site_contractors sc
+      UNION SELECT contractor_id, id FROM sites WHERE contractor_id IS NOT NULL
+    ) x JOIN sites st ON st.id = x.site_id
+    GROUP BY x.contractor_id
   ) site ON site.contractor_id = c.id
   LEFT JOIN (
     SELECT contractor_id,
@@ -218,8 +224,8 @@ async function findSites(contractorId) {
             p.id AS project_id, p.name AS project_name, p.code AS project_code
      FROM sites s
      JOIN projects p ON p.id = s.project_id
-     WHERE s.contractor_id = ? ORDER BY s.updated_at DESC`,
-    [contractorId]
+     WHERE ${siteTeam.contractorOnSiteSql('s', 'p')} ORDER BY s.updated_at DESC`,
+    siteTeam.contractorOnSiteParams(Number(contractorId))
   );
   return rows;
 }

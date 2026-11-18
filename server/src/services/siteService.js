@@ -8,7 +8,8 @@ const { pool } = require('../config/db');
 async function getById(id) {
   const site = await siteModel.findById(id);
   if (!site) throw ApiError.notFound('That site does not exist.');
-  return site;
+  const team = (await require('./siteTeam').teamsFor('site', [site.id]))[site.id];
+  return { ...site, contractors: team?.contractors || [], engineers: team?.engineers || [] };
 }
 
 /** Site detail: the record plus its activity, labour, materials and issues. */
@@ -190,6 +191,7 @@ async function getDetail(id) {
 async function update(id, payload) {
   await getById(id);
   await siteModel.update(id, payload);
+  await require('./siteTeam').applyTeam('site', id, payload);
   return getById(id);
 }
 

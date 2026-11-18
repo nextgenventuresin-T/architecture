@@ -98,15 +98,10 @@ function assertPmAssigned(hrScope, projectId, siteId = null) {
 
 /** The contractor responsible for a site (falling back to its project's). */
 async function responsibleContractorId(projectId, siteId) {
-  if (siteId) {
-    const [[s]] = await pool.query('SELECT contractor_id FROM sites WHERE id = ?', [siteId]);
-    if (s?.contractor_id) return Number(s.contractor_id);
-  }
-  if (projectId) {
-    const [[p]] = await pool.query('SELECT contractor_id FROM projects WHERE id = ?', [projectId]);
-    if (p?.contractor_id) return Number(p.contractor_id);
-  }
-  return null;
+  // Exactly one contractor on the site: they hold its stock. Several contractors share the
+  // site equally, so (like no contractor) its stock is the site's own Site Store.
+  const ids = await require('./siteTeam').siteContractorIds(projectId, siteId);
+  return ids.length === 1 ? ids[0] : null;
 }
 
 /**

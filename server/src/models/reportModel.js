@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const siteTeam = require('../services/siteTeam');
 
 /**
  * Reports & Analytics (Interface 13) is a read-only layer over every module
@@ -23,8 +24,8 @@ async function findProjectCounts({ contractorId } = {}) {
   const where = ['p.is_archived = 0'];
   const params = [];
   if (contractorId) {
-    where.push('p.contractor_id = ?');
-    params.push(contractorId);
+    where.push(siteTeam.contractorOnProjectSql('p'));
+    params.push(...siteTeam.contractorOnProjectParams(Number(contractorId)));
   }
   const whereSql = `WHERE ${where.join(' AND ')}`;
 
@@ -48,13 +49,13 @@ async function findSiteCount({ contractorId } = {}) {
   const where = [];
   const params = [];
   if (contractorId) {
-    where.push('s.contractor_id = ?');
-    params.push(contractorId);
+    where.push(siteTeam.contractorOnSiteSql('s', 'p'));
+    params.push(...siteTeam.contractorOnSiteParams(Number(contractorId)));
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const [[row]] = await pool.query(
-    `SELECT COUNT(*) AS total FROM sites s ${whereSql}`,
+    `SELECT COUNT(*) AS total FROM sites s JOIN projects p ON p.id = s.project_id ${whereSql}`,
     params
   );
   return row;
@@ -97,8 +98,8 @@ function buildSiteFilters({ search, status, projectId, contractorId, safetyStatu
   // Always applied when set (a signed-in CONTRACTOR), never overridable by
   // a client-supplied contractorId — the caller passes their own id here.
   if (contractorId) {
-    where.push('s.contractor_id = ?');
-    params.push(Number(contractorId));
+    where.push(siteTeam.contractorOnSiteSql('s', 'p'));
+    params.push(...siteTeam.contractorOnSiteParams(Number(contractorId)));
   }
 
   return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };

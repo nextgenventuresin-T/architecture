@@ -35,6 +35,7 @@ import SearchableSelect from '../../../components/ui/SearchableSelect';
 import AreaInput from '../../../components/ui/AreaInput';
 import AreaMeasureField, { DEFAULT_AREA_UNIT } from '../../../components/ui/AreaMeasureField';
 import { formatArea } from '../../../utils/areaUnits';
+import { TeamPicker } from '../../../components/projects/AssignTeamDialog';
 
 /** Subtasks of a task grouped by area, in first-seen order: [{ area, count, total }]. */
 function subtasksByArea(subtasks = []) {
@@ -79,6 +80,8 @@ const EMPTY = {
   architect_id: '',
   site_engineer_id: '',
   contractor_id: '',
+  site_engineer_ids: [], // several engineers / contractors may share a project
+  contractor_ids: [],
   status: 'on-track',
 };
 
@@ -303,6 +306,8 @@ export default function ProjectFormPage({ mode = 'create' }) {
       architect_id: p.team.architect?.id ? String(p.team.architect.id) : '',
       site_engineer_id: p.team.siteEngineer?.id ? String(p.team.siteEngineer.id) : '',
       contractor_id: p.contractor?.id ? String(p.contractor.id) : '',
+      site_engineer_ids: (p.team.siteEngineers?.length ? p.team.siteEngineers : [p.team.siteEngineer].filter(Boolean)).map((e) => String(e.id)),
+      contractor_ids: (p.contractors?.length ? p.contractors : [p.contractor].filter(Boolean)).map((c) => String(c.id)),
       status: p.status ?? 'on-track',
     });
 
@@ -1306,9 +1311,14 @@ export default function ProjectFormPage({ mode = 'create' }) {
     // Area is optional; the unit is saved only together with a value.
     payload.area_value = values.area_value === '' || values.area_value == null ? null : Number(values.area_value);
     payload.area_unit = payload.area_value == null ? null : values.area_unit;
-    for (const key of ['client_id', 'project_manager_id', 'architect_id', 'site_engineer_id', 'contractor_id']) {
+    for (const key of ['client_id', 'project_manager_id', 'architect_id']) {
       payload[key] = payload[key] === '' ? null : Number(payload[key]);
     }
+    // Engineers / contractors are sent as lists; the server keeps the first in the old field.
+    payload.site_engineer_ids = (values.site_engineer_ids || []).map(Number);
+    payload.contractor_ids = (values.contractor_ids || []).map(Number);
+    delete payload.site_engineer_id;
+    delete payload.contractor_id;
 
     if (values.client_contract_value !== '' && values.client_contract_value != null) {
       payload.client_contract_value = Number(values.client_contract_value);
@@ -1626,19 +1636,20 @@ export default function ProjectFormPage({ mode = 'create' }) {
                 placeholder="Unassigned"
                 options={toOptions(lookups?.architects ?? [], 'full_name')}
               />
-              <SelectField
-                label="Site Engineer"
-                value={values.site_engineer_id}
-                onChange={set('site_engineer_id')}
-                placeholder="Unassigned"
+              <TeamPicker
+                label="Site Engineers"
+                noun="engineers"
+                value={values.site_engineer_ids}
+                onChange={(ids) => setValues((c) => ({ ...c, site_engineer_ids: ids }))}
                 options={toOptions(lookups?.siteEngineers ?? [], 'full_name')}
               />
-              <SelectField
-                label="Contractor"
-                value={values.contractor_id}
-                onChange={set('contractor_id')}
-                placeholder="Unassigned"
+              <TeamPicker
+                label="Contractors"
+                noun="contractors"
+                value={values.contractor_ids}
+                onChange={(ids) => setValues((c) => ({ ...c, contractor_ids: ids }))}
                 options={toOptions(lookups?.contractors ?? [])}
+                hint="Several contractors share the project's sites equally."
               />
             </CardBody>
           </Card>

@@ -1,6 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
+const siteTeam = require('../services/siteTeam');
 
 /**
  * Read/write access for warehouses, their stock balances and the movement
@@ -337,8 +338,8 @@ async function findProjectSiteStock({ projectId, siteId, contractorId }) {
     params.push(Number(siteId));
   }
   if (contractorId) {
-    where.push('(p.contractor_id = ? OR s.contractor_id = ?)');
-    params.push(Number(contractorId), Number(contractorId));
+    where.push(siteTeam.contractorOnSiteSql('s', 'p'));
+    params.push(...siteTeam.contractorOnSiteParams(Number(contractorId)));
   }
 
   const [rows] = await pool.query(
