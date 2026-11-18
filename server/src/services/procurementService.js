@@ -412,10 +412,11 @@ function toRequest(row, viewer) {
     supplier: row.supplier,
     supplierContact: row.supplier_contact || null,
     quantity: Number(row.quantity),
-    unit: row.unit || row.material_unit || 'unit',
+    // Shown in the material's own unit (older requests could carry a task-plan unit).
+    unit: row.material_unit || row.unit || 'unit',
     // Bucket / liquid material: how many litres the quantity is.
     isLiquid: !(row.item_type === 'tool' || (!row.material_id && row.tool_id))
-      && isLiquidMaterial({ unit: row.unit || row.material_unit, category: row.material_category, name: row.material_name }),
+      && isLiquidMaterial({ unit: row.material_unit || row.unit, category: row.material_category, name: row.material_name }),
     litresPerUnit: row.litres_per_unit != null ? Number(row.litres_per_unit) : null,
     totalLitres: row.total_litres != null ? Number(row.total_litres) : null,
     // Vendor deliveries: the vendor's confirmation + dispatch (vehicle etc.) is recorded
@@ -977,7 +978,9 @@ async function create(payload, userId, hrScope, options = {}) {
   let task = null;
 
   const isTool = flow.item_type === 'tool';
-  const unitToUse = payload.unit?.trim() || material?.unit || 'unit';
+  // A material is always requested in the unit stored on the material (kg, litre, nos...);
+  // a machine / tool is counted in units. The form's unit is never trusted over that.
+  const unitToUse = isTool ? 'unit' : (material?.unit || payload.unit?.trim() || 'unit');
 
   if (taskId && !isTool && payload.material_id) {
     const [taskRows] = await pool.query(
@@ -1444,9 +1447,12 @@ async function update(id, payload, hrScope, userId) {
     const material = request.material_id || payload.material_id
       ? await materialModel.findById(Number(payload.material_id ?? request.material_id)).catch(() => null)
       : null;
+    // Editing never changes the unit away from the material's own unit.
+    if (material?.unit) updatePayload.unit = material.unit;
+    else if ((payload.item_type ?? request.item_type) === 'tool') updatePayload.unit = 'unit';
     const litres = litresColumns(payload, {
       quantity: payload.quantity ?? request.quantity,
-      unit: payload.unit ?? request.unit ?? material?.unit,
+      unit: material?.unit ?? payload.unit ?? request.unit,
       material,
     });
     // A changed quantity re-derives total litres from the stored litres per unit.

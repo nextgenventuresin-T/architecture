@@ -180,7 +180,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
     const plan = plannedMatsOf(row).find((p) => String(p.materialId) === String(materialId));
     updateRow(row.key, {
       material_id: materialId,
-      unit: plan?.unit || mat?.unit || '',
+      unit: mat?.unit || plan?.unit || '', // the material's own unit (kg / litre / nos)
       rate: row.rate || String(plan?.costPerUnit || mat?.procurement_rate || mat?.default_rate || ''),
     });
   };

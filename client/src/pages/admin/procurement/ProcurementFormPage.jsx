@@ -387,7 +387,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       return {
         ...current,
         material_id: value,
-        unit: pm?.unit || material?.unit || current.unit || '',
+        unit: material?.unit || pm?.unit || current.unit || '', // the material's own unit
         estimated_rate: nextRate,
         purchase_rate: nextRate,
         total_amount: nextTotal,
@@ -1566,7 +1566,8 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                 onChange={set('unit')}
                 error={fieldErrors.unit}
                 placeholder="bags"
-                hint="Prefilled from the material; change if this order differs."
+                readOnly={Boolean(values.material_id) || values.item_type === 'tool'}
+                hint="Always the unit set on the material (Materials & Tools). Change it there if it is wrong."
               />
               {liquid && !litreUnit && (
                 <InputField
