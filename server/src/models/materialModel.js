@@ -86,6 +86,9 @@ function buildFilters({ search, category, status, stockStatus, projectId, siteId
   if (status && status !== 'all') {
     where.push('m.status = ?');
     params.push(status);
+  } else {
+    // A deleted material stays only for the history that names it.
+    where.push("m.status <> 'deleted'");
   }
   if (stockStatus && stockStatus !== 'all' && STOCK_STATUS_SQL[stockStatus]) {
     where.push(`(${STOCK_STATUS_SQL[stockStatus]})`);

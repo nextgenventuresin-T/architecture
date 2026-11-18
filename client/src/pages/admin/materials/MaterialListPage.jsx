@@ -86,13 +86,31 @@ export default function MaterialListPage() {
     }
   }, [activeTab, loadTools]);
 
+  const [notice, setNotice] = useState(null);
+
   async function handleDeleteTool(tool) {
-    if (!window.confirm(`Are you sure you want to delete tool "${tool.name}"?`)) return;
+    if (!window.confirm(`Delete machine / tool "${tool.name}"? It will no longer appear in the catalogue or in requests.`)) return;
     try {
-      await toolApi.remove(tool.id);
+      const res = await toolApi.remove(tool.id);
+      setNotice({ tone: 'success', text: res?.kept
+        ? `${tool.name} was deleted. Its past requests and allocations still show its name.`
+        : `${tool.name} was deleted.` });
       loadTools();
     } catch (err) {
-      alert(err.message || 'Could not delete tool.');
+      setNotice({ tone: 'error', text: err.message || 'Could not delete this machine / tool.' });
+    }
+  }
+
+  async function handleDeleteMaterial(material) {
+    if (!window.confirm(`Delete material "${material.name}"? It will no longer appear in the catalogue or in requests.`)) return;
+    try {
+      const res = await materialsApi.remove(material.id);
+      setNotice({ tone: 'success', text: res?.kept
+        ? `${material.name} was deleted. Its past requests and stock history still show its name.`
+        : `${material.name} was deleted.` });
+      reload();
+    } catch (err) {
+      setNotice({ tone: 'error', text: err.message || 'Could not delete this material.' });
     }
   }
 
@@ -124,7 +142,7 @@ export default function MaterialListPage() {
       key: 'actions',
       header: 'Actions',
       align: 'right',
-      render: (row) => <RowActions row={row} navigate={navigate} />,
+      render: (row) => <RowActions row={row} navigate={navigate} onDelete={handleDeleteMaterial} />,
     },
   ];
 
@@ -177,6 +195,10 @@ export default function MaterialListPage() {
           )
         }
       />
+
+      {notice && (
+        <Alert tone={notice.tone} className="mb-4">{notice.text}</Alert>
+      )}
 
       {/* Tab Switcher */}
       <div className="mb-6 flex border-b border-line">
@@ -374,7 +396,7 @@ export default function MaterialListPage() {
   );
 }
 
-function RowActions({ row, navigate }) {
+function RowActions({ row, navigate, onDelete }) {
   const base =
     'inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-xs font-medium transition-colors';
 
@@ -396,6 +418,15 @@ function RowActions({ row, navigate }) {
       >
         <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
         Edit
+      </button>
+      <button
+        type="button"
+        onClick={() => onDelete(row)}
+        className={`${base} text-red-600 hover:bg-red-50 hover:text-red-700`}
+        aria-label={`Delete ${row.name}`}
+      >
+        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        Delete
       </button>
     </div>
   );

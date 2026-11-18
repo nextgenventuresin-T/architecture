@@ -4,6 +4,7 @@ const ApiError = require('../utils/ApiError');
 const materialModel = require('../models/materialModel');
 const projectModel = require('../models/projectModel');
 const siteModel = require('../models/siteModel');
+const { pool } = require('../config/db');
 
 /** Categories Interface 6 offers. Existing catalogue values are merged in via lookups. */
 const CATEGORIES = [
@@ -127,6 +128,13 @@ async function create(payload) {
   }
   // `materials` has carried a unique name since Interface 3 — catch it here so
   // the user gets a field error instead of a driver-level duplicate-key crash.
+  // Adding back a material that was deleted restores it (names are unique).
+  const [[deleted]] = await pool.query("SELECT id FROM materials WHERE name = ? AND status = 'deleted' LIMIT 1", [payload.name?.trim()]);
+  if (deleted) {
+    const { code: _ignored, ...rest } = payload;
+    await materialModel.update(deleted.id, { ...rest, name: payload.name.trim(), status: 'active' });
+    return getById(deleted.id);
+  }
   if (await materialModel.findByName(payload.name?.trim())) {
     throw ApiError.badRequest('Check the highlighted fields.', {
       name: 'A material with that name already exists.',
@@ -227,7 +235,49 @@ async function recordUsage(id, entryId, usedQuantity) {
   return getDetail(id);
 }
 
+/**
+ * Deletes a material. Refused while any warehouse still holds it. A material that was
+ * never used is removed completely; one that past requests / stock / logs name is taken
+ * out of the catalogue and every picker (status 'deleted') so that history keeps its name.
+ */
+async function remove(id) {
+  const material = await getById(id);
+  const [[held]] = await pool.query(
+    `SELECT COALESCE(SUM(ws.quantity), 0) AS qty, GROUP_CONCAT(DISTINCT w.name SEPARATOR ', ') AS places
+     FROM warehouse_stock ws JOIN warehouses w ON w.id = ws.warehouse_id
+     WHERE ws.material_id = ? AND ws.quantity > 0`,
+    [id]
+  );
+  if (Number(held.qty) > 0) {
+    throw ApiError.badRequest(
+      `${material.name} is still in stock (${Number(held.qty)} ${material.unit} in ${held.places}). Use, issue or adjust that stock to zero before deleting it.`
+    );
+  }
+  const [[used]] = await pool.query(
+    `SELECT (SELECT COUNT(*) FROM procurement_requests WHERE material_id = ?)
+          + (SELECT COUNT(*) FROM warehouse_transactions WHERE material_id = ?)
+          + (SELECT COUNT(*) FROM material_entries WHERE material_id = ?)
+          + (SELECT COUNT(*) FROM material_movements WHERE material_id = ?)
+          + (SELECT COUNT(*) FROM daily_work_updates WHERE material_id = ?)
+          + (SELECT COUNT(*) FROM task_materials WHERE material_id = ?)
+          + (SELECT COUNT(*) FROM project_phase_materials WHERE material_id = ?) AS n`,
+    Array(7).fill(id)
+  );
+  if (Number(used.n) === 0) {
+    try {
+      await pool.query('DELETE FROM warehouse_stock WHERE material_id = ? AND quantity = 0', [id]);
+      await pool.query('DELETE FROM materials WHERE id = ?', [id]);
+      return { deleted: true, kept: false };
+    } catch (error) {
+      if (error.code !== 'ER_ROW_IS_REFERENCED_2' && error.code !== 'ER_ROW_IS_REFERENCED') throw error;
+    }
+  }
+  await pool.query("UPDATE materials SET status = 'deleted' WHERE id = ?", [id]);
+  return { deleted: true, kept: true };
+}
+
 module.exports = {
+  remove,
   list, getById, getDetail, getLookups, create, update,
   addEntry, recordUsage, toMaterial, CATEGORIES,
 };

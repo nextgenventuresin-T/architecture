@@ -17,6 +17,8 @@ async function findAll({ search, type, status, page = 1, pageSize = 50 } = {}) {
   if (status && status !== 'all') {
     where.push('t.status = ?');
     params.push(status);
+  } else {
+    where.push("t.status <> 'deleted'"); // kept only for the history that names it
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';

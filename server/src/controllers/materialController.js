@@ -28,4 +28,7 @@ const recordUsage = asyncHandler(async (req, res) =>
   ok(res, await materialService.recordUsage(req.params.id, req.params.entryId, req.body.used_quantity))
 );
 
-module.exports = { list, lookups, detail, create, update, addEntry, recordUsage };
+/** DELETE /api/materials/:id */
+const remove = asyncHandler(async (req, res) => ok(res, await materialService.remove(Number(req.params.id))));
+
+module.exports = { list, lookups, detail, create, update, addEntry, recordUsage, remove };

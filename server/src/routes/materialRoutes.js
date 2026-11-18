@@ -3,7 +3,8 @@
 const express = require('express');
 const { body, param, query } = require('express-validator');
 const validate = require('../middleware/validate');
-const { requireAuth } = require('../middleware/authMiddleware');
+const { requireAuth, requireRole } = require('../middleware/authMiddleware');
+const { ROLES } = require('../config/roles');
 const { requirePermission } = require('../middleware/authorize');
 const controller = require('../controllers/materialController');
 
@@ -57,6 +58,9 @@ router.get('/:id', [param('id').isInt({ min: 1 })], validate, controller.detail)
 router.post('/', canCreate, materialRules(true), validate, controller.create);
 
 router.patch('/:id', canEdit, [param('id').isInt({ min: 1 }), ...materialRules(false)], validate, controller.update);
+
+// Delete: Admin only (it changes every picker). See materialService.remove.
+router.delete('/:id', requireRole(ROLES.ADMIN), [param('id').isInt({ min: 1 })], validate, controller.remove);
 
 // Stock entries write to `material_entries`, the Interface 3 table that the
 // project and site screens already read.

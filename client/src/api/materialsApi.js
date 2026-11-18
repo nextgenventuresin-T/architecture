@@ -17,6 +17,8 @@ export const materialsApi = {
   detail: (id) => axiosClient.get(`/materials/${id}`).then((r) => r.data.data),
   create: (payload) => axiosClient.post('/materials', payload).then((r) => r.data.data.material),
   update: (id, payload) => axiosClient.patch(`/materials/${id}`, payload).then((r) => r.data.data.material),
+  /** Deletes a material (Admin). `kept: true` = it had history, so it was only taken out of the catalogue. */
+  remove: (id) => axiosClient.delete(`/materials/${id}`).then((r) => r.data.data),
   addEntry: (id, payload) => axiosClient.post(`/materials/${id}/entries`, payload).then((r) => r.data.data),
   recordUsage: (id, entryId, usedQuantity) =>
     axiosClient.patch(`/materials/${id}/entries/${entryId}`, { used_quantity: usedQuantity }).then((r) => r.data.data),

@@ -76,14 +76,28 @@ async function update(id, payload) {
 }
 
 async function remove(id) {
-  await getById(id);
+  const tool = await getById(id);
+  const { pool } = require('../config/db');
   const units = await toolUnitService.availabilityForTool(id);
-  const [[{ n }]] = await require('../config/db').pool.query('SELECT COUNT(*) AS n FROM tool_units WHERE tool_id = ?', [id]);
-  if (Number(n) > 0 || units.total > 0) {
-    throw ApiError.badRequest('This machine type has registered serial-numbered units and cannot be deleted. Retire the units instead.');
+  // A machine out at a site must come back first - deleting would lose track of it.
+  if (units.allocated > 0) {
+    const where = units.holders.map((h) => `${h.serialNumber}${(h.site?.name || h.site) ? ` at ${h.site?.name || h.site}` : ''}`).join(', ');
+    throw ApiError.badRequest(`${tool.name} still has ${units.allocated} unit(s) out on allocation (${where}). Return them before deleting.`);
   }
-  await toolModel.remove(id);
-  return { success: true };
+  const [[{ n }]] = await pool.query(
+    `SELECT (SELECT COUNT(*) FROM tool_units WHERE tool_id = ?)
+          + (SELECT COUNT(*) FROM procurement_requests WHERE tool_id = ?) AS n`,
+    [id, id]
+  );
+  if (Number(n) === 0) {
+    await toolModel.remove(id);
+    return { success: true, kept: false };
+  }
+  // Used before: retire its idle serials and take it out of the catalogue and pickers;
+  // past requests and allocations keep its name.
+  await pool.query("UPDATE tool_units SET availability_status = 'retired' WHERE tool_id = ? AND availability_status <> 'allocated'", [id]);
+  await pool.query("UPDATE tools SET status = 'deleted' WHERE id = ?", [id]);
+  return { success: true, kept: true };
 }
 
 /**
