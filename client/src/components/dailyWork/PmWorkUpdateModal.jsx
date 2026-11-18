@@ -36,6 +36,21 @@ export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
     return () => { active = false; };
   }, [isOpen, v.task_id]);
 
+  // Area-wise progress for a task / subtask that has a total area.
+  const [taskArea, setTaskArea] = useState(null);
+  const [areaDone, setAreaDone] = useState('');
+  useEffect(() => {
+    setAreaDone('');
+    if (!isOpen || !v.task_id) { setTaskArea(null); return undefined; }
+    let active = true;
+    dailyWorkApi.taskArea(v.task_id, v.subtask_id || undefined)
+      .then((a) => active && setTaskArea(a)).catch(() => active && setTaskArea(null));
+    return () => { active = false; };
+  }, [isOpen, v.task_id, v.subtask_id]);
+  const areaProgress = taskArea
+    ? Math.min(100, Math.round(((taskArea.done + (Number(areaDone) || 0)) / taskArea.total) * 100))
+    : null;
+
   if (!isOpen) return null;
 
   const project = scope.projects.find((p) => String(p.id) === String(v.project_id));
@@ -62,10 +77,12 @@ export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
       form.append('work_date', v.work_date);
       form.append('work_done', v.work_done.trim());
       form.append('work_status', v.work_status);
-      form.append('progress_percentage', v.progress_percentage || '0');
+      form.append('progress_percentage', areaProgress != null ? String(areaProgress) : (v.progress_percentage || '0'));
+      if (taskArea && areaDone !== '') form.append('area_done', areaDone);
       if (v.remarks.trim()) form.append('remarks', v.remarks.trim());
       await dailyWorkApi.create(form);
       setV((c) => ({ ...c, work_done: '', progress_percentage: '', remarks: '' }));
+      setAreaDone('');
       onSaved('Daily work update recorded.');
     } catch (caught) {
       const e = toApiError(caught);
@@ -123,7 +140,20 @@ export default function PmWorkUpdateModal({ isOpen, onClose, onSaved }) {
         )}
         <InputField label="Date" type="date" value={v.work_date} max={today()} onChange={set('work_date')} />
         <TextAreaField className="sm:col-span-2" label="Work done" required rows={3} value={v.work_done} onChange={set('work_done')} error={errors.work_done} />
-        <InputField label="Progress (%)" type="number" min="0" max="100" value={v.progress_percentage} onChange={set('progress_percentage')} />
+        {taskArea && (
+          <InputField
+            label={`Area covered today (${taskArea.unit || 'area'})`}
+            type="number" min="0" step="any" value={areaDone}
+            onChange={(e) => setAreaDone(e.target.value)}
+            error={Number(areaDone) > taskArea.remaining ? `Only ${taskArea.remaining} left.` : undefined}
+            hint={`Total ${taskArea.total} · done ${taskArea.done} · left ${taskArea.remaining}`}
+          />
+        )}
+        {taskArea ? (
+          <InputField label="Progress (%) - from area" value={`${areaProgress}%`} readOnly hint="Worked out from the area covered." />
+        ) : (
+          <InputField label="Progress (%)" type="number" min="0" max="100" value={v.progress_percentage} onChange={set('progress_percentage')} />
+        )}
         <SelectField
           label="Status"
           value={v.work_status}

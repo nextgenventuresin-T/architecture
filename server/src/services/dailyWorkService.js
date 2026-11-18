@@ -147,6 +147,33 @@ async function getTaskTools(taskId, holderArg, subtaskId = null) {
   }));
 }
 
+/**
+ * AREA-WISE PROGRESS. A task / subtask with a total area (e.g. 1200 sqft) gets its progress
+ * from the area covered in its daily logs: covered so far / total. Logs on a main task count
+ * only when made without a subtask. Null when no total area is set.
+ */
+async function areaScope(taskId, subtaskId) {
+  if (!taskId) return null;
+  const [[row]] = subtaskId
+    ? await pool.query('SELECT area_value, area_unit FROM task_subtasks WHERE id = ? AND task_id = ?', [subtaskId, taskId])
+    : await pool.query('SELECT area_value, area_unit FROM project_tasks WHERE id = ?', [taskId]);
+  const total = Number(row?.area_value || 0);
+  if (!(total > 0)) return null;
+  const [[d]] = await pool.query(
+    `SELECT COALESCE(SUM(area_done), 0) AS done FROM daily_work_updates
+     WHERE task_id = ? AND ${subtaskId ? 'subtask_id = ?' : 'subtask_id IS NULL'}`,
+    subtaskId ? [taskId, subtaskId] : [taskId]
+  );
+  const done = Number(d.done || 0);
+  return {
+    total, unit: row.area_unit || null, done,
+    remaining: Math.max(0, Number((total - done).toFixed(2))),
+    progress: Math.min(100, Math.round((done / total) * 100)),
+  };
+}
+
+const pctOf = (done, total) => Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+
 async function list(query = {}, hrScope) {
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 20));
@@ -217,6 +244,7 @@ async function list(query = {}, hrScope) {
       workDone: r.work_done,
       workStatus: r.work_status,
       progressPercentage: r.progress_percentage,
+      areaDone: r.area_done != null ? Number(r.area_done) : null,
       remarks: r.remarks,
       createdAt: r.created_at,
       photos: (r.photos || []).map((p) => ({
@@ -378,6 +406,7 @@ async function getById(id, hrScope) {
     workDone: update.work_done,
     workStatus: update.work_status,
     progressPercentage: update.progress_percentage,
+    areaDone: update.area_done != null ? Number(update.area_done) : null,
     remarks: update.remarks,
     miscAmount: update.misc_amount ? Number(update.misc_amount) : 0,
     miscDescription: update.misc_description,
@@ -551,6 +580,25 @@ async function createUnsafe(payload, files, hrScope, userId, track) {
   // Optional subtask under the selected main task.
   const subtask = await resolveSubtask(taskId, subtaskIdFrom(payload));
   const subtaskId = subtask ? subtask.id : null;
+
+  // Area covered today: progress is then worked out from it, not typed in.
+  const rawArea = payload.area_done ?? payload.areaDone;
+  const areaDone = rawArea !== undefined && rawArea !== null && rawArea !== '' ? Number(rawArea) : null;
+  if (areaDone !== null) {
+    if (!(areaDone >= 0)) throw ApiError.badRequest('Check the highlighted fields.', { area_done: 'Enter the area covered as a number.' });
+    const scope = await areaScope(taskId, subtaskId);
+    if (!scope) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        area_done: `This ${subtaskId ? 'subtask' : 'task'} has no total area. Set its area on the task first.`,
+      });
+    }
+    if (areaDone > scope.remaining + 0.001) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        area_done: `Only ${scope.remaining} ${scope.unit || ''} of ${scope.total} is left on this ${subtaskId ? 'subtask' : 'task'}.`.replace(/\s+/g, ' '),
+      });
+    }
+    payload.progress_percentage = pctOf(scope.done + areaDone, scope.total); // eslint-disable-line no-param-reassign
+  }
 
   // A machine/tool is booked TASK-WISE only, and only once it was procured for that task.
   if (toolId || toolCost > 0) {
@@ -844,6 +892,7 @@ async function createUnsafe(payload, files, hrScope, userId, track) {
     material_cost: consumptionTotal,
   });
   track.saved = true; // the log row exists: later steps (photos, workers) never undo stock
+  if (areaDone !== null) await pool.query('UPDATE daily_work_updates SET area_done = ? WHERE id = ?', [areaDone, updateId]);
 
   if (expenseId) {
     await pool.query('UPDATE expenses SET source_id = ? WHERE id = ?', [updateId, expenseId]);
@@ -1078,4 +1127,4 @@ async function getTaskToolsFor(taskId, hrScope, queryContractorId, subtaskId) {
   return getTaskTools(taskId, await holderForViewer(taskId, hrScope, queryContractorId), subtaskId);
 }
 
-module.exports = { list, getById, create, getTaskMaterials, getTaskTools, getTaskMaterialsFor, getTaskToolsFor };
+module.exports = { list, getById, create, getTaskMaterials, getTaskTools, getTaskMaterialsFor, getTaskToolsFor, areaScope };

@@ -48,4 +48,11 @@ const taskTools = asyncHandler(async (req, res) => {
   res.json({ success: true, data: { tools } });
 });
 
-module.exports = { list, detail, create, getPhoto, taskMaterials, taskTools };
+/** GET /daily-work/task-area: total area, covered so far and progress of a task / subtask. */
+const taskArea = asyncHandler(async (req, res) => {
+  const subtaskId = req.query.subtaskId ? Number(req.query.subtaskId) : null;
+  const area = await dailyWorkService.areaScope(Number(req.query.taskId), subtaskId);
+  res.json({ success: true, data: { area } });
+});
+
+module.exports = { list, detail, create, getPhoto, taskMaterials, taskTools, taskArea };

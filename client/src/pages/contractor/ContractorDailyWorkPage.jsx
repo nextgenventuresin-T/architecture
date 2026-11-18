@@ -139,6 +139,21 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
 
+  // Area-wise progress: the task's / subtask's total area and how much is already covered.
+  const [taskArea, setTaskArea] = useState(null);
+  const [areaDone, setAreaDone] = useState('');
+  const loadTaskArea = useCallback(() => {
+    if (!taskId) { setTaskArea(null); return; }
+    dailyWorkApi.taskArea(taskId, subtaskId || undefined).then(setTaskArea).catch(() => setTaskArea(null));
+  }, [taskId, subtaskId]);
+  useEffect(() => { setAreaDone(''); loadTaskArea(); }, [loadTaskArea]);
+  // Progress follows the area: (covered so far + today) / total.
+  useEffect(() => {
+    if (!taskArea) return;
+    const today = Number(areaDone) || 0;
+    setProgressPercentage(Math.min(100, Math.round(((taskArea.done + today) / taskArea.total) * 100)));
+  }, [taskArea, areaDone]);
+
   useEffect(() => {
     setSelectedMaterialId('');
     setQuantityUsed(''); setLitresUsed('');
@@ -542,6 +557,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
       formData.append('work_date', workDate);
       formData.append('work_done', workDone.trim());
       formData.append('progress_percentage', progressPercentage);
+      if (taskArea && areaDone !== '') formData.append('area_done', areaDone);
       formData.append('work_status', workStatus);
       if (remarks.trim()) formData.append('remarks', remarks.trim());
       if (excessReason.trim()) formData.append('excess_reason', excessReason.trim());
@@ -618,6 +634,8 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
       loadInventory();
       if (taskId) dailyWorkApi.taskMaterials(taskId, undefined, subtaskId || undefined).then(setTaskInventory).catch(() => {});
       if (taskId) tasksApi.detail(taskId).then((d) => d && setCurrentTaskDetail(d)).catch(() => {});
+      setAreaDone('');
+      loadTaskArea();
 
       // Switch to table view to see the new record
       setActiveTab('table');
@@ -1005,7 +1023,7 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                             <td className="px-3 py-3 border-r border-line/60 text-center whitespace-nowrap">
                               <div className="flex flex-col items-center gap-1">
                                 <span className="font-bold text-ink tabular-nums">
-                                  {u.progressPercentage != null ? `${u.progressPercentage}%` : '—'}
+                                  {u.progressPercentage != null ? `${u.progressPercentage}%` : '—'}{u.areaDone != null ? ` · ${formatNumber(u.areaDone)} area` : ''}
                                 </span>
                                 <Badge tone={isCompleted ? 'success' : 'warning'}>
                                   {isCompleted ? 'Completed' : 'In Progress'}
@@ -1174,9 +1192,31 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                     />
                   </div>
 
+                  {taskArea && (
+                    <div>
+                      <label className="block text-xs font-medium text-ink mb-1.5">
+                        Area covered today ({taskArea.unit || 'area'})
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max={taskArea.remaining}
+                        step="any"
+                        value={areaDone}
+                        onChange={(e) => setAreaDone(e.target.value)}
+                        placeholder={`Up to ${taskArea.remaining}`}
+                        className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                      />
+                      <p className={`mt-1 text-[11px] ${Number(areaDone) > taskArea.remaining ? 'text-red-600 font-semibold' : 'text-ink-subtle'}`}>
+                        Total {formatNumber(taskArea.total)} {taskArea.unit} · done {formatNumber(taskArea.done)} · left {formatNumber(taskArea.remaining)}
+                        {Number(areaDone) > taskArea.remaining ? ' - more than what is left' : ''}
+                      </p>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-medium text-ink mb-1.5">
-                      Task Progress (%)
+                      Task Progress (%){taskArea ? ' - worked out from area' : ''}
                     </label>
                     <div className="flex items-center gap-2">
                       <input
@@ -1184,8 +1224,9 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
                         min="0"
                         max="100"
                         value={progressPercentage}
+                        readOnly={Boolean(taskArea)}
                         onChange={(e) => setProgressPercentage(Number(e.target.value))}
-                        className="w-full rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-hidden"
+                        className={`w-full rounded-lg border border-line px-3 py-2 text-xs text-ink focus:border-brand-500 focus:outline-hidden ${taskArea ? 'bg-canvas font-semibold' : 'bg-white'}`}
                       />
                       <span className="text-xs font-bold text-ink-muted">%</span>
                     </div>

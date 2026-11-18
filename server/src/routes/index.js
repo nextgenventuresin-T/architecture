@@ -42,7 +42,7 @@ router.get('/health', async (req, res) => {
   res.json({
     success: true,
     data: {
-      status: 'ok', time: new Date().toISOString(), build: '2026-11-18a',
+      status: 'ok', time: new Date().toISOString(), build: '2026-11-18b',
       startedAt: startup.startedAt, schemaMissing: missing, migrationErrors: startup.migrationErrors,
       recentErrors: require('../middleware/errorHandler').recentErrors,
     },

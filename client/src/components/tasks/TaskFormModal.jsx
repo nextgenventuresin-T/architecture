@@ -542,6 +542,8 @@ export default function TaskFormModal({
       })),
     };
 
+    // Total area of the work: daily logs report area covered and progress is worked out from it.
+    const areaPayload = { area_value: areaValue === '' ? null : Number(areaValue), area_unit: areaValue === '' ? null : areaUnit };
     try {
       if (isSubtask) {
         const { project_id: _p, site_id: _s, ...subPayload } = payload;
@@ -550,9 +552,9 @@ export default function TaskFormModal({
         if (isEdit) await tasksApi.updateSubtask(parentTask.id, initialData.id, subPayload);
         else await tasksApi.createSubtask(parentTask.id, subPayload);
       } else if (isEdit) {
-        await tasksApi.update(initialData.id, payload);
+        await tasksApi.update(initialData.id, { ...payload, ...areaPayload });
       } else {
-        const created = await tasksApi.create(payload);
+        const created = await tasksApi.create({ ...payload, ...areaPayload });
         onSaved(created);
         onClose();
         return;
@@ -647,15 +649,18 @@ export default function TaskFormModal({
               })}
             />
             )}
-            {isSubtask && (
+            <div>
               <AreaMeasureField
-                label="Area"
+                label="Total area of this work"
                 value={areaValue}
                 unit={areaUnit}
                 onValueChange={(e) => setAreaValue(e.target.value)}
                 onUnitChange={(e) => setAreaUnit(e.target.value)}
               />
-            )}
+              <p className="mt-1 text-xs text-ink-subtle">
+                Daily logs then enter the area covered, and progress % is worked out automatically.
+              </p>
+            </div>
             <div>
               <label className="block text-xs font-medium text-ink mb-1">Assigned Project Manager</label>
               <SearchableSelect

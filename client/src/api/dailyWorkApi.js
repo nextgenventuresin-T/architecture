@@ -17,6 +17,11 @@ export const dailyWorkApi = {
     axiosClient
       .get('/daily-work/task-tools', { params: { taskId, contractorId, ...(subtaskId ? { subtaskId } : {}) } })
       .then((r) => r.data.data.tools),
+  /** { total, unit, done, remaining, progress } of a task / subtask, or null when it has no area. */
+  taskArea: (taskId, subtaskId) =>
+    axiosClient
+      .get('/daily-work/task-area', { params: { taskId, ...(subtaskId ? { subtaskId } : {}) } })
+      .then((r) => r.data.data.area),
   photoUrl: (id) => `/api/daily-work/photos/${id}`,
 };
 

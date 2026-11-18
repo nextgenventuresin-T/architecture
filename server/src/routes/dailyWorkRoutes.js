@@ -42,6 +42,13 @@ router.get(
   controller.taskTools
 );
 
+router.get(
+  '/task-area',
+  [query('taskId').isInt({ min: 1 }), query('subtaskId').optional({ checkFalsy: true }).isInt({ min: 1 })],
+  validate,
+  controller.taskArea
+);
+
 router.get('/photos/:photoId', [param('photoId').isInt({ min: 1 })], validate, controller.getPhoto);
 
 router.get('/:id', [param('id').isInt({ min: 1 })], validate, controller.detail);
@@ -63,6 +70,7 @@ router.post(
     body('work_done').optional({ nullable: true }).trim(),
     body('work_date').optional().isISO8601().withMessage('Enter a valid date.'),
     body('progress_percentage').optional().isInt({ min: 0, max: 100 }).toInt(),
+    body('area_done').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Enter the area covered as a number.'),
     body('work_status').optional().isIn(['in-progress', 'completed']),
     body('remarks').optional({ nullable: true }).trim(),
     body('workers').optional(),

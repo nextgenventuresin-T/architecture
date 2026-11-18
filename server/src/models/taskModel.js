@@ -479,8 +479,9 @@ async function applyAreaAndManager(conn, table, id, projectId, payload = {}) {
     sets.push('assigned_manager_id = ?');
     params.push(managerId);
   }
-  // Area measurement (value + Feet / Metres / sq. ft. / sq. m.) - subtasks only.
-  if (table === 'task_subtasks') {
+  // Area measurement (value + Feet / Metres / sq. ft. / sq. m.) - on main tasks and subtasks;
+  // daily logs then report area covered and progress is worked out from it.
+  {
     const rawValue = pickOpt(payload, 'area_value', 'areaValue');
     const rawUnit = pickOpt(payload, 'area_unit', 'areaUnit');
     // The value decides: blank clears both columns; a unit alone is ignored.
@@ -2234,7 +2235,7 @@ async function recalcSubtaskBudget(conn, subtaskId) {
  * marks the main task completed.
  */
 async function rollupMainTaskProgress(conn, taskId) {
-  const [subs] = await conn.query('SELECT progress, status, total_budget FROM task_subtasks WHERE task_id = ?', [taskId]);
+  const [subs] = await conn.query('SELECT progress, status, total_budget, area_value, area_unit FROM task_subtasks WHERE task_id = ?', [taskId]);
   if (!subs.length) return null;
 
   // The main task spans its subtasks: earliest start to latest end.
@@ -2252,9 +2253,14 @@ async function rollupMainTaskProgress(conn, taskId) {
       [span.s, span.s, span.e, span.e, span.s, span.e, span.e, span.s, taskId]
     );
   }
-  const totalWeight = subs.reduce((s, r) => s + Number(r.total_budget || 0), 0);
+  // Area-wise when every subtask has an area in the same unit (a 1000 sqft floor weighs
+  // twice a 500 sqft one); else by budget; else a plain average.
+  const units = new Set(subs.map((r) => r.area_unit || ''));
+  const byArea = subs.every((r) => Number(r.area_value) > 0) && units.size === 1;
+  const weightOf = (r) => (byArea ? Number(r.area_value) : Number(r.total_budget || 0));
+  const totalWeight = subs.reduce((s, r) => s + weightOf(r), 0);
   const progress = totalWeight > 0
-    ? subs.reduce((s, r) => s + Number(r.progress || 0) * Number(r.total_budget || 0), 0) / totalWeight
+    ? subs.reduce((s, r) => s + Number(r.progress || 0) * weightOf(r), 0) / totalWeight
     : subs.reduce((s, r) => s + Number(r.progress || 0), 0) / subs.length;
   const rounded = Math.min(100, Math.max(0, Math.round(progress)));
   const allDone = subs.every((r) => r.status === 'completed' || Number(r.progress || 0) >= 100);

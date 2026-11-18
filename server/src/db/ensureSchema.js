@@ -16,6 +16,7 @@ const STARTUP_MIGRATIONS = [
   '20261117_tool_requests_nullable_material',
   '20261117_restore_failed_daily_log_stock',
   '20261118_site_teams',
+  '20261118_area_progress',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };
@@ -26,6 +27,7 @@ const REQUIRED_COLUMNS = [
   ['procurement_requests', 'litres_per_unit'], ['procurement_requests', 'vendor_confirmed_at'],
   ['procurement_requests', 'bilty_number'], ['procurement_requests', 'received_bilty_number'],
   ['material_movements', 'sent_litres'], ['daily_work_updates', 'litres_used'],
+  ['project_tasks', 'area_value'], ['daily_work_updates', 'area_done'],
   ['labour_records', 'worker_name'], ['labour_records', 'worker_id'], ['labour_records', 'worker_type'],
 ];
 
