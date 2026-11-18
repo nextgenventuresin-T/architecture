@@ -18,6 +18,13 @@ const areaService = require('./areaService');
 const { getConsumptionUnitCost } = require('../utils/materialPricing');
 const pmScope = require('./pmScopeService');
 const siteTeam = require('./siteTeam');
+const siteReceiver = require('./siteReceiverScope');
+
+/** A Site Engineer (employee login): the sites they are the engineer for, else null. */
+const isEngineer = (hrScope) => hrScope?.role === 'employee';
+async function engineerSites(hrScope) {
+  return isEngineer(hrScope) ? siteReceiver.engineerSiteIds(hrScope.employeeId) : null;
+}
 const { resolveSubtask, subtaskIdFrom } = require('./subtaskLink');
 const { isLiquidMaterial, litresOrNull, litresFor } = require('../config/liquidUnits');
 
@@ -188,6 +195,7 @@ async function list(query = {}, hrScope) {
     contractorId,
     date: query.date,
     pmProjectIds: pmScope.isPm(hrScope) ? (hrScope.pmProjectIds || []) : undefined,
+    siteIds: (await engineerSites(hrScope)) ?? undefined,
     page,
     pageSize,
   });
@@ -512,6 +520,20 @@ async function createUnsafe(payload, files, hrScope, userId, track) {
   // contractor responsible for that site.
   if (pmScope.isPm(hrScope)) {
     pmScope.assertPmAssigned(hrScope, projectId, siteId);
+    const onSite = await siteTeam.siteContractorIds(projectId, siteId);
+    if (contractorId && !onSite.includes(Number(contractorId))) {
+      throw ApiError.badRequest('That contractor is not assigned to this site.');
+    }
+    contractorId = contractorId || (onSite.length === 1 ? onSite[0] : null);
+  }
+
+  // Site Engineer: only on a site they are the engineer for, recorded against that site's
+  // contractor (one contractor) or its shared Site Store (several / none).
+  if (isEngineer(hrScope)) {
+    const mine = await engineerSites(hrScope);
+    if (!siteId || !mine.includes(Number(siteId))) {
+      throw ApiError.forbidden('You can log daily work only on a site you are the engineer for.');
+    }
     const onSite = await siteTeam.siteContractorIds(projectId, siteId);
     if (contractorId && !onSite.includes(Number(contractorId))) {
       throw ApiError.badRequest('That contractor is not assigned to this site.');
@@ -1111,6 +1133,10 @@ async function holderForViewer(taskId, hrScope, queryContractorId) {
     return shared?.pmRun ? shared : { contractorId: Number(hrScope.contractorId), warehouseId: null };
   }
   if (!task) return null;
+  if (isEngineer(hrScope)) {
+    const mine = await engineerSites(hrScope);
+    return task.site_id && mine.includes(Number(task.site_id)) ? siteHolderFor(task.project_id, task.site_id) : null;
+  }
   if (pmScope.isPm(hrScope)) {
     if (!(hrScope.pmProjectIds || []).includes(Number(task.project_id))) return null;
     return siteHolderFor(task.project_id, task.site_id);
@@ -1127,4 +1153,31 @@ async function getTaskToolsFor(taskId, hrScope, queryContractorId, subtaskId) {
   return getTaskTools(taskId, await holderForViewer(taskId, hrScope, queryContractorId), subtaskId);
 }
 
-module.exports = { list, getById, create, getTaskMaterials, getTaskTools, getTaskMaterialsFor, getTaskToolsFor, areaScope };
+/**
+ * GET /daily-work/my-scope - a Site Engineer's sites, grouped by project, for the daily log.
+ * Each site names its contractor when it has exactly one (else it uses its Site Store).
+ */
+async function engineerScope(hrScope) {
+  const ids = (await engineerSites(hrScope)) || [];
+  if (!ids.length) return { projects: [] };
+  const [rows] = await pool.query(
+    `SELECT s.id, s.name, s.project_id, p.code AS project_code, p.name AS project_name
+     FROM sites s JOIN projects p ON p.id = s.project_id AND p.is_archived = 0
+     WHERE s.id IN (?) ORDER BY p.name, s.name`,
+    [ids]
+  );
+  const byProject = new Map();
+  for (const r of rows) {
+    if (!byProject.has(r.project_id)) byProject.set(r.project_id, { id: r.project_id, code: r.project_code, name: r.project_name, sites: [] });
+    const cIds = await siteTeam.siteContractorIds(r.project_id, r.id);
+    let contractor = null;
+    if (cIds.length === 1) {
+      const [[c]] = await pool.query('SELECT id, name FROM contractors WHERE id = ?', [cIds[0]]);
+      contractor = c ? { id: c.id, name: c.name } : null;
+    }
+    byProject.get(r.project_id).sites.push({ id: r.id, name: r.name, contractor, sharedContractors: cIds.length > 1 });
+  }
+  return { projects: [...byProject.values()] };
+}
+
+module.exports = { engineerScope, list, getById, create, getTaskMaterials, getTaskTools, getTaskMaterialsFor, getTaskToolsFor, areaScope };

@@ -139,11 +139,16 @@ async function findById(id) {
   return { ...rows[0], photos };
 }
 
-async function findAll({ projectId, siteId, contractorId, taskId, subtaskId, date, pmProjectIds, page = 1, pageSize = 20 } = {}) {
+async function findAll({ projectId, siteId, contractorId, taskId, subtaskId, date, pmProjectIds, siteIds, page = 1, pageSize = 20 } = {}) {
   const where = [];
   const params = [];
 
   // Project Manager: only their assigned projects (deny-by-default).
+  // Site Engineer: only logs on their own sites.
+  if (Array.isArray(siteIds)) {
+    if (siteIds.length === 0) where.push('1 = 0');
+    else { where.push(`dwu.site_id IN (${siteIds.map(() => '?').join(',')})`); params.push(...siteIds.map(Number)); }
+  }
   if (Array.isArray(pmProjectIds)) {
     if (pmProjectIds.length === 0) where.push('1 = 0');
     else { where.push(`dwu.project_id IN (${pmProjectIds.map(() => '?').join(',')})`); params.push(...pmProjectIds.map(Number)); }

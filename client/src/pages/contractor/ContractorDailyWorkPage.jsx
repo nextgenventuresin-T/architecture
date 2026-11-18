@@ -55,7 +55,9 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
  * and machines come from that site's Site Store.
  */
 export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
-  const isPmWorkspace = workspace === 'pm';
+  // A Site Engineer works like a PM: limited to their own sites, stock per site.
+  const isEngineerWorkspace = workspace === 'engineer';
+  const isPmWorkspace = workspace === 'pm' || isEngineerWorkspace;
   const [searchParams, setSearchParams] = useSearchParams();
   const initialProjectId = searchParams.get('projectId');
   const initialSiteId = searchParams.get('siteId');
@@ -219,7 +221,9 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
 
   // Load contractor's assigned projects (a PM: their assigned projects and sites)
   useEffect(() => {
-    (isPmWorkspace
+    (isEngineerWorkspace
+      ? dailyWorkApi.myScope().then((d) => ({ projects: d?.projects || [] }))
+      : isPmWorkspace
       ? pmApi.scope().then((d) => ({ projects: d?.projects || [] }))
       : projectsApi.listAll().then((projects) => ({ projects })))
       .then((data) => {
@@ -245,7 +249,9 @@ export default function ContractorDailyWorkPage({ workspace = 'contractor' }) {
       const prj = projects.find((p) => String(p.id) === String(projectId));
       const prjSites = (prj?.sites || []).map((s) => ({
         ...s,
-        name: s.contractor ? `${s.name} (${s.contractor.name})` : `${s.name} (run by you - Site Store)`,
+        name: s.contractor
+          ? `${s.name} (${s.contractor.name})`
+          : (isEngineerWorkspace || s.sharedContractors ? `${s.name} (Site Store)` : `${s.name} (run by you - Site Store)`),
       }));
       setSites(prjSites);
       const found = prjSites.find((s) => String(s.id) === String(initialSiteId));

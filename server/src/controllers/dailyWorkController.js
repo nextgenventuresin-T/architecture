@@ -55,4 +55,9 @@ const taskArea = asyncHandler(async (req, res) => {
   res.json({ success: true, data: { area } });
 });
 
-module.exports = { list, detail, create, getPhoto, taskMaterials, taskTools, taskArea };
+/** GET /daily-work/my-scope: a Site Engineer's projects and sites. */
+const myScope = asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await dailyWorkService.engineerScope(req.hrScope) });
+});
+
+module.exports = { list, detail, create, getPhoto, taskMaterials, taskTools, taskArea, myScope };

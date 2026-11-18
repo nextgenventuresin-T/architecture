@@ -42,6 +42,8 @@ router.get(
   controller.taskTools
 );
 
+router.get('/my-scope', controller.myScope);
+
 router.get(
   '/task-area',
   [query('taskId').isInt({ min: 1 }), query('subtaskId').optional({ checkFalsy: true }).isInt({ min: 1 })],
@@ -54,10 +56,10 @@ router.get('/photos/:photoId', [param('photoId').isInt({ min: 1 })], validate, c
 router.get('/:id', [param('id').isInt({ min: 1 })], validate, controller.detail);
 
 // Recording site work: the contractor on their own sites, a Project Manager on
-// their assigned sites (checked in the service), or Admin.
+// their assigned sites, a Site Engineer on their sites (checked in the service), or Admin.
 router.post(
   '/',
-  requireRole(ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.ADMIN),
+  requireRole(ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.EMPLOYEE, ROLES.ADMIN),
   uploadWorkPhotos,
   [
     body('project_id').isInt({ min: 1 }).withMessage('Project is required.'),

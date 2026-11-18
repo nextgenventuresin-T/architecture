@@ -317,6 +317,8 @@ export default function AppRoutes() {
           {role === ROLES.HR && <Route path="staff-attendance" element={<StaffAttendancePage />} />}
           {/* Site Engineers receive Admin's deliveries to their sites (scoped by the API). */}
           {role === ROLES.EMPLOYEE && <Route path="receive-materials" element={<SiteReceivingPage basePath="/employee" />} />}
+          {/* Site Engineers log daily work on their sites (scoped by the API). */}
+          {role === ROLES.EMPLOYEE && <Route path="daily-work" element={<ContractorDailyWorkPage workspace="engineer" />} />}
           {role === ROLES.CONTRACTOR && (
             <>
               <Route path="projects" element={<ContractorProjectsPage />} />

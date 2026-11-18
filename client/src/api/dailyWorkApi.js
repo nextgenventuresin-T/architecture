@@ -17,6 +17,8 @@ export const dailyWorkApi = {
     axiosClient
       .get('/daily-work/task-tools', { params: { taskId, contractorId, ...(subtaskId ? { subtaskId } : {}) } })
       .then((r) => r.data.data.tools),
+  /** A Site Engineer's projects and sites (for the daily log). */
+  myScope: () => axiosClient.get('/daily-work/my-scope').then((r) => r.data.data),
   /** { total, unit, done, remaining, progress } of a task / subtask, or null when it has no area. */
   taskArea: (taskId, subtaskId) =>
     axiosClient

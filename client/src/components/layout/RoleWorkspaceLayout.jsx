@@ -84,6 +84,8 @@ const ROLE_MODULES = {
     { label: 'Employees', path: '/employee', permission: 'employees:view' },
     // Site Engineers: receive deliveries to their sites (others simply see no sites).
     { label: 'Receive Materials', path: '/employee/receive-materials' },
+    // Site Engineers: daily work log on their sites (assigned labour, material, area progress).
+    { label: 'Log Daily Work', path: '/employee/daily-work' },
     approvalsFor('/employee'),
     reportsFor('/employee'),
   ],
