@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Eye, Pencil, Package, Warehouse, Wrench, Edit2, Trash2, Upload } from 'lucide-react';
+import { Plus, Eye, Pencil, Package, Warehouse, Wrench, Edit2, Trash2, Upload, Download } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
 import DataTable from '../../../components/ui/DataTable';
@@ -101,6 +101,45 @@ export default function MaterialListPage() {
     }
   }
 
+  // Export the whole live catalogue to an Excel file (columns match "Import Excel / CSV").
+  const [exporting, setExporting] = useState(false);
+  async function handleExport(kind) {
+    setExporting(true);
+    try {
+      const XLSX = await import('xlsx');
+      const stamp = new Date().toISOString().slice(0, 10);
+      let rows;
+      let name;
+      if (kind === 'materials') {
+        const list = await materialsApi.listAll({ status: 'all' });
+        rows = list.map((m) => ({
+          'Material Code': m.code, 'Material Name': m.name, Category: m.category, Unit: m.unit,
+          'Minimum Stock': m.minStock, 'Purchase Rate': m.purchaseRate, 'Default Supplier': m.supplier || '',
+          Status: m.status, 'Current Stock': m.currentStock, Notes: m.notes || '',
+        }));
+        name = `materials-${stamp}.xlsx`;
+      } else {
+        const list = await toolApi.listAll({});
+        rows = list.map((t) => ({
+          Code: t.code, 'Machine / Tool Name': t.name, Type: t.type,
+          Ownership: t.ownershipType ?? t.ownership_type ?? '', 'Total Quantity': t.totalQuantity ?? t.total_quantity ?? '',
+          'Charge Rate per Day': t.defaultChargeRate ?? t.default_charge_rate ?? '', 'Rental Rate per Day': t.rentalRate ?? t.rental_rate ?? '',
+          'Registered Units': t.unitTotal ?? t.unit_total ?? '', Description: t.description || '', Status: t.status,
+        }));
+        name = `machines-tools-${stamp}.xlsx`;
+      }
+      const sheet = XLSX.utils.json_to_sheet(rows);
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, sheet, kind === 'materials' ? 'Materials' : 'Machines & Tools');
+      XLSX.writeFile(book, name); // the browser saves it to Downloads
+      setNotice({ tone: 'success', text: `Exported ${rows.length} ${kind === 'materials' ? 'materials' : 'machines / tools'} to ${name}.` });
+    } catch (err) {
+      setNotice({ tone: 'error', text: err.message || 'Could not export.' });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function handleDeleteMaterial(material) {
     if (!window.confirm(`Delete material "${material.name}"? It will no longer appear in the catalogue or in requests.`)) return;
     try {
@@ -155,6 +194,10 @@ export default function MaterialListPage() {
         actions={
           activeTab === 'materials' ? (
             <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" className="gap-2" onClick={() => handleExport('materials')} isLoading={exporting}>
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Export Excel
+              </Button>
               <Button variant="secondary" className="gap-2" onClick={() => setImportEntity('materials')}>
                 <Upload className="h-4 w-4" aria-hidden="true" />
                 Import Excel / CSV
@@ -171,6 +214,10 @@ export default function MaterialListPage() {
               <Button variant="secondary" className="gap-2" onClick={() => setImportEntity('tools')}>
                 <Upload className="h-4 w-4" aria-hidden="true" />
                 Import machine types
+              </Button>
+              <Button variant="secondary" className="gap-2" onClick={() => handleExport('tools')} isLoading={exporting}>
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Export Excel
               </Button>
               <Button variant="secondary" className="gap-2" onClick={() => setImportEntity('machines')}>
                 <Upload className="h-4 w-4" aria-hidden="true" />
