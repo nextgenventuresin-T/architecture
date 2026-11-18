@@ -1847,13 +1847,14 @@ async function assignWorkerToTask(payload) {
   const remarks = (payload.remarks || '').trim() || null;
   const assignedBy = payload.assignedBy || payload.assigned_by || null;
 
-  // Duplicate check
+  // Duplicate check: once per subtask (or once on the main task when no subtask), so the
+  // same labour can be assigned to several subtasks of one task.
   const [existing] = await pool.query(
-    'SELECT id FROM task_assigned_workers WHERE task_id = ? AND worker_type = ? AND worker_id = ?',
-    [taskId, workerType, workerId]
+    'SELECT id FROM task_assigned_workers WHERE task_id = ? AND subtask_id <=> ? AND worker_type = ? AND worker_id = ?',
+    [taskId, subtaskId, workerType, workerId]
   );
   if (existing.length) {
-    const err = new Error(`${workerName} is already assigned to this task.`);
+    const err = new Error(`${workerName} is already assigned to this ${subtaskId ? 'subtask' : 'task'}.`);
     err.status = 409;
     throw err;
   }
