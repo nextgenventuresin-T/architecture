@@ -227,6 +227,9 @@ async function assignWorkerToTask(taskId, payload, userId, hrScope) {
     dailyWage: Number(payload.daily_wage || payload.dailyWage || 0),
     plannedCost: Number(payload.planned_cost || payload.plannedCost || 0),
     remarks: payload.remarks || null,
+    reason: payload.reason || null,
+    // Admin is the approver: an extra worker Admin adds needs no approval request.
+    byAdmin: hrScope?.role === 'admin',
     assignedBy: userId,
   }).catch((err) => {
     // The model signals duplicate / missing-reason cases with err.status.

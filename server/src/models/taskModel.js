@@ -1873,7 +1873,9 @@ async function assignWorkerToTask(payload) {
   );
   const assignedCount = Number(assignedRow?.assigned_count || 0);
 
-  const isAdditional = plannedCount > 0 && assignedCount >= plannedCount;
+  // Above the plan, a contractor / PM needs a reason and Admin approval; Admin adding one
+  // decides it directly, so it is saved as an ordinary (active) assignment.
+  const isAdditional = plannedCount > 0 && assignedCount >= plannedCount && !payload.byAdmin;
   const reason = (payload.reason || payload.remarks || '').trim();
 
   if (isAdditional && !reason) {
