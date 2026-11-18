@@ -1587,7 +1587,7 @@ export default function LabourDirectoryPage() {
       <AssignToTaskModal
         worker={workerToAssign}
         onClose={() => setWorkerToAssign(null)}
-        onAssigned={(message) => { setWorkerToAssign(null); setAssignNotice(message); loadDirectory(); }}
+        onAssigned={(message) => { if (message) { setWorkerToAssign(null); setAssignNotice(message); } loadDirectory(); }}
       />
 
       {/* EDIT WORKER MODAL */}
