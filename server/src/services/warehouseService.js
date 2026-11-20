@@ -647,6 +647,13 @@ async function transferStock(payload, userId, opts = {}) {
     }
   }
 
+  // The destination can be another site (Central -> Site A, Site A -> Site B):
+  // its stock is slotted under the destination's project / site when given,
+  // else under the same project / site as the source (the old behaviour).
+  const hasDest = payload.destination_project_id !== undefined || payload.destination_site_id !== undefined;
+  const destProjectId = hasDest ? (payload.destination_project_id ?? null) : (payload.project_id ?? null);
+  const destSiteId = hasDest ? (payload.destination_site_id ?? null) : (payload.site_id ?? null);
+
   return withTransaction(async (conn) => {
     // Lock both warehouses in a consistent (ascending id) order. Locking in
     // the order the user happened to pick would let two opposite transfers
@@ -689,8 +696,8 @@ async function transferStock(payload, userId, opts = {}) {
       {
         warehouseId: payload.destination_warehouse_id,
         materialId: payload.material_id,
-        projectId: payload.project_id ?? null,
-        siteId: payload.site_id ?? null,
+        projectId: destProjectId,
+        siteId: destSiteId,
         delta: quantity,
       },
       conn
@@ -703,8 +710,9 @@ async function transferStock(payload, userId, opts = {}) {
         material_id: payload.material_id,
         warehouse_id: payload.warehouse_id,
         destination_warehouse_id: payload.destination_warehouse_id,
-        project_id: payload.project_id ?? null,
-        site_id: payload.site_id ?? null,
+        // The movement is for the site it touches: the destination's, else the source's.
+        project_id: destSiteId ? destProjectId : (payload.project_id ?? destProjectId ?? null),
+        site_id: destSiteId ?? payload.site_id ?? null,
         quantity,
         unit: payload.unit?.trim() || material.unit,
         adjustment_type: null,
@@ -817,6 +825,30 @@ async function adjustStock(payload, userId) {
  * into warehouse stock, so the receiving form can offer them without the admin
  * having to cross-reference procurement by hand.
  */
+/**
+ * Sites as stock locations for the movement pop-ups: each site with the
+ * warehouse that holds its stock (its sole contractor's, else its Site Store).
+ */
+async function siteLocations() {
+  const pmScope = require('./pmScopeService');
+  await warehouseModel.ensureContractorWarehouses();
+  const sites = await warehouseModel.findAllSites();
+  const [contractorWarehouses] = await pool.query("SELECT id, contractor_id FROM warehouses WHERE type = 'contractor'");
+  const byContractor = new Map(contractorWarehouses.map((w) => [Number(w.contractor_id), w.id]));
+  const out = [];
+  for (const s of sites) {
+    let warehouseId = null;
+    try {
+      const holder = await pmScope.siteHolder(s.project_id, s.id);
+      warehouseId = holder?.warehouseId || (holder?.contractorId ? byContractor.get(Number(holder.contractorId)) : null) || null;
+    } catch (error) {
+      console.error(`[warehouse] site ${s.id} holder: ${error.message}`);
+    }
+    if (warehouseId) out.push({ siteId: s.id, projectId: s.project_id, warehouseId, label: siteLabel(s.project_name, s.name) });
+  }
+  return out;
+}
+
 async function getLookups() {
   const [warehouses, materials, projects, locations, summary, pendingReceipts, [stockBalances]] = await Promise.all([
     warehouseModel.findAll({ page: 1, pageSize: 10000 }),
@@ -842,6 +874,8 @@ async function getLookups() {
       id: m.id, code: m.code, name: m.name, category: m.category, unit: m.unit, minStock: Number(m.min_stock || 0),
     })),
     projects: (projects.rows || []).map((p) => ({ id: p.id, code: p.code, name: p.name })),
+    // Site-wise locations for the stock pop-ups (no contractor / manager names).
+    siteLocations: await siteLocations(),
     locations,
     statuses: STATUSES,
     transactionTypes: TRANSACTION_TYPES,

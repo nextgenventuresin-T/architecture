@@ -181,6 +181,8 @@ router.post(
       .isInt({ min: 1 })
       .withMessage('Select a destination warehouse.')
       .toInt(),
+    body('destination_project_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
+    body('destination_site_id').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
     body('performed_by').optional({ nullable: true }).isInt({ min: 1 }).toInt(),
   ],
   validate,

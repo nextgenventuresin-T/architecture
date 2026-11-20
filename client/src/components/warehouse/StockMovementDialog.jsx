@@ -58,6 +58,9 @@ const EMPTY = {
   destination_warehouse_id: '',
   project_id: '',
   site_id: '',
+  // Transfer into a site: that site's project / site (set by the destination location).
+  destination_project_id: '',
+  destination_site_id: '',
   quantity: '',
   adjustment_type: 'increase',
   reason: '',
@@ -117,6 +120,49 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
     setFieldErrors((current) => ({ ...current, [key]: undefined }));
   };
 
+  // ---- Site-wise locations: the Central (or another general) warehouse, or a site.
+  // A site stands for whichever warehouse holds its stock - no contractor or
+  // manager names are shown.
+  const siteLocations = lookups.siteLocations ?? [];
+  const generalWarehouses = (lookups.warehouses ?? []).filter((w) => !['contractor', 'site'].includes(w.type));
+  const locationOptions = [
+    ...generalWarehouses.map((w) => ({ value: `wh:${w.id}`, label: w.type === 'central' ? (generalWarehouses.filter((x) => x.type === 'central').length > 1 ? `Central Company Warehouse (${w.name})` : 'Central Company Warehouse') : w.name })),
+    ...siteLocations.map((l) => ({ value: `site:${l.siteId}`, label: l.label })),
+  ];
+  const locationOf = (warehouseId, siteId) => {
+    if (!warehouseId) return '';
+    if (generalWarehouses.some((w) => String(w.id) === String(warehouseId))) return `wh:${warehouseId}`;
+    const loc = siteLocations.find((l) => String(l.siteId) === String(siteId) && String(l.warehouseId) === String(warehouseId));
+    return loc ? `site:${loc.siteId}` : '';
+  };
+  const sourceLocation = locationOf(values.warehouse_id, values.site_id);
+  const destLocation = locationOf(values.destination_warehouse_id, values.destination_site_id);
+  const sourceIsSite = sourceLocation.startsWith('site:');
+  const resolveLocation = (value) => {
+    if (value.startsWith('wh:')) return { warehouseId: value.slice(3), projectId: '', siteId: '' };
+    const loc = siteLocations.find((l) => `site:${l.siteId}` === value);
+    return loc ? { warehouseId: String(loc.warehouseId), projectId: String(loc.projectId), siteId: String(loc.siteId) } : { warehouseId: '', projectId: '', siteId: '' };
+  };
+  const setSourceLocation = (event) => {
+    const r = resolveLocation(event.target.value);
+    // A site sets its project / site; a warehouse keeps any project / site already
+    // chosen (e.g. from a procurement delivery) unless the previous location was a site.
+    const toWarehouse = event.target.value.startsWith('wh:');
+    setValues((current) => ({
+      ...current,
+      warehouse_id: r.warehouseId,
+      project_id: toWarehouse && !sourceIsSite ? current.project_id : r.projectId,
+      site_id: toWarehouse && !sourceIsSite ? current.site_id : r.siteId,
+    }));
+    setFieldErrors((current) => ({ ...current, warehouse_id: undefined, project_id: undefined, site_id: undefined }));
+  };
+  const setDestLocation = (event) => {
+    const r = resolveLocation(event.target.value);
+    setValues((current) => ({ ...current, destination_warehouse_id: r.warehouseId, destination_project_id: r.projectId, destination_site_id: r.siteId }));
+    setFieldErrors((current) => ({ ...current, destination_warehouse_id: undefined }));
+  };
+  const locationName = (value) => locationOptions.find((o) => o.value === value)?.label;
+
   const selectedMaterial = lookups.materials?.find((m) => String(m.id) === String(values.material_id));
   const selectedWarehouse = lookups.warehouses?.find((w) => String(w.id) === String(values.warehouse_id));
   const destWarehouse = lookups.warehouses?.find((w) => String(w.id) === String(values.destination_warehouse_id));
@@ -148,19 +194,19 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
   function validate() {
     const errors = {};
     if (!values.material_id) errors.material_id = 'Select a material.';
-    if (!values.warehouse_id) errors.warehouse_id = 'Select a warehouse.';
+    if (!values.warehouse_id) errors.warehouse_id = 'Select a location.';
     if (!values.quantity || Number(values.quantity) <= 0) {
       errors.quantity = 'Enter a quantity greater than zero.';
     } else if (['issue', 'transfer'].includes(type) && availableStock !== null && Number(values.quantity) > availableStock) {
-      errors.quantity = `Only ${formatNumber(availableStock)} ${unit} available in ${selectedWarehouse?.name || 'this warehouse'}.`;
+      errors.quantity = `Only ${formatNumber(availableStock)} ${unit} available at ${locationName(sourceLocation) || 'this location'}.`;
     }
     if (['receipt', 'transfer', 'issue'].includes(type) && isCentralWarehouse && !values.vehicle_number?.trim()) {
       errors.vehicle_number = 'Vehicle number is mandatory for Central Warehouse movements.';
     }
     if (type === 'transfer') {
-      if (!values.destination_warehouse_id) errors.destination_warehouse_id = 'Select a destination warehouse.';
-      else if (String(values.destination_warehouse_id) === String(values.warehouse_id)) {
-        errors.destination_warehouse_id = 'Choose a different warehouse to transfer into.';
+      if (!values.destination_warehouse_id) errors.destination_warehouse_id = 'Select where it goes.';
+      else if (destLocation && destLocation === sourceLocation) {
+        errors.destination_warehouse_id = 'Choose a different location to transfer into.';
       }
     }
     if (type === 'adjustment' && !values.reason.trim()) {
@@ -194,7 +240,12 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
           values.transporter_name ? `Transporter: ${values.transporter_name.trim()}` : '',
           values.notes ? values.notes.trim() : '',
         ].filter(Boolean).join(' | ') || null,
-        ...(type === 'transfer' && { destination_warehouse_id: Number(values.destination_warehouse_id) }),
+        ...(type === 'transfer' && {
+          destination_warehouse_id: Number(values.destination_warehouse_id),
+          // Into a site: slotted under that site; into a warehouse: unslotted (null).
+          destination_project_id: values.destination_project_id ? Number(values.destination_project_id) : null,
+          destination_site_id: values.destination_site_id ? Number(values.destination_site_id) : null,
+        }),
         ...(type === 'adjustment' && { adjustment_type: values.adjustment_type, reason: values.reason.trim() }),
         ...(type === 'receipt' && values.procurement_receipt_id
           ? { procurement_receipt_id: Number(values.procurement_receipt_id) }
@@ -211,11 +262,6 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
       setIsSaving(false);
     }
   }
-
-  const warehouseOptions = (lookups.warehouses ?? []).map((w) => ({
-    value: String(w.id),
-    label: `${w.code} — ${w.name}`,
-  }));
 
   const materialOptions = (lookups.materials ?? []).map((m) => ({
     value: String(m.id),
@@ -299,44 +345,49 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
         />
 
         <SelectField
-          label={type === 'transfer' ? 'Source warehouse' : 'Warehouse'}
+          label={type === 'transfer' ? 'From' : 'Location'}
           required
-          value={values.warehouse_id}
-          onChange={set('warehouse_id')}
-          placeholder="Select a warehouse"
-          options={warehouseOptions}
+          value={sourceLocation}
+          onChange={setSourceLocation}
+          placeholder="Central warehouse or a site"
+          options={locationOptions}
           error={fieldErrors.warehouse_id}
         />
 
         {type === 'transfer' && (
           <SelectField
-            label="Destination warehouse"
+            label="To"
             required
-            value={values.destination_warehouse_id}
-            onChange={set('destination_warehouse_id')}
-            placeholder="Select a warehouse"
-            options={warehouseOptions}
+            value={destLocation}
+            onChange={setDestLocation}
+            placeholder="Central warehouse or a site"
+            options={locationOptions.filter((o) => o.value !== sourceLocation)}
             error={fieldErrors.destination_warehouse_id}
           />
         )}
 
-        <SelectField
-          label="Project"
-          value={values.project_id}
-          onChange={set('project_id')}
-          placeholder="Not assigned to a project"
-          options={projectOptions}
-          error={fieldErrors.project_id}
-        />
+        {/* Central stock can still be earmarked for a project / site; a site location already is one. */}
+        {!sourceIsSite && values.warehouse_id && (
+          <>
+            <SelectField
+              label="Project"
+              value={values.project_id}
+              onChange={set('project_id')}
+              placeholder="Not assigned to a project"
+              options={projectOptions}
+              error={fieldErrors.project_id}
+            />
 
-        <SelectField
-          label="Site"
-          value={values.site_id}
-          onChange={set('site_id')}
-          placeholder={values.project_id ? 'Not assigned to a site' : 'Select a project first'}
-          options={sites.map((s) => ({ value: String(s.id), label: s.name }))}
-          error={fieldErrors.site_id}
-        />
+            <SelectField
+              label="Site"
+              value={values.site_id}
+              onChange={set('site_id')}
+              placeholder={values.project_id ? 'Not assigned to a site' : 'Select a project first'}
+              options={sites.map((s) => ({ value: String(s.id), label: s.name }))}
+              error={fieldErrors.site_id}
+            />
+          </>
+        )}
 
         {type === 'adjustment' && (
           <SelectField
@@ -351,7 +402,7 @@ export default function StockMovementDialog({ type, lookups, defaults = {}, onCl
 
         {['issue', 'transfer', 'adjustment'].includes(type) && values.warehouse_id && values.material_id && availableStock !== null && (
           <div className="sm:col-span-2 rounded-lg border border-line bg-canvas/70 px-3 py-2 text-xs">
-            <span className="text-ink-subtle">Stock in {selectedWarehouse?.name || 'source warehouse'}: </span>
+            <span className="text-ink-subtle">Stock at {locationName(sourceLocation) || 'this location'}: </span>
             <span className={`font-semibold tabular-nums ${availableStock <= 0 ? 'text-red-600' : 'text-emerald-700'}`}>
               {formatNumber(availableStock)} {unit}
             </span>
