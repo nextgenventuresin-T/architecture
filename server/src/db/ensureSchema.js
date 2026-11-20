@@ -20,6 +20,8 @@ const STARTUP_MIGRATIONS = [
   '20261120_normalize_material_units',
   '20261120_material_sub_units',
   '20261120_site_engineer_role',
+  // One-time data reset (marked done in data_resets; never runs twice).
+  '20261120_clear_procurement_movements_stock',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };
