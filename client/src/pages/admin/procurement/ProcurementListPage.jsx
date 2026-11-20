@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Eye, Pencil, PackageCheck, ShoppingCart, LayoutGrid, Table as TableIcon, Layers } from 'lucide-react';
 import PageHeader from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
@@ -59,6 +59,7 @@ const amountOf = (row) => {
 };
 
 export default function ProcurementListPage({ basePath = '/admin' }) {
+  const location = useLocation();
   const modulePath = basePath === '/admin' ? '/admin/procurement' : basePath;
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [viewMode, setViewMode] = useState('normal');
@@ -211,6 +212,7 @@ export default function ProcurementListPage({ basePath = '/admin' }) {
         }
       />
 
+      {location.state?.flash && <Alert tone="success" className="mb-4">{location.state.flash}</Alert>}
       {receiveFlash && <Alert tone="positive" className="mb-4" onClose={() => setReceiveFlash(null)}>{receiveFlash}</Alert>}
       {receiveError && <Alert tone="error" className="mb-4" onClose={() => setReceiveError(null)}>{receiveError.message}</Alert>}
 

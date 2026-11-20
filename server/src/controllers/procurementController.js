@@ -103,4 +103,7 @@ const toolReceive = asyncHandler(async (req, res) =>
   ok(res, await procurementService.toolReceive(req.params.id, req.body, req.user.id, req.hrScope))
 );
 
-module.exports = { list, lookups, detail, create, createBatch, batchDetail, batchAction, update, updateStatus, confirmSource, placeOrder, recordVendorDispatch, receive, updateReceipt, fulfil, toolFulfil, toolReceive, dispatch, uploadBill, downloadBill };
+/** DELETE /api/procurement/:id (Admin) — delete and undo what it created. */
+const remove = asyncHandler(async (req, res) => ok(res, await require('../services/procurementDeleteService').deleteRequest(Number(req.params.id))));
+
+module.exports = { remove, list, lookups, detail, create, createBatch, batchDetail, batchAction, update, updateStatus, confirmSource, placeOrder, recordVendorDispatch, receive, updateReceipt, fulfil, toolFulfil, toolReceive, dispatch, uploadBill, downloadBill };

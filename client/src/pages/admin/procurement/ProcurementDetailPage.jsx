@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { Link, useParams, useLocation } from 'react-router-dom';
-import { Pencil, RefreshCw } from 'lucide-react';
+import { Link, useParams, useLocation, useNavigate } from 'react-router-dom';
+import { Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import Modal from '../../../components/ui/Modal';
+import { toApiError } from '../../../api/axiosClient';
 import PageHeader from '../../../components/layout/PageHeader';
 import Tabs from '../../../components/ui/Tabs';
 import Button from '../../../components/ui/Button';
@@ -30,11 +32,28 @@ export default function ProcurementDetailPage({ basePath = '/admin/procurement' 
   const [actionError, setActionError] = useState(null);
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [isReceiving, setIsReceiving] = useState(false);
+  const navigate = useNavigate();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   const { data: detail, isLoading, error, reload } = useAsync(() => procurementApi.detail(id), [id]);
 
   const canManage = [ROLES.ADMIN, ROLES.PROCUREMENT].includes(user?.role);
   const canReceive = [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE].includes(user?.role);
+  const canDelete = user?.role === ROLES.ADMIN;
+
+  async function handleDelete() {
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      const result = await procurementApi.remove(id);
+      navigate(basePath, { replace: true, state: { flash: `${result.deleted} deleted. Its stock, dispatches and transport expenses were undone.` } });
+    } catch (caught) {
+      setDeleteError(toApiError(caught));
+      setIsDeleting(false);
+    }
+  }
 
   if (error) {
     return (
@@ -123,9 +142,40 @@ export default function ProcurementDetailPage({ basePath = '/admin/procurement' 
                 </Button>
               </Link>
             )}
+            {canDelete && (
+              <Button variant="secondary" onClick={() => { setDeleteError(null); setConfirmDelete(true); }} className="text-danger">
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                Delete
+              </Button>
+            )}
           </>
         }
       />
+
+      {confirmDelete && (
+        <Modal
+          isOpen
+          onClose={() => !isDeleting && setConfirmDelete(false)}
+          title={`Delete ${request.requestNumber}?`}
+          description="This cannot be undone."
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setConfirmDelete(false)} disabled={isDeleting}>Cancel</Button>
+              <Button onClick={handleDelete} isLoading={isDeleting} loadingText="Deleting…" className="bg-danger hover:bg-danger/90">
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                Delete request
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-muted">
+            The request is removed, and anything it created is undone: stock it added or issued, its dispatches,
+            receipts and transport expenses. It cannot be deleted if its material has already been used or moved,
+            a vendor payment is recorded, or machines were allocated from it.
+          </p>
+          {deleteError && <Alert tone="error" title="Could not delete" className="mt-4">{deleteError.message}</Alert>}
+        </Modal>
+      )}
 
       {flash && <Alert tone="success" className="mb-4">{flash}</Alert>}
       {actionError && <Alert tone="error" title="Could not complete that" className="mb-4">{actionError.message}</Alert>}

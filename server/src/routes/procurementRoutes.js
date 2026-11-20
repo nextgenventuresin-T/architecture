@@ -215,6 +215,9 @@ router.post('/', canManage, requestRules(true), validate, controller.create);
 
 router.put('/:id', canManage, [param('id').isInt({ min: 1 }), ...requestRules(false)], validate, controller.update);
 
+// Admin only: delete a request and undo the stock / dispatches / transport expenses it created.
+router.delete('/:id', requireRole(ROLES.ADMIN), [param('id').isInt({ min: 1 }).toInt()], validate, controller.remove);
+
 router.patch(
   '/:id/status',
   canManage,

@@ -25,6 +25,8 @@ export const procurementApi = {
   batchAction: (batchId, action, payload = {}) =>
     axiosClient.post(`/procurement/batches/${batchId}/${action}`, payload).then((r) => r.data.data),
   update: (id, payload) => axiosClient.put(`/procurement/${id}`, payload).then((r) => r.data.data.request),
+  // Admin only: deletes the request and undoes the stock / dispatches / transport expenses it created.
+  remove: (id) => axiosClient.delete(`/procurement/${id}`).then((r) => r.data.data),
   updateStatus: (id, status) =>
     axiosClient.patch(`/procurement/${id}/status`, { status }).then((r) => r.data.data.request),
   confirmSource: (id) => axiosClient.post(`/procurement/${id}/confirm`).then((r) => r.data.data.request),
