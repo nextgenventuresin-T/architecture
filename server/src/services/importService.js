@@ -243,11 +243,19 @@ const HANDLERS = {
     update: (id, p) => vendorModel.update(id, p),
   },
   materials: {
-    findExisting: (v) => findMaterialByName(v.name),
+    // Match by Material Code first, so a re-imported export (which carries
+    // every code) updates renamed items instead of trying to add them again;
+    // fall back to the name for sheets without codes.
+    findExisting: async (v) => (v.code && (await materialModel.findByCode(String(v.code).trim()))) || findMaterialByName(v.name),
     resolve: async (v) => v,
     create: (p) => materialService.create(p),
-    // The match is by name, so the stored name (and its casing) is kept.
-    update: (id, { name, ...rest }) => materialService.update(id, rest),
+    // A name that differs from the stored one (a rename matched by code) is
+    // written; otherwise the stored name and its casing are kept.
+    update: async (id, { name, ...rest }) => {
+      const current = await materialModel.findById(id);
+      const renamed = name && current && norm(current.name) !== norm(name);
+      return materialService.update(id, renamed ? { ...rest, name } : rest);
+    },
   },
   tools: {
     findExisting: (v) => findToolByName(v.name),
