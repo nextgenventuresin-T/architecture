@@ -919,10 +919,30 @@ module.exports = {
  * Contractor warehouses are provisioned on demand so a newly-added contractor
  * appears here without any change to the Contractor module.
  */
+/**
+ * "Green Villa – Block A, Block B; Lake View – Tower 1". Sites are grouped by
+ * project; past three sites the rest are counted ("+2 more").
+ */
+function siteListLabel(sites, max = 3) {
+  if (!sites.length) return 'No site assigned';
+  const shown = sites.slice(0, max);
+  const byProject = new Map();
+  for (const s of shown) {
+    const key = s.projectName || '';
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push(s.name);
+  }
+  const text = [...byProject.entries()]
+    .map(([project, names]) => (project ? `${project} – ${names.join(', ')}` : names.join(', ')))
+    .join('; ');
+  return sites.length > max ? `${text} +${sites.length - max} more` : text;
+}
+
 async function getScopes() {
   await warehouseModel.ensureCentralWarehouse();
   await warehouseModel.ensureContractorWarehouses();
   const { central, contractors } = await warehouseModel.findScopes();
+  const sitesByWarehouse = await warehouseModel.findContractorWarehouseSites(contractors);
 
   return {
     central: {
@@ -934,13 +954,19 @@ async function getScopes() {
       primaryId: central[0]?.id ?? null,
       warehouses: central.map((w) => ({ id: w.id, code: w.code, name: w.name, location: w.location })),
     },
-    contractors: contractors.map((w) => ({
-      warehouseId: w.id,
-      code: w.code,
-      name: w.name,
-      location: w.location,
-      contractor: { id: w.contractor_id, name: w.contractor_name },
-    })),
+    contractors: contractors.map((w) => {
+      const sites = sitesByWarehouse.get(w.id) || [];
+      return {
+        warehouseId: w.id,
+        code: w.code,
+        name: w.name,
+        location: w.location,
+        contractor: { id: w.contractor_id, name: w.contractor_name },
+        // Named after the sites it holds stock for: "Green Villa – Block A, Block B (Ashok)".
+        sites,
+        label: `${siteListLabel(sites)} (${w.contractor_name})`,
+      };
+    }),
   };
 }
 

@@ -665,6 +665,72 @@ async function findScopes() {
 }
 
 /**
+ * The sites each contractor warehouse serves, for naming it after them. A
+ * contractor holds a site's stock when they are its only contractor (on the site,
+ * or - when the site has none - on its project); sites the warehouse still holds
+ * stock for are included too. Returns Map(warehouseId -> [{ id, name, projectId, projectName }]).
+ */
+async function findContractorWarehouseSites(contractorWarehouses) {
+  const out = new Map(contractorWarehouses.map((w) => [w.id, []]));
+  if (!contractorWarehouses.length) return out;
+  const warehouseOf = new Map(contractorWarehouses.map((w) => [Number(w.contractor_id), w.id]));
+
+  const [sites] = await pool.query(
+    `SELECT s.id, s.name, s.contractor_id, p.id AS project_id, p.name AS project_name, p.contractor_id AS project_contractor_id
+     FROM sites s JOIN projects p ON p.id = s.project_id
+     ORDER BY p.name, s.name`
+  );
+  const listOf = async (table, key) => {
+    try {
+      const [rows] = await pool.query(`SELECT \`${key}\` AS owner, contractor_id FROM \`${table}\``);
+      const map = new Map();
+      for (const r of rows) {
+        if (!map.has(r.owner)) map.set(r.owner, new Set());
+        map.get(r.owner).add(Number(r.contractor_id));
+      }
+      return map;
+    } catch (error) {
+      if (error.code === 'ER_NO_SUCH_TABLE') return new Map();
+      throw error;
+    }
+  };
+  const siteTeams = await listOf('site_contractors', 'site_id');
+  const projectTeams = await listOf('project_contractors', 'project_id');
+
+  const added = new Set();
+  const add = (warehouseId, s) => {
+    const key = `${warehouseId}:${s.id}`;
+    if (added.has(key) || !out.has(warehouseId)) return;
+    added.add(key);
+    out.get(warehouseId).push({ id: s.id, name: s.name, projectId: s.project_id, projectName: s.project_name });
+  };
+
+  const siteById = new Map(sites.map((s) => [s.id, s]));
+  for (const s of sites) {
+    let ids = new Set([...(siteTeams.get(s.id) || []), ...(s.contractor_id ? [Number(s.contractor_id)] : [])]);
+    if (!ids.size) ids = new Set([...(projectTeams.get(s.project_id) || []), ...(s.project_contractor_id ? [Number(s.project_contractor_id)] : [])]);
+    if (ids.size === 1) {
+      const warehouseId = warehouseOf.get([...ids][0]);
+      if (warehouseId) add(warehouseId, s);
+    }
+  }
+
+  const [held] = await pool.query(
+    `SELECT DISTINCT warehouse_id, site_id FROM warehouse_stock
+     WHERE warehouse_id IN (?) AND site_id IS NOT NULL AND quantity <> 0`,
+    [contractorWarehouses.map((w) => w.id)]
+  );
+  for (const h of held) {
+    const s = siteById.get(h.site_id);
+    if (s) add(h.warehouse_id, s);
+  }
+  for (const list of out.values()) {
+    list.sort((a, b) => (a.projectName || '').localeCompare(b.projectName || '') || a.name.localeCompare(b.name));
+  }
+  return out;
+}
+
+/**
  * Per-material overview for one or more central warehouses:
  *   currentStock     — what is on hand right now
  *   purchasedReceived— everything ever brought in (receipts + inbound transfers)
@@ -842,5 +908,5 @@ module.exports = {
   findTransactions, findRecentTransactions, findTransactionById,
   findTransactionByReceipt, averageUnitCost, nextTransactionNumber, createTransaction,
   findSummary, findAlerts,
-  ensureCentralWarehouse, ensureContractorWarehouses, ensureSiteStore, findScopes, findCentralOverview, findContractorTransactions,
+  ensureCentralWarehouse, ensureContractorWarehouses, ensureSiteStore, findScopes, findContractorWarehouseSites, findCentralOverview, findContractorTransactions,
 };

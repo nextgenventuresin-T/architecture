@@ -62,7 +62,8 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
       { value: 'total-contractor', label: 'Total Contractor Warehouses' },
     ];
     for (const c of scopes.contractors ?? []) {
-      opts.push({ value: `contractor:${c.warehouseId}`, label: `${c.contractor?.name || c.name}` });
+      // Named after its sites, contractor in brackets: 'Green Villa – Block A (Ashok)'.
+      opts.push({ value: `contractor:${c.warehouseId}`, label: c.label || c.contractor?.name || c.name });
     }
     return opts;
   }, [scopes]);
@@ -114,7 +115,7 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
             label="Select warehouse"
             value={scopeValue}
             onChange={(e) => setScopeValue(e.target.value)}
-            className="w-[280px]"
+            className="w-[380px] max-w-full"
             options={scopeOptions}
           />
         </div>
@@ -402,7 +403,7 @@ function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedContr
   const warehouseOptions = useMemo(() => {
     const opts = [{ value: 'all', label: 'Any warehouse' }];
     (scopes.central?.warehouses ?? []).forEach((w) => opts.push({ value: String(w.id), label: 'Central Company Warehouse' }));
-    (scopes.contractors ?? []).forEach((c) => opts.push({ value: String(c.warehouseId), label: c.contractor?.name || c.name }));
+    (scopes.contractors ?? []).forEach((c) => opts.push({ value: String(c.warehouseId), label: c.label || c.contractor?.name || c.name }));
     return opts;
   }, [scopes]);
 
@@ -536,7 +537,7 @@ function ContractorWarehouseView({ viewMode, contractorScope, scopes, lookups })
     <>
       <Card className="mb-4">
         <div className="border-b border-line px-5 py-4">
-          <h2 className="font-display text-base font-semibold text-ink">{contractorScope.contractor?.name} — current stock</h2>
+          <h2 className="font-display text-base font-semibold text-ink">{contractorScope.label || contractorScope.contractor?.name} — current stock</h2>
           <p className="mt-0.5 text-xs text-ink-subtle">What this contractor is currently holding. Every quantity traces back to a movement in the history below.</p>
         </div>
         {viewMode === 'table' ? (
@@ -566,7 +567,7 @@ function ContractorWarehouseView({ viewMode, contractorScope, scopes, lookups })
         scopes={scopes}
         lookups={lookups}
         lockedContractorId={contractorId}
-        title={`${contractorScope.contractor?.name} — movement history`}
+        title={`${contractorScope.label || contractorScope.contractor?.name} — movement history`}
       />
     </>
   );
