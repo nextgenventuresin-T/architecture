@@ -50,6 +50,9 @@ function newRow(defaults) {
     quantity: '',
     unit: '',
     litres_per_unit: '',
+    // Sub-unit material: quantity bought in the purchase unit, and sub-units in one.
+    purchase_quantity: '',
+    units_per_purchase_unit: '',
     rate: '',
     transport_cost: '',
     vendor_id: defaults.vendor_id || '',
@@ -165,7 +168,13 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       if ('project_id' in patch) { next.site_id = ''; next.task_id = ''; next.subtask_id = ''; }
       if ('site_id' in patch) { next.task_id = ''; next.subtask_id = ''; }
       if ('task_id' in patch) next.subtask_id = '';
-      if ('item_type' in patch) { next.material_id = ''; next.tool_id = ''; next.unit = ''; next.quantity = patch.item_type === 'tool' ? '1' : ''; }
+      if ('item_type' in patch) { next.material_id = ''; next.tool_id = ''; next.unit = ''; next.quantity = patch.item_type === 'tool' ? '1' : ''; next.purchase_quantity = ''; next.units_per_purchase_unit = ''; }
+      // Sub-unit material: quantity (in sub-units) = quantity bought x sub-units in one.
+      if ('purchase_quantity' in patch || 'units_per_purchase_unit' in patch) {
+        const pq = Number(next.purchase_quantity);
+        const per = Number(next.units_per_purchase_unit);
+        next.quantity = pq > 0 && per > 0 ? String(Number((pq * per).toFixed(2))) : '';
+      }
       return next;
     }));
     setRowErrors((e) => {
@@ -181,6 +190,10 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
     updateRow(row.key, {
       material_id: materialId,
       unit: mat?.unit || plan?.unit || '', // the material's own unit (kg / litre / nos)
+      // Sub-unit material: default conversion from the master.
+      units_per_purchase_unit: mat?.subUnit && mat?.unitsPerPurchaseUnit ? String(mat.unitsPerPurchaseUnit) : '',
+      purchase_quantity: '',
+      ...(mat?.subUnit ? { quantity: '' } : null),
       rate: row.rate || String(plan?.costPerUnit || mat?.procurement_rate || mat?.default_rate || ''),
     });
   };
@@ -265,7 +278,10 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       : null;
     const transport = Number(r.transport_cost || 0);
     const lineTotal = qty * Number(r.rate || 0) * (isTool && r.tool_mode === 'rented' ? Number(r.rental_days || 1) : 1) + transport;
-    return { isTool, unplanned, overPlan, plannedDays, transport, lineTotal, needsReason: unplanned || overPlan, liquid, litreUnit, totalLitres };
+    const subMat = mat?.subUnit ? mat : null;
+    const perBought = subMat && Number(r.units_per_purchase_unit) > 0 && Number(r.rate) > 0
+      ? Number((Number(r.rate) * Number(r.units_per_purchase_unit)).toFixed(2)) : null;
+    return { isTool, unplanned, overPlan, plannedDays, transport, lineTotal, needsReason: unplanned || overPlan, liquid, litreUnit, totalLitres, subMat, perBought };
   };
 
   const batchTotal = rows.reduce((s, r) => s + analyse(r).lineTotal, 0);
@@ -279,8 +295,9 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       const a = analyse(r);
       if (a.isTool ? !r.tool_id : !r.material_id) e.item = a.isTool ? 'Select a machine / tool.' : 'Select a material.';
       if (!(Number(r.quantity) > 0)) e.quantity = 'Enter a quantity.';
+      if (a.subMat && !(Number(r.purchase_quantity) > 0)) e.purchase_quantity = `Enter the quantity in ${a.subMat.purchaseUnit}.`;
+      if (a.subMat && !(Number(r.units_per_purchase_unit) > 0)) e.units_per_purchase_unit = 'Enter a number greater than 0.';
       if (r.transport_cost !== '' && !(Number(r.transport_cost) >= 0)) e.transport_cost = 'Enter a valid amount.';
-      if (a.liquid && r.litres_per_unit !== '' && !(Number(r.litres_per_unit) >= 0)) e.litres_per_unit = 'Enter litres as a number.';
       if (a.isTool && !(Number.isInteger(Number(r.quantity)) && Number(r.quantity) >= 1 && Number(r.quantity) <= 50)) e.quantity = 'Enter whole units (1 - 50).';
       if (hasLinks(flow) && !r.project_id) e.project_id = 'Select a project.';
       if (flow === 'central_site' && r.project_id && !r.site_id) e.site_id = 'Select the site it goes to.';
@@ -314,8 +331,10 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       excess_reason: r.excess_reason.trim() || null,
       // Freight quoted for this item; booked once, with its receipt (or the shared vehicle).
       transport_cost: r.transport_cost !== '' && Number(r.transport_cost) > 0 ? Number(r.transport_cost) : null,
-      // Bucket / liquid material: litres in one unit (server works out the total litres).
-      ...(a.liquid && !a.litreUnit && Number(r.litres_per_unit) > 0 ? { litres_per_unit: Number(r.litres_per_unit) } : {}),
+      // Sub-unit material: quantity bought and the conversion (server works out the sub-units).
+      ...(a.subMat && Number(r.purchase_quantity) > 0
+        ? { purchase_quantity: Number(r.purchase_quantity), units_per_purchase_unit: Number(r.units_per_purchase_unit) || null }
+        : {}),
     };
     if (hasLinks(flow)) {
       Object.assign(base, {
@@ -599,19 +618,26 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                     placeholder={isRequester && !r.task_id ? 'Select the task first' : 'Select'}
                     options={itemOptions(r)}
                   />
+                  {a.subMat && (
+                    <>
+                      <InputField className="lg:col-span-2" label={`Bought (${a.subMat.purchaseUnit})`} required type="number" min="0" step="any"
+                        value={r.purchase_quantity} onChange={(e) => updateRow(r.key, { purchase_quantity: e.target.value })} error={err.purchase_quantity}
+                        placeholder="20" />
+                      <InputField className="lg:col-span-2" label={`${r.unit} in 1 ${a.subMat.purchaseUnit}`} required type="number" min="0" step="any"
+                        value={r.units_per_purchase_unit} onChange={(e) => updateRow(r.key, { units_per_purchase_unit: e.target.value })} error={err.units_per_purchase_unit}
+                        placeholder="5" hint={a.subMat.unitsPerPurchaseUnit ? `Master default: ${a.subMat.unitsPerPurchaseUnit}` : undefined} />
+                    </>
+                  )}
                   <InputField className="lg:col-span-2" label={a.isTool ? 'Units' : `Qty${r.unit ? ` (${r.unit})` : ''}`} required type="number"
                     min={a.isTool ? '1' : '0'} step={a.isTool ? '1' : 'any'}
                     value={r.quantity} onChange={(e) => updateRow(r.key, { quantity: e.target.value })} error={err.quantity}
-                    hint={a.isTool && Number(r.quantity) > 1 ? `${r.quantity} units - each tracked by its own serial number` : undefined} />
-                  {a.liquid && !a.litreUnit && (
-                    <InputField className="lg:col-span-2" label={`Litres per ${r.unit || 'unit'}`} type="number" min="0" step="any"
-                      value={r.litres_per_unit} onChange={(e) => updateRow(r.key, { litres_per_unit: e.target.value })} error={err.litres_per_unit}
-                      placeholder="e.g. 20"
-                      hint={a.totalLitres != null ? `Total: ${formatLitres(a.totalLitres)}` : 'Optional - litres in one bucket / can'} />
-                  )}
+                    readOnly={Boolean(a.subMat)}
+                    hint={a.isTool && Number(r.quantity) > 1 ? `${r.quantity} units - each tracked by its own serial number`
+                      : a.subMat ? 'Worked out from the quantity bought' : undefined} />
                   {(isVendorFlow(flow) || (!isRequester && !materialsOnly(flow))) && (
-                    <InputField className="lg:col-span-2" label={a.isTool && r.tool_mode === 'rented' ? 'Rate / day (₹)' : 'Cost / unit (₹)'} type="number" min="0" step="any"
-                      value={r.rate} onChange={(e) => updateRow(r.key, { rate: e.target.value })} error={err.estimated_rate || err.purchase_rate} />
+                    <InputField className="lg:col-span-2" label={a.isTool && r.tool_mode === 'rented' ? 'Rate / day (₹)' : `Cost / ${!a.isTool && r.unit ? r.unit : 'unit'} (₹)`} type="number" min="0" step="any"
+                      value={r.rate} onChange={(e) => updateRow(r.key, { rate: e.target.value })} error={err.estimated_rate || err.purchase_rate}
+                      hint={a.perBought != null ? `= ₹${a.perBought} per ${a.subMat.purchaseUnit}` : undefined} />
                   )}
                   <InputField className="lg:col-span-2" label="Transport (₹)" type="number" min="0" step="any"
                     value={r.transport_cost} onChange={(e) => updateRow(r.key, { transport_cost: e.target.value })} error={err.transport_cost}

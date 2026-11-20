@@ -80,6 +80,13 @@ export default function OverviewTab({ request, movement }) {
               },
               ...(request.vendor?.phone ? [{ label: 'Vendor Phone', value: request.vendor.phone }] : []),
               { label: 'Quantity requested', value: `${formatNumber(request.quantity)} ${request.unit}` },
+              ...(request.purchaseQuantity != null && request.purchaseUnit ? [{
+                label: 'Bought as',
+                value: `${formatNumber(request.purchaseQuantity)} ${request.purchaseUnit}`
+                  + (request.unitsPerPurchaseUnit ? ` (1 ${request.purchaseUnit} = ${formatNumber(request.unitsPerPurchaseUnit)} ${request.unit})` : '')
+                  + (request.purchaseRate != null && request.unitsPerPurchaseUnit
+                    ? ` · ₹${formatNumber(Number((Number(request.purchaseRate) * Number(request.unitsPerPurchaseUnit)).toFixed(2)))} per ${request.purchaseUnit}` : ''),
+              }] : []),
               ...(request.isLiquid ? [{
                 label: 'Litres',
                 value: request.totalLitres != null

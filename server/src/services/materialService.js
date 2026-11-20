@@ -6,6 +6,7 @@ const projectModel = require('../models/projectModel');
 const siteModel = require('../models/siteModel');
 const { pool } = require('../config/db');
 const { normalizeUnit } = require('../utils/materialUnits');
+const subUnits = require('./materialSubUnitService');
 
 /** Categories Interface 6 offers. Existing catalogue values are merged in via lookups. */
 const CATEGORIES = [
@@ -32,7 +33,12 @@ function toMaterial(row) {
     code: row.code,
     name: row.name,
     category: row.category,
+    // `unit` is the unit stock is counted in (the sub-unit when one is set).
     unit: row.unit,
+    // The unit it is bought in; for a material without a sub-unit, its unit.
+    purchaseUnit: row.purchase_unit || row.unit,
+    subUnit: row.purchase_unit ? row.unit : null,
+    unitsPerPurchaseUnit: row.purchase_unit && row.units_per_purchase_unit != null ? Number(row.units_per_purchase_unit) : null,
     minStock,
     currentStock,
     stockStatus: stockStatusOf(currentStock, minStock),
@@ -119,8 +125,44 @@ async function generateCode() {
   throw ApiError.badRequest('Could not generate a material code. Enter one manually.');
 }
 
+const UNIT_FIELDS = ['unit', 'sub_unit', 'units_per_purchase_unit'];
+
+/**
+ * Turns the form's units (unit = the unit it is bought in, optional sub_unit and
+ * units_per_purchase_unit) into storage: with a sub-unit, `unit` holds the
+ * sub-unit and `purchase_unit` the bought unit. `current` is the stored row on
+ * an edit, so a field left out keeps its value. Returns null when no unit field
+ * was sent.
+ */
+function storageUnits(payload, current = null) {
+  if (!UNIT_FIELDS.some((k) => payload[k] !== undefined)) return null;
+  const clean = (v) => normalizeUnit(String(v ?? '').trim()) || null;
+  const mainUnit = payload.unit !== undefined ? clean(payload.unit) : (current ? (current.purchase_unit || current.unit) : null);
+  const subUnit = payload.sub_unit !== undefined ? clean(payload.sub_unit) : (current?.purchase_unit ? current.unit : null);
+  const factorIn = payload.units_per_purchase_unit !== undefined ? payload.units_per_purchase_unit : current?.units_per_purchase_unit;
+  const factor = factorIn === '' || factorIn == null ? null : Number(factorIn);
+
+  if (!mainUnit) throw ApiError.badRequest('Check the highlighted fields.', { unit: 'Enter a unit.' });
+  if (!subUnit) return { unit: mainUnit, purchase_unit: null, units_per_purchase_unit: null };
+  if (subUnit.toLowerCase() === mainUnit.toLowerCase()) {
+    throw ApiError.badRequest('Check the highlighted fields.', { sub_unit: 'The sub-unit must be different from the unit. Leave it blank if there is none.' });
+  }
+  if (subUnit.length > 20) throw ApiError.badRequest('Check the highlighted fields.', { sub_unit: 'Keep the sub-unit under 20 characters.' });
+  if (!(factor > 0)) {
+    throw ApiError.badRequest('Check the highlighted fields.', { units_per_purchase_unit: `Enter how many ${subUnit} are in 1 ${mainUnit}.` });
+  }
+  return { unit: subUnit, purchase_unit: mainUnit, units_per_purchase_unit: factor };
+}
+
+/** Payload without the form-only unit fields, with the storage units merged in. */
+function withStorageUnits(payload, units) {
+  const { sub_unit: _s, units_per_purchase_unit: _f, ...rest } = payload;
+  return units ? { ...rest, ...units } : rest;
+}
+
 async function create(payload) {
-  if (payload.unit) payload = { ...payload, unit: normalizeUnit(payload.unit) };
+  const units = storageUnits(payload);
+  payload = withStorageUnits(payload, units);
   const code = payload.code?.trim() || (await generateCode());
 
   if (await materialModel.findByCode(code)) {
@@ -133,9 +175,13 @@ async function create(payload) {
   // Adding back a material that was deleted restores it (names are unique).
   const [[deleted]] = await pool.query("SELECT id FROM materials WHERE name = ? AND status = 'deleted' LIMIT 1", [payload.name?.trim()]);
   if (deleted) {
+    // Through update, so a sub-unit given now also converts its old records.
     const { code: _ignored, ...rest } = payload;
-    await materialModel.update(deleted.id, { ...rest, name: payload.name.trim(), status: 'active' });
-    return getById(deleted.id);
+    const formUnits = units
+      ? { unit: units.purchase_unit || units.unit, sub_unit: units.purchase_unit ? units.unit : '', units_per_purchase_unit: units.units_per_purchase_unit }
+      : {};
+    const { purchase_unit: _p, ...restNoStorage } = rest;
+    return update(deleted.id, { ...restNoStorage, ...formUnits, name: payload.name.trim(), status: 'active' });
   }
   if (await materialModel.findByName(payload.name?.trim())) {
     throw ApiError.badRequest('Check the highlighted fields.', {
@@ -148,8 +194,13 @@ async function create(payload) {
 }
 
 async function update(id, payload) {
-  if (payload.unit) payload = { ...payload, unit: normalizeUnit(payload.unit) };
-  await getById(id);
+  const [[current]] = await pool.query(
+    'SELECT id, unit, purchase_unit, units_per_purchase_unit, min_stock, default_rate FROM materials WHERE id = ?',
+    [id]
+  );
+  if (!current) throw ApiError.notFound('That material does not exist.');
+  const units = storageUnits(payload, current);
+  payload = withStorageUnits(payload, units);
 
   if (payload.code) {
     const existing = await materialModel.findByCode(payload.code);
@@ -165,6 +216,55 @@ async function update(id, payload) {
       throw ApiError.badRequest('Check the highlighted fields.', {
         name: 'A material with that name already exists.',
       });
+    }
+  }
+
+  const hadSub = Boolean(current.purchase_unit);
+  const hasSub = Boolean(units?.purchase_unit);
+
+  if (units && hadSub && !hasSub && (await subUnits.hasRecords(id))) {
+    throw ApiError.badRequest('Check the highlighted fields.', {
+      sub_unit: `This material already has stock or records in ${current.unit}, so its sub-unit cannot be removed.`,
+    });
+  }
+
+  if (units && !hadSub && hasSub) {
+    // First sub-unit: convert existing records (stock, purchases, plans, logs).
+    // Minimum stock and purchase rate convert too, unless a new value was typed.
+    const f = Number(units.units_per_purchase_unit);
+    if (payload.min_stock !== undefined && Number(payload.min_stock) === Number(current.min_stock)) delete payload.min_stock;
+    if (payload.default_rate !== undefined && Number(payload.default_rate) === Number(current.default_rate)) delete payload.default_rate;
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await subUnits.convertRecords(conn, id, { factor: f, purchaseUnit: current.unit, subUnit: units.unit });
+      await conn.query(
+        `UPDATE materials SET min_stock = min_stock * ?, default_rate = default_rate / ? WHERE id = ?`,
+        [f, f, id]
+      );
+      await materialModel.update(id, payload, conn);
+      await conn.commit();
+      return getById(id);
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  } else if (units && hadSub && hasSub && units.unit !== current.unit) {
+    // Sub-unit renamed: only the label changes.
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await subUnits.renameUnitCopies(conn, id, units.unit);
+      await materialModel.update(id, payload, conn);
+      await conn.commit();
+      return getById(id);
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
     }
   }
 

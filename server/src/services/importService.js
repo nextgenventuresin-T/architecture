@@ -52,7 +52,9 @@ const ENTITIES = {
     fields: [
       { key: 'name', label: 'Material Name', required: true, max: 120, aliases: ['material', 'item', 'item name'], example: 'OPC Cement 53 Grade' },
       { key: 'category', label: 'Category', required: true, max: 80, example: 'Cement' },
-      { key: 'unit', label: 'Unit', required: true, max: 20, aliases: ['uom', 'unit of measure'], example: 'bags' },
+      { key: 'unit', label: 'Unit', required: true, max: 20, aliases: ['uom', 'unit of measure', 'purchase unit'], hint: 'The unit it is bought in', example: 'kg' },
+      { key: 'sub_unit', label: 'Sub-unit', max: 20, aliases: ['subunit', 'sub unit', 'usage unit'], hint: 'Optional: the unit it is used in on site', example: 'units' },
+      { key: 'units_per_purchase_unit', label: 'Sub-units per Unit', type: 'number', min: 0, aliases: ['sub-units per unit', 'sub units per unit', 'conversion', 'units per purchase unit'], hint: 'Needed with a sub-unit, e.g. 5 (1 kg = 5 units)', example: '5' },
       { key: 'code', label: 'Material Code', max: 30, aliases: ['code', 'item code', 'sku'], hint: 'Leave blank to auto-generate' },
       { key: 'min_stock', label: 'Minimum Stock', type: 'number', min: 0, aliases: ['min stock', 'reorder level', 'reorder point'], example: '200' },
       { key: 'default_rate', label: 'Purchase Rate', type: 'number', min: 0, aliases: ['rate', 'price', 'default rate', 'unit price'], example: '420' },

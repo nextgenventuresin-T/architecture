@@ -64,6 +64,7 @@ const LIST_SELECT = `
     r.area_id, pa.name AS area_name, pa.area_type, r.transport_cost,
     r.batch_id, pb.batch_number,
     r.litres_per_unit, r.total_litres, r.vendor_confirmed_at, r.vendor_confirmed_by,
+    r.purchase_quantity, r.purchase_unit, r.units_per_purchase_unit,
     r.bilty_number, r.received_bilty_number,
     COALESCE((
       SELECT SUM(te.amount) FROM expenses te
@@ -281,6 +282,7 @@ const WRITABLE = [
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'tool_unit_id', 'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'requester_role', 'contractor_id',
   'area_id', 'transport_cost', 'batch_id', 'litres_per_unit', 'total_litres', 'vendor_confirmed_at', 'vendor_confirmed_by', 'bilty_number',
+  'purchase_quantity', 'purchase_unit', 'units_per_purchase_unit',
 ];
 
 // ---------------------------------------------------------------- batches
@@ -349,6 +351,7 @@ const UPDATABLE = [
   'tool_procurement_type', 'rental_cost', 'usage_charge_rate', 'rental_days', 'rental_start_date', 'rental_end_date',
   'usage_charge_total', 'usage_charge_days', 'usage_charge_policy', 'tool_unit_id',
   'area_id', 'transport_cost', 'litres_per_unit', 'total_litres',
+  'purchase_quantity', 'purchase_unit', 'units_per_purchase_unit',
 ];
 
 async function update(id, payload) {

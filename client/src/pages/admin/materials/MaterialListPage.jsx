@@ -113,7 +113,8 @@ export default function MaterialListPage() {
       if (kind === 'materials') {
         const list = await materialsApi.listAll({ status: 'all' });
         rows = list.map((m) => ({
-          'Material Code': m.code, 'Material Name': m.name, Category: m.category, Unit: m.unit,
+          'Material Code': m.code, 'Material Name': m.name, Category: m.category, Unit: m.purchaseUnit || m.unit,
+          'Sub-unit': m.subUnit || '', 'Sub-units per Unit': m.unitsPerPurchaseUnit ?? '',
           'Minimum Stock': m.minStock, 'Purchase Rate': m.purchaseRate, 'Default Supplier': m.supplier || '',
           Status: m.status, 'Current Stock': m.currentStock, Notes: m.notes || '',
         }));
@@ -167,7 +168,7 @@ export default function MaterialListPage() {
       ),
     },
     { key: 'category', header: 'Category', render: (row) => <span className="text-ink-muted">{row.category}</span> },
-    { key: 'unit', header: 'Unit', render: (row) => <span className="text-ink-muted">{row.unit}</span> },
+    { key: 'unit', header: 'Unit', render: (row) => <span className="text-ink-muted">{row.subUnit ? `${row.purchaseUnit} → ${row.subUnit} (×${row.unitsPerPurchaseUnit})` : row.unit}</span> },
     {
       key: 'status',
       header: 'Status',
@@ -322,7 +323,7 @@ export default function MaterialListPage() {
                         {MATERIAL_STATUS_LABELS[row.status] ?? row.status}
                       </Badge>
                     </div>
-                    <p className="mt-2 text-sm text-ink-muted">Unit: {row.unit}</p>
+                    <p className="mt-2 text-sm text-ink-muted">Unit: {row.subUnit ? `${row.purchaseUnit} → ${row.subUnit} (1 ${row.purchaseUnit} = ${row.unitsPerPurchaseUnit} ${row.subUnit})` : row.unit}</p>
                     <div className="mt-3">
                       <RowActions row={row} navigate={navigate} />
                     </div>

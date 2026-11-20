@@ -94,7 +94,8 @@ export default function MaterialDetailPage() {
               { label: 'Name', value: material.name },
               { label: 'Code', value: material.code || '—' },
               { label: 'Category', value: material.category },
-              { label: 'Unit', value: material.unit },
+              { label: 'Unit (bought in)', value: material.purchaseUnit || material.unit },
+              ...(material.subUnit ? [{ label: 'Sub-unit (stock and use)', value: `${material.subUnit} — 1 ${material.purchaseUnit} = ${material.unitsPerPurchaseUnit} ${material.subUnit}` }] : []),
               { label: 'Status', value: MATERIAL_STATUS_LABELS[material.status] ?? material.status },
               ...(material.notes ? [{ label: 'Notes', value: material.notes }] : []),
             ]}

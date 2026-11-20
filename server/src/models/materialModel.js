@@ -32,7 +32,7 @@ const CODE_EXPR = "COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_L
 
 const LIST_SELECT = `
   SELECT
-    m.id, ${CODE_EXPR} AS code, m.name, m.category, m.unit, m.min_stock,
+    m.id, ${CODE_EXPR} AS code, m.name, m.category, m.unit, m.purchase_unit, m.units_per_purchase_unit, m.min_stock,
     m.default_supplier, m.default_rate, m.status, m.notes,
     COALESCE(st.current_stock, 0) AS current_stock,
     COALESCE(st.received_qty, 0)  AS received_qty,
@@ -162,7 +162,7 @@ async function nextCodeNumber() {
 }
 
 const WRITABLE = [
-  'code', 'name', 'category', 'unit', 'min_stock',
+  'code', 'name', 'category', 'unit', 'purchase_unit', 'units_per_purchase_unit', 'min_stock',
   'default_supplier', 'default_rate', 'status', 'notes',
 ];
 
@@ -176,10 +176,10 @@ async function create(payload) {
   return result.insertId;
 }
 
-async function update(id, payload) {
+async function update(id, payload, conn = pool) {
   const columns = WRITABLE.filter((key) => payload[key] !== undefined);
   if (columns.length === 0) return;
-  await pool.query(
+  await conn.query(
     `UPDATE materials SET ${columns.map((c) => `\`${c}\` = ?`).join(', ')} WHERE id = ?`,
     [...columns.map((key) => payload[key]), id]
   );

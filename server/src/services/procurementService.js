@@ -26,6 +26,7 @@ const transportExpenseService = require('./transportExpenseService');
 const { transportCategoryFor } = require('../config/costBuckets');
 const siteReceiver = require('./siteReceiverScope');
 const { isLiquidMaterial, isLitreUnit, litresOrNull } = require('../config/liquidUnits');
+const subUnits = require('./materialSubUnitService');
 
 /**
  * How the goods physically arrive, derived from the flow (never stored):
@@ -59,6 +60,32 @@ function litresColumns(payload, { quantity, unit, material }) {
   if (per != null && per > 0) return { litres_per_unit: per, total_litres: Number((per * qty).toFixed(3)) };
   if (total != null && total > 0) return { litres_per_unit: Number((total / qty).toFixed(3)), total_litres: total };
   return { litres_per_unit: null, total_litres: null };
+}
+
+/**
+ * Material with a sub-unit (bought in kg, used in units): the buyer enters the
+ * quantity in the purchase unit and how many sub-units are in one. `quantity`
+ * becomes the sub-unit quantity (20 kg x 5 = 100 units), which receiving, stock
+ * and costing use; the rate is per sub-unit. Returns the columns to store, or
+ * {} when the material has no sub-unit or no purchase quantity was sent.
+ * Mutates payload.quantity so every later check (plan, excess) is in sub-units.
+ */
+function applyPurchaseUnits(payload, material) {
+  const pq = payload.purchase_quantity ?? payload.purchaseQuantity;
+  if (!material?.purchase_unit) return pq !== undefined ? { purchase_quantity: null, purchase_unit: null, units_per_purchase_unit: null } : {};
+  if (pq === undefined || pq === null || pq === '') return {};
+  const converted = subUnits.stockQuantityFor(material, pq, payload.units_per_purchase_unit ?? payload.unitsPerPurchaseUnit);
+  if (!converted) {
+    throw ApiError.badRequest('Check the highlighted fields.', {
+      purchase_quantity: `Enter the quantity in ${material.purchase_unit} and how many ${material.unit} are in 1 ${material.purchase_unit}.`,
+    });
+  }
+  payload.quantity = converted.quantity;
+  return {
+    purchase_quantity: converted.purchaseQuantity,
+    purchase_unit: converted.purchaseUnit,
+    units_per_purchase_unit: converted.factor,
+  };
 }
 
 function moneyOrNull(value, field) {
@@ -419,6 +446,10 @@ function toRequest(row, viewer) {
       && isLiquidMaterial({ unit: row.material_unit || row.unit, category: row.material_category, name: row.material_name }),
     litresPerUnit: row.litres_per_unit != null ? Number(row.litres_per_unit) : null,
     totalLitres: row.total_litres != null ? Number(row.total_litres) : null,
+    // Sub-unit material: what was bought in the purchase unit (quantity is in sub-units).
+    purchaseQuantity: row.purchase_quantity != null ? Number(row.purchase_quantity) : null,
+    purchaseUnit: row.purchase_unit || null,
+    unitsPerPurchaseUnit: row.units_per_purchase_unit != null ? Number(row.units_per_purchase_unit) : null,
     // Vendor deliveries: the vendor's confirmation + dispatch (vehicle etc.) is recorded
     // before the goods can be received.
     vendorConfirmedAt: row.vendor_confirmed_at || null,
@@ -927,6 +958,14 @@ async function create(payload, userId, hrScope, options = {}) {
     pmScope.assertPmAssigned(hrScope, payload.project_id, payload.site_id ?? null);
   }
 
+  // Bought in the purchase unit (kg): turn it into sub-units before any check.
+  let purchaseColumns = {};
+  if (payload.material_id && payload.item_type !== 'tool') {
+    payload = { ...payload };
+    const bought = await materialModel.findById(Number(payload.material_id)).catch(() => null);
+    purchaseColumns = applyPurchaseUnits(payload, bought);
+  }
+
   const { material, tool, columns: flow } = await resolveFlow(payload, hrScope);
   const areaId = flow.project_id
     ? await areaService.assertAreaFor(payload.area_id ?? payload.areaId, flow.project_id, flow.site_id ?? null)
@@ -1288,6 +1327,8 @@ async function create(payload, userId, hrScope, options = {}) {
     transport_cost: quotedTransport,
     // Bucket / liquid material: litres per unit and total litres ordered.
     ...litresColumns(payload, { quantity: payload.quantity, unit: unitToUse, material }),
+    // Sub-unit material: what was bought in the purchase unit (20 kg, 1 kg = 5 units).
+    ...purchaseColumns,
     // A Bilty / AWB given up front means the vendor's dispatch is already confirmed.
     ...(normalizeBilty(payload.bilty_number) && (flow.source_type || payload.source_type) === 'supplier'
       ? { bilty_number: String(payload.bilty_number).trim(), vendor_confirmed_at: new Date(), vendor_confirmed_by: userId ?? null } : {}),
@@ -1388,6 +1429,14 @@ async function update(id, payload, hrScope, userId) {
     });
   }
 
+  // Bought in the purchase unit (kg): turn it into sub-units before the checks below.
+  let purchaseColumns = {};
+  if ((payload.item_type ?? request.item_type) !== 'tool' && (payload.material_id ?? request.material_id)) {
+    payload = { ...payload };
+    const bought = await materialModel.findById(Number(payload.material_id ?? request.material_id)).catch(() => null);
+    purchaseColumns = applyPurchaseUnits(payload, bought);
+  }
+
   if (payload.quantity !== undefined && Number(payload.quantity) <= 0) {
     throw ApiError.badRequest('Check the highlighted fields.', { quantity: 'Enter a quantity greater than zero.' });
   }
@@ -1433,7 +1482,9 @@ async function update(id, payload, hrScope, userId) {
     }
   }
 
-  const updatePayload = { ...payload };
+  const updatePayload = { ...payload, ...purchaseColumns };
+  delete updatePayload.purchaseQuantity;
+  delete updatePayload.unitsPerPurchaseUnit;
   if (payload.area_id !== undefined || payload.areaId !== undefined) {
     const projectId = payload.project_id ?? request.project_id;
     updatePayload.area_id = projectId
@@ -2063,7 +2114,13 @@ async function getLookups(hrScope, userId) {
     projects: (projects.rows || [])
       .filter((p) => !pmScope.isPm(hrScope) || (hrScope.pmProjectIds || []).includes(Number(p.id)))
       .map((p) => ({ id: p.id, code: p.code, name: p.name })),
-    materials: (materials.rows || []).map((m) => ({ id: m.id, code: m.code, name: m.name, unit: m.unit, category: m.category })),
+    materials: (materials.rows || []).map((m) => ({
+      id: m.id, code: m.code, name: m.name, unit: m.unit, category: m.category,
+      // Same meaning as the materials API: unit = stock unit (sub-unit when set).
+      purchaseUnit: m.purchase_unit || m.unit,
+      subUnit: m.purchase_unit ? m.unit : null,
+      unitsPerPurchaseUnit: m.purchase_unit && m.units_per_purchase_unit != null ? Number(m.units_per_purchase_unit) : null,
+    })),
     tools: (tools.rows || []).map((t) => ({ id: t.id, code: t.code, name: t.name, type: t.type })),
     contractors: (scopes.contractors || [])
       // "Another Contractor" — company-linked contractors only, and

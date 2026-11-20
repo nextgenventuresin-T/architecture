@@ -21,6 +21,8 @@ const EMPTY = {
   name: '',
   category: '',
   unit: '',
+  sub_unit: '',
+  units_per_purchase_unit: '',
   min_stock: '0',
   default_supplier: '',
   default_rate: '0',
@@ -66,7 +68,10 @@ export default function MaterialFormPage({ mode = 'create' }) {
       code: m.code ?? '',
       name: m.name ?? '',
       category: m.category ?? '',
-      unit: m.unit ?? '',
+      // The unit it is bought in; with a sub-unit the stored `unit` is the sub-unit.
+      unit: m.purchaseUnit ?? m.unit ?? '',
+      sub_unit: m.subUnit ?? '',
+      units_per_purchase_unit: m.unitsPerPurchaseUnit != null ? String(m.unitsPerPurchaseUnit) : '',
       min_stock: String(m.minStock ?? 0),
       default_supplier: m.supplier ?? '',
       default_rate: String(m.purchaseRate ?? 0),
@@ -87,6 +92,13 @@ export default function MaterialFormPage({ mode = 'create' }) {
     if (!values.name.trim()) errors.name = 'Enter the material name.';
     if (!values.category.trim()) errors.category = 'Choose a category.';
     if (!values.unit.trim()) errors.unit = 'Choose a unit.';
+    const sub = values.sub_unit.trim();
+    if (sub && sub.toLowerCase() === values.unit.trim().toLowerCase()) {
+      errors.sub_unit = 'The sub-unit must be different from the unit. Leave it blank if there is none.';
+    }
+    if (sub && !(Number(values.units_per_purchase_unit) > 0)) {
+      errors.units_per_purchase_unit = `Enter how many ${sub} are in 1 ${values.unit || 'unit'}.`;
+    }
     return errors;
   }
 
@@ -105,6 +117,8 @@ export default function MaterialFormPage({ mode = 'create' }) {
       ...values,
       min_stock: Number(values.min_stock),
       default_rate: Number(values.default_rate),
+      sub_unit: values.sub_unit.trim(),
+      units_per_purchase_unit: values.sub_unit.trim() ? Number(values.units_per_purchase_unit) : null,
       code: values.code.trim() || null,
       default_supplier: values.default_supplier.trim() || null,
       notes: values.notes.trim() || null,
@@ -210,8 +224,38 @@ export default function MaterialFormPage({ mode = 'create' }) {
                 error={fieldErrors.unit}
                 placeholder="Select a unit"
                 options={options.units.map((u) => ({ value: u, label: u }))}
-                hint="How this material is counted."
+                hint="The unit it is bought in (e.g. kg)."
               />
+              <InputField
+                label="Sub-unit (optional)"
+                value={values.sub_unit}
+                onChange={set('sub_unit')}
+                error={fieldErrors.sub_unit}
+                placeholder="e.g. units, packets, pieces"
+                hint="The unit it is used in on site. Leave blank if it is used in the same unit it is bought in."
+              />
+              {values.sub_unit.trim() && (
+                <InputField
+                  label={`${values.sub_unit.trim()} in 1 ${values.unit || 'unit'}`}
+                  required
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={values.units_per_purchase_unit}
+                  onChange={set('units_per_purchase_unit')}
+                  error={fieldErrors.units_per_purchase_unit}
+                  placeholder="e.g. 5"
+                  hint="The default for procurement; it can be changed for each purchase."
+                />
+              )}
+              {isEdit && values.sub_unit.trim() && !existing?.material?.subUnit && Number(values.units_per_purchase_unit) > 0 && (
+                <Alert tone="info" title="Existing records will be converted" className="sm:col-span-2">
+                  Stock, purchases, task plans and daily logs of this material will be changed
+                  from {values.unit || 'the unit'} to {values.sub_unit.trim()}: every quantity is multiplied
+                  by {values.units_per_purchase_unit} and every rate divided by it, so totals stay the same.
+                  From then on stock is counted in {values.sub_unit.trim()}.
+                </Alert>
+              )}
               <SelectField
                 label="Status"
                 value={values.status}

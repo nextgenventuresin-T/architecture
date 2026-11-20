@@ -24,6 +24,9 @@ const materialRules = (isCreate) => {
     required(body('name').trim().isLength({ max: 120 }).withMessage('That name is too long.'), 'Enter the material name.'),
     required(body('category').trim().isLength({ max: 80 }).withMessage('Keep the category under 80 characters.'), 'Choose a category.'),
     required(body('unit').trim().isLength({ max: 20 }).withMessage('Keep the unit under 20 characters.'), 'Enter a unit.'),
+    // Optional sub-unit: bought in `unit` (kg), used in `sub_unit` (units).
+    body('sub_unit').optional({ nullable: true }).trim().isLength({ max: 20 }).withMessage('Keep the sub-unit under 20 characters.'),
+    body('units_per_purchase_unit').optional({ nullable: true, checkFalsy: true }).isFloat({ gt: 0 }).withMessage('Enter a number greater than 0.').toFloat(),
     // Optional on create — the API generates MAT-#### when left blank.
     body('code').optional({ nullable: true }).trim().isLength({ max: 30 }).withMessage('Keep the code under 30 characters.'),
     body('min_stock').optional().isFloat({ min: 0 }).withMessage('Minimum stock cannot be negative.').toFloat(),

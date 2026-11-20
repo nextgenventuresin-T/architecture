@@ -18,6 +18,7 @@ const STARTUP_MIGRATIONS = [
   '20261118_site_teams',
   '20261118_area_progress',
   '20261120_normalize_material_units',
+  '20261120_material_sub_units',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };
@@ -30,6 +31,9 @@ const REQUIRED_COLUMNS = [
   ['material_movements', 'sent_litres'], ['daily_work_updates', 'litres_used'],
   ['project_tasks', 'area_value'], ['daily_work_updates', 'area_done'],
   ['labour_records', 'worker_name'], ['labour_records', 'worker_id'], ['labour_records', 'worker_type'],
+  ['materials', 'purchase_unit'], ['materials', 'units_per_purchase_unit'],
+  ['procurement_requests', 'purchase_quantity'], ['procurement_requests', 'purchase_unit'],
+  ['procurement_requests', 'units_per_purchase_unit'],
 ];
 
 async function missingColumns() {
