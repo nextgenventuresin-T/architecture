@@ -25,6 +25,7 @@ export const warehouseApi = {
 
   stock: (params) => axiosClient.get('/warehouse/stock', { params }).then((r) => r.data.data),
   scopes: () => axiosClient.get('/warehouse/scopes').then((r) => r.data.data),
+  siteStock: (siteId) => axiosClient.get('/warehouse/site-stock', { params: { siteId } }).then((r) => r.data.data),
   centralOverview: (params) =>
     axiosClient.get('/warehouse/central-overview', { params }).then((r) => r.data.data),
   contractorTransactions: (params) =>

@@ -27,8 +27,8 @@ import {
 /**
  * Warehouse home, driven by a warehouse switcher rather than a warehouse list.
  * The default scope is the Central Company Warehouse; the switcher also offers
- * "Total Contractor Warehouses" and every individual contractor's warehouse
- * (pulled live from the database). Materials master lives in its own module —
+ * "All Sites" (every site's movements) and one entry per site (pulled live from the database).
+ * Materials master lives in its own module —
  * this screen is stock and movement only. The same append-only ledger backs
  * every view, so a Central -> Contractor issue is one traceable transfer with
  * no separate "receive" step and no Finance side effect.
@@ -37,7 +37,7 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
   const modulePath = basePath === '/admin' ? '/admin/warehouse' : basePath;
   const { user } = useAuth();
 
-  const [scopes, setScopes] = useState({ central: null, contractors: [] });
+  const [scopes, setScopes] = useState({ central: null, contractors: [], sites: [] });
   const [lookups, setLookups] = useState({ warehouses: [], materials: [], projects: [], locations: [], pendingReceipts: [] });
   const [scopeValue, setScopeValue] = useState('central');
   const [viewMode, setViewMode] = useState('normal'); // 'normal' | 'table'
@@ -48,7 +48,7 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
   const canManage = [ROLES.ADMIN, ROLES.WAREHOUSE].includes(user?.role);
 
   const loadScopes = useCallback(() => {
-    warehouseApi.scopes().then(setScopes).catch(() => setScopes({ central: null, contractors: [] }));
+    warehouseApi.scopes().then(setScopes).catch(() => setScopes({ central: null, contractors: [], sites: [] }));
   }, []);
   const loadLookups = useCallback(() => {
     warehouseApi.lookups().then(setLookups).catch(() => {});
@@ -57,21 +57,21 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
   useEffect(() => { loadScopes(); loadLookups(); }, [loadScopes, loadLookups]);
 
   const scopeOptions = useMemo(() => {
+    // Site-wise: one entry per site ("Project – Site"), no contractor or manager names.
     const opts = [
       { value: 'central', label: 'Central Company Warehouse' },
-      { value: 'total-contractor', label: 'Total Contractor Warehouses' },
+      { value: 'total-contractor', label: 'All Sites' },
     ];
-    for (const c of scopes.contractors ?? []) {
-      // Named after its sites, contractor in brackets: 'Green Villa – Block A (Ashok)'.
-      opts.push({ value: `contractor:${c.warehouseId}`, label: c.label || c.contractor?.name || c.name });
+    for (const site of scopes.sites ?? []) {
+      opts.push({ value: `site:${site.siteId}`, label: site.label });
     }
     return opts;
   }, [scopes]);
 
-  const selectedContractor = useMemo(() => {
-    if (!scopeValue.startsWith('contractor:')) return null;
+  const selectedSite = useMemo(() => {
+    if (!scopeValue.startsWith('site:')) return null;
     const id = Number(scopeValue.split(':')[1]);
-    return (scopes.contractors ?? []).find((c) => c.warehouseId === id) || null;
+    return (scopes.sites ?? []).find((site) => site.siteId === id) || null;
   }, [scopeValue, scopes]);
 
   function handleMovementSaved(message) {
@@ -91,7 +91,7 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
     <>
       <PageHeader
         title="Warehouse"
-        description="Stock and movement across the central company warehouse and every contractor warehouse."
+        description="Stock and movement across the central company warehouse and every site."
         breadcrumbs={[{ label: 'Dashboard', to: '/admin' }, { label: 'Warehouse' }]}
         actions={
           canManage && (
@@ -155,14 +155,14 @@ export default function WarehouseListPage({ basePath = '/admin' }) {
           viewMode={viewMode}
           scopes={scopes}
           lookups={lookups}
-          title="Total Contractor Warehouses"
+          title="All Sites — movements"
         />
       )}
-      {selectedContractor && (
-        <ContractorWarehouseView
-          key={`contractor-${selectedContractor.warehouseId}-${reloadNonce}`}
+      {selectedSite && (
+        <SiteWarehouseView
+          key={`site-${selectedSite.siteId}-${reloadNonce}`}
           viewMode={viewMode}
-          contractorScope={selectedContractor}
+          site={selectedSite}
           scopes={scopes}
           lookups={lookups}
         />
@@ -393,46 +393,30 @@ function CentralHistory({ warehouseId, viewMode }) {
 
 // ------------------------------------------------ Contractor movements (total)
 
-function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedContractorId = null }) {
-  const [filters, setFilters] = useState({
-    search: '', contractorId: 'all', materialId: 'all', projectId: 'all',
-    fromWarehouseId: 'all', toWarehouseId: 'all', location: 'all', dateFrom: '', dateTo: '', page: 1,
-  });
+/** Site stock movements (to, from and between sites). Site-wise: no contractor or manager names. */
+function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedSiteId = null }) {
+  const EMPTY_FILTERS = { search: '', siteId: 'all', materialId: 'all', projectId: 'all', dateFrom: '', dateTo: '', page: 1 };
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const set = (key) => (e) => setFilters((f) => ({ ...f, [key]: e.target.value, page: 1 }));
-
-  const warehouseOptions = useMemo(() => {
-    const opts = [{ value: 'all', label: 'Any warehouse' }];
-    (scopes.central?.warehouses ?? []).forEach((w) => opts.push({ value: String(w.id), label: 'Central Company Warehouse' }));
-    (scopes.contractors ?? []).forEach((c) => opts.push({ value: String(c.warehouseId), label: c.label || c.contractor?.name || c.name }));
-    return opts;
-  }, [scopes]);
 
   const load = useCallback(
     () => warehouseApi.contractorTransactions({
       search: filters.search || undefined,
-      contractorId: lockedContractorId ?? (filters.contractorId !== 'all' ? filters.contractorId : undefined),
+      siteId: lockedSiteId ?? (filters.siteId !== 'all' ? filters.siteId : undefined),
       materialId: filters.materialId !== 'all' ? filters.materialId : undefined,
       projectId: filters.projectId !== 'all' ? filters.projectId : undefined,
-      fromWarehouseId: filters.fromWarehouseId !== 'all' ? filters.fromWarehouseId : undefined,
-      toWarehouseId: filters.toWarehouseId !== 'all' ? filters.toWarehouseId : undefined,
-      location: filters.location !== 'all' ? filters.location : undefined,
       dateFrom: filters.dateFrom || undefined,
       dateTo: filters.dateTo || undefined,
       page: filters.page,
       pageSize: 20,
     }),
-    [filters, lockedContractorId]
+    [filters, lockedSiteId]
   );
   const { data, isLoading, error, reload } = useAsync(load, [load]);
   const rows = data?.transactions ?? [];
 
   const columns = [
     { key: 'date', header: 'Date', value: (r) => r.date || '', render: (r) => <span className="whitespace-nowrap text-xs text-ink-subtle">{formatDate(r.date)}</span> },
-    {
-      key: 'contractor', header: 'Contractor',
-      value: (r) => r.destination?.contractor?.name || r.source?.contractor?.name || '',
-      render: (r) => <span className="text-ink">{r.destination?.contractor?.name || r.source?.contractor?.name || '—'}</span>,
-    },
     { key: 'material', header: 'Material', value: (r) => r.material.name, render: (r) => <span className="text-ink-muted">{r.material.name}</span> },
     { key: 'qty', header: 'Quantity', align: 'right', value: (r) => r.quantity, render: (r) => <span className="tabular-nums text-ink-muted">{formatNumber(r.quantity)} {r.unit}</span> },
     { key: 'source', header: 'Source', value: (r) => r.source?.name || '', render: (r) => <span className="text-xs text-ink-muted">{r.source?.name || '—'}</span> },
@@ -446,7 +430,7 @@ function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedContr
     <Card>
       <div className="border-b border-line px-5 py-4">
         <h2 className="font-display text-base font-semibold text-ink">{title}</h2>
-        <p className="mt-0.5 text-xs text-ink-subtle">Material sent to and moved between contractors — source, destination and reference for every movement.</p>
+        <p className="mt-0.5 text-xs text-ink-subtle">Material sent to, used at and moved between sites — source, destination and reference for every movement.</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-4">
@@ -458,25 +442,21 @@ function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedContr
           aria-label="Search movements"
           className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:shadow-focus focus:outline-none sm:w-56"
         />
-        {!lockedContractorId && (
-          <Select label="Contractor" value={filters.contractorId} onChange={set('contractorId')} className="w-[170px]"
-            options={[{ value: 'all', label: 'All contractors' }, ...(scopes.contractors ?? []).map((c) => ({ value: String(c.contractor.id), label: c.contractor.name }))]} />
+        {!lockedSiteId && (
+          <Select label="Site" value={filters.siteId} onChange={set('siteId')} className="w-[220px]"
+            options={[{ value: 'all', label: 'All sites' }, ...(scopes.sites ?? []).map((site) => ({ value: String(site.siteId), label: site.label }))]} />
         )}
         <Select label="Material" value={filters.materialId} onChange={set('materialId')} className="w-[160px]"
           options={[{ value: 'all', label: 'All materials' }, ...(lookups.materials ?? []).map((m) => ({ value: String(m.id), label: m.name }))]} />
         <Select label="Project" value={filters.projectId} onChange={set('projectId')} className="w-[160px]"
           options={[{ value: 'all', label: 'All projects' }, ...(lookups.projects ?? []).map((p) => ({ value: String(p.id), label: p.name }))]} />
-        <Select label="From" value={filters.fromWarehouseId} onChange={set('fromWarehouseId')} className="w-[160px]" options={warehouseOptions} />
-        <Select label="To" value={filters.toWarehouseId} onChange={set('toWarehouseId')} className="w-[160px]" options={warehouseOptions} />
-        <Select label="Location" value={filters.location} onChange={set('location')} className="w-[150px]"
-          options={[{ value: 'all', label: 'All locations' }, ...(lookups.locations ?? []).map((l) => ({ value: l, label: l }))]} />
         <label className="flex items-center gap-1 text-xs text-ink-subtle">From
           <input type="date" value={filters.dateFrom} onChange={set('dateFrom')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" />
         </label>
         <label className="flex items-center gap-1 text-xs text-ink-subtle">To
           <input type="date" value={filters.dateTo} onChange={set('dateTo')} className="h-9 rounded-lg border border-line bg-white px-2 text-sm" />
         </label>
-        <Button variant="secondary" onClick={() => setFilters({ search: '', contractorId: 'all', materialId: 'all', projectId: 'all', fromWarehouseId: 'all', toWarehouseId: 'all', location: 'all', dateFrom: '', dateTo: '', page: 1 })}>Clear</Button>
+        <Button variant="secondary" onClick={() => setFilters(EMPTY_FILTERS)}>Clear</Button>
       </div>
 
       {error ? (
@@ -493,7 +473,7 @@ function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedContr
             rows={rows}
             isLoading={isLoading}
             getRowKey={(r) => r.id}
-            empty={{ icon: ArrowLeftRight, title: 'No contractor movements', description: 'Transfers to and between contractors appear here.' }}
+            empty={{ icon: ArrowLeftRight, title: 'No site movements', description: 'Material sent to, used at and moved between sites appears here.' }}
             renderCard={(r) => (
               <div>
                 <div className="flex items-center justify-between gap-2">
@@ -513,23 +493,20 @@ function ContractorMovementsView({ viewMode, scopes, lookups, title, lockedContr
   );
 }
 
-// -------------------------------------------- Individual contractor warehouse
+// ----------------------------------------------------------------- One site
 
-function ContractorWarehouseView({ viewMode, contractorScope, scopes, lookups }) {
-  const warehouseId = contractorScope.warehouseId;
-  const contractorId = contractorScope.contractor?.id;
-
-  const load = useCallback(() => warehouseApi.detail(warehouseId), [warehouseId]);
-  const { data, isLoading } = useAsync(load, [load]);
-  const stock = (data?.stock ?? []).filter((s) => s.quantity > 0);
+/** Materials held for one site (whoever holds them), then its movement history. */
+function SiteWarehouseView({ viewMode, site, scopes, lookups }) {
+  const load = useCallback(() => warehouseApi.siteStock(site.siteId), [site.siteId]);
+  const { data, isLoading, error, reload } = useAsync(load, [load]);
+  const stock = (data?.items ?? []).filter((s) => s.quantity > 0);
 
   const columns = [
     { key: 'material', header: 'Material', value: (r) => r.material.name, render: (r) => (
       <div className="min-w-0"><span className="font-medium text-ink">{r.material.name}</span><p className="mt-0.5 text-xs text-ink-subtle">{r.material.code}</p></div>
     ) },
+    { key: 'category', header: 'Category', value: (r) => r.material.category || '', render: (r) => <span className="text-xs text-ink-subtle">{r.material.category || '—'}</span> },
     { key: 'qty', header: 'Current quantity', align: 'right', value: (r) => r.quantity, render: (r) => <span className="tabular-nums font-medium text-ink">{formatNumber(r.quantity)} <span className="text-xs font-normal text-ink-subtle">{r.unit}</span></span> },
-    { key: 'project', header: 'Project', value: (r) => r.project?.name || '', render: (r) => <span className="text-xs text-ink-subtle">{r.project?.name || '—'}</span> },
-    { key: 'site', header: 'Site', value: (r) => r.site?.name || '', render: (r) => <span className="text-xs text-ink-subtle">{r.site?.name || '—'}</span> },
     { key: 'status', header: 'Status', value: (r) => r.stockStatus, render: (r) => <StatusBadge status={r.stockStatus} /> },
   ];
 
@@ -537,25 +514,30 @@ function ContractorWarehouseView({ viewMode, contractorScope, scopes, lookups })
     <>
       <Card className="mb-4">
         <div className="border-b border-line px-5 py-4">
-          <h2 className="font-display text-base font-semibold text-ink">{contractorScope.label || contractorScope.contractor?.name} — current stock</h2>
-          <p className="mt-0.5 text-xs text-ink-subtle">What this contractor is currently holding. Every quantity traces back to a movement in the history below.</p>
+          <h2 className="font-display text-base font-semibold text-ink">{site.label} — materials</h2>
+          <p className="mt-0.5 text-xs text-ink-subtle">Material currently at this site. Every quantity traces back to a movement in the history below.</p>
         </div>
-        {viewMode === 'table' ? (
-          <ExcelTable columns={columns} rows={stock} initialSort={{ key: 'material', dir: 'asc' }} searchPlaceholder="Search stock…" />
+        {error ? (
+          <div className="p-5">
+            <Alert tone="error" title="Could not load this site's stock">{error.message}</Alert>
+            <Button className="mt-4" onClick={reload}>Try again</Button>
+          </div>
+        ) : viewMode === 'table' ? (
+          <ExcelTable columns={columns} rows={stock} initialSort={{ key: 'material', dir: 'asc' }} searchPlaceholder="Search materials…" />
         ) : (
           <DataTable
             columns={columns}
             rows={stock}
             isLoading={isLoading}
-            getRowKey={(r) => r.id}
-            empty={{ icon: Warehouse, title: 'No stock held', description: 'This contractor is not currently holding any material.' }}
+            getRowKey={(r) => r.material.id}
+            empty={{ icon: Warehouse, title: 'No material at this site', description: 'Material sent to this site appears here.' }}
             renderCard={(r) => (
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0"><span className="font-medium text-ink">{r.material.name}</span><p className="mt-0.5 text-xs text-ink-subtle">{r.material.code}</p></div>
                   <StatusBadge status={r.stockStatus} />
                 </div>
-                <p className="mt-2 text-sm text-ink-muted">{formatNumber(r.quantity)} {r.unit}{r.project ? ` · ${r.project.name}` : ''}{r.site ? ` · ${r.site.name}` : ''}</p>
+                <p className="mt-2 text-sm text-ink-muted">{formatNumber(r.quantity)} {r.unit}</p>
               </div>
             )}
           />
@@ -566,8 +548,8 @@ function ContractorWarehouseView({ viewMode, contractorScope, scopes, lookups })
         viewMode={viewMode}
         scopes={scopes}
         lookups={lookups}
-        lockedContractorId={contractorId}
-        title={`${contractorScope.label || contractorScope.contractor?.name} — movement history`}
+        lockedSiteId={site.siteId}
+        title={`${site.label} — movement history`}
       />
     </>
   );

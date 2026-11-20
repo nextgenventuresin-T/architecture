@@ -905,7 +905,7 @@ module.exports = {
   receiveStock, issueStock, transferStock, adjustStock,
   getLookups, findPendingProcurementReceipts,
   toWarehouse, toStock, toTransaction,
-  getScopes, getCentralOverview, listContractorTransactions,
+  getScopes, getCentralOverview, listContractorTransactions, getSiteStock,
   getWarehouseUsageOverview,
 };
 
@@ -919,6 +919,13 @@ module.exports = {
  * Contractor warehouses are provisioned on demand so a newly-added contractor
  * appears here without any change to the Contractor module.
  */
+/** "Green Villa – Block A"; just the site name when it already contains the project's. */
+function siteLabel(projectName, siteName) {
+  if (!siteName) return null;
+  if (!projectName || String(siteName).toLowerCase().includes(String(projectName).toLowerCase())) return siteName;
+  return `${projectName} – ${siteName}`;
+}
+
 /**
  * "Green Villa – Block A, Block B; Lake View – Tower 1". Sites are grouped by
  * project; past three sites the rest are counted ("+2 more").
@@ -943,6 +950,7 @@ async function getScopes() {
   await warehouseModel.ensureContractorWarehouses();
   const { central, contractors } = await warehouseModel.findScopes();
   const sitesByWarehouse = await warehouseModel.findContractorWarehouseSites(contractors);
+  const allSites = await warehouseModel.findAllSites();
 
   return {
     central: {
@@ -954,6 +962,14 @@ async function getScopes() {
       primaryId: central[0]?.id ?? null,
       warehouses: central.map((w) => ({ id: w.id, code: w.code, name: w.name, location: w.location })),
     },
+    // Site-wise switcher: one entry per site, named "Project – Site" (no contractor / manager).
+    sites: allSites.map((s) => ({
+      siteId: s.id,
+      name: s.name,
+      projectId: s.project_id,
+      projectName: s.project_name,
+      label: siteLabel(s.project_name, s.name),
+    })),
     contractors: contractors.map((w) => {
       const sites = sitesByWarehouse.get(w.id) || [];
       return {
@@ -968,6 +984,23 @@ async function getScopes() {
       };
     }),
   };
+}
+
+/** Materials held for one site (whoever holds them), summed per material. */
+async function getSiteStock(siteId) {
+  const rows = await warehouseModel.findSiteStock(Number(siteId));
+  const items = rows.map((r) => {
+    const quantity = Number(r.quantity || 0);
+    const min = Number(r.min_stock || 0);
+    return {
+      material: { id: r.material_id, code: r.material_code, name: r.material_name, category: r.material_category },
+      quantity,
+      unit: r.material_unit,
+      stockStatus: quantity <= 0 ? 'out' : (min > 0 && quantity <= min ? 'low' : 'in_stock'),
+      updatedAt: r.updated_at,
+    };
+  });
+  return { siteId: Number(siteId), items };
 }
 
 /** Resolve the set of central warehouse ids (used by the central overview). */
@@ -1037,9 +1070,17 @@ async function listContractorTransactions(query) {
 
   const { rows, total } = await warehouseModel.findContractorTransactions({ ...query, page, pageSize });
 
-  const endpointLabel = (type, contractorName, name) => {
-    if (type === 'contractor') return contractorName ? `${contractorName} Contractor` : name;
+  // Site stock (a contractor's warehouse or a Site Store) is named after the site
+  // the movement is for - no contractor or manager names.
+  const endpointLabel = (type, _contractorName, name, row, side) => {
     if (type === 'central') return 'Central Company Warehouse';
+    if (type === 'site') {
+      const store = side === 'source'
+        ? siteLabel(row.source_store_project_name, row.source_store_site_name)
+        : siteLabel(row.destination_store_project_name, row.destination_store_site_name);
+      return store || siteLabel(row.project_name, row.site_name) || 'Site stock';
+    }
+    if (type === 'contractor') return siteLabel(row.project_name, row.site_name) || 'Site stock';
     return name || '—';
   };
 
@@ -1047,7 +1088,7 @@ async function listContractorTransactions(query) {
     const base = toTransaction(row);
     const source = {
       warehouseId: row.warehouse_id,
-      name: endpointLabel(row.source_type, row.source_contractor_name, row.warehouse_name),
+      name: endpointLabel(row.source_type, row.source_contractor_name, row.warehouse_name, row, 'source'),
       type: row.source_type,
       contractor: row.source_contractor_id
         ? { id: row.source_contractor_id, name: row.source_contractor_name }
@@ -1057,7 +1098,7 @@ async function listContractorTransactions(query) {
     const destination = row.destination_warehouse_id
       ? {
           warehouseId: row.destination_warehouse_id,
-          name: endpointLabel(row.destination_type, row.destination_contractor_name, row.destination_name),
+          name: endpointLabel(row.destination_type, row.destination_contractor_name, row.destination_name, row, 'destination'),
           type: row.destination_type,
           contractor: row.destination_contractor_id
             ? { id: row.destination_contractor_id, name: row.destination_contractor_name }

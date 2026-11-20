@@ -799,8 +799,8 @@ function buildContractorTxFilters({
   search, type, contractorId, materialId, projectId, siteId,
   fromWarehouseId, toWarehouseId, location, dateFrom, dateTo,
 }) {
-  // Base: the movement must touch at least one contractor warehouse.
-  const where = ["(w.type = 'contractor' OR dw.type = 'contractor')"];
+  // Base: the movement must touch site stock - a contractor's warehouse or a Site Store.
+  const where = ["(w.type IN ('contractor', 'site') OR dw.type IN ('contractor', 'site'))"];
   const params = [];
 
   if (search) {
@@ -824,8 +824,9 @@ function buildContractorTxFilters({
     params.push(Number(projectId));
   }
   if (siteId && siteId !== 'all') {
-    where.push('t.site_id = ?');
-    params.push(Number(siteId));
+    // For the site, or into / out of the site's own Site Store.
+    where.push("(t.site_id = ? OR (w.type = 'site' AND w.site_id = ?) OR (dw.type = 'site' AND dw.site_id = ?))");
+    params.push(Number(siteId), Number(siteId), Number(siteId));
   }
   if (fromWarehouseId && fromWarehouseId !== 'all') {
     where.push('t.warehouse_id = ?');
@@ -851,6 +852,38 @@ function buildContractorTxFilters({
   return { whereSql: `WHERE ${where.join(' AND ')}`, params };
 }
 
+/** Every site, for the site-wise warehouse switcher. */
+async function findAllSites() {
+  const [rows] = await pool.query(
+    `SELECT s.id, s.name, p.id AS project_id, p.name AS project_name
+     FROM sites s JOIN projects p ON p.id = s.project_id
+     ORDER BY p.name, s.name`
+  );
+  return rows;
+}
+
+/**
+ * Stock held for one site, whoever holds it (a contractor's warehouse or the
+ * site's Site Store): one row per material, summed. Central stock is excluded.
+ */
+async function findSiteStock(siteId) {
+  const [rows] = await pool.query(
+    `SELECT ws.material_id,
+            COALESCE(m.code, CONCAT('MAT-', LPAD(m.id, GREATEST(4, CHAR_LENGTH(m.id)), '0'))) AS material_code,
+            m.name AS material_name, m.category AS material_category, m.unit AS material_unit, m.min_stock,
+            SUM(ws.quantity) AS quantity, MAX(ws.updated_at) AS updated_at
+     FROM warehouse_stock ws
+     JOIN warehouses w ON w.id = ws.warehouse_id
+     JOIN materials m  ON m.id = ws.material_id
+     WHERE w.type <> 'central' AND (ws.site_id = ? OR (w.type = 'site' AND w.site_id = ? AND ws.site_id IS NULL))
+     GROUP BY ws.material_id, m.code, m.id, m.name, m.category, m.unit, m.min_stock
+     HAVING SUM(ws.quantity) <> 0
+     ORDER BY m.name`,
+    [siteId, siteId]
+  );
+  return rows;
+}
+
 async function findContractorTransactions({ page = 1, pageSize = 20, ...filters }) {
   const { whereSql, params } = buildContractorTxFilters(filters);
   const offset = (page - 1) * pageSize;
@@ -871,7 +904,9 @@ async function findContractorTransactions({ page = 1, pageSize = 20, ...filters 
        pr.request_number, pr.po_number,
        w.type AS source_type, w.contractor_id AS source_contractor_id, sc.name AS source_contractor_name,
        dw.type AS destination_type, dw.contractor_id AS destination_contractor_id, dc.name AS destination_contractor_name,
-       w.location AS source_location, dw.location AS destination_location
+       w.location AS source_location, dw.location AS destination_location,
+       wss.name AS source_store_site_name, wsp.name AS source_store_project_name,
+       dss.name AS destination_store_site_name, dsp.name AS destination_store_project_name
      FROM warehouse_transactions t
      JOIN warehouses w   ON w.id = t.warehouse_id
      LEFT JOIN warehouses dw ON dw.id = t.destination_warehouse_id
@@ -882,6 +917,10 @@ async function findContractorTransactions({ page = 1, pageSize = 20, ...filters 
      LEFT JOIN procurement_requests pr ON pr.id = t.procurement_request_id
      LEFT JOIN contractors sc ON sc.id = w.contractor_id
      LEFT JOIN contractors dc ON dc.id = dw.contractor_id
+     LEFT JOIN sites    wss ON wss.id = w.site_id
+     LEFT JOIN projects wsp ON wsp.id = wss.project_id
+     LEFT JOIN sites    dss ON dss.id = dw.site_id
+     LEFT JOIN projects dsp ON dsp.id = dss.project_id
      ${whereSql}
      ORDER BY t.transaction_date DESC, t.id DESC
      LIMIT ? OFFSET ?`,
@@ -908,5 +947,5 @@ module.exports = {
   findTransactions, findRecentTransactions, findTransactionById,
   findTransactionByReceipt, averageUnitCost, nextTransactionNumber, createTransaction,
   findSummary, findAlerts,
-  ensureCentralWarehouse, ensureContractorWarehouses, ensureSiteStore, findScopes, findContractorWarehouseSites, findCentralOverview, findContractorTransactions,
+  ensureCentralWarehouse, ensureContractorWarehouses, ensureSiteStore, findScopes, findContractorWarehouseSites, findAllSites, findSiteStock, findCentralOverview, findContractorTransactions,
 };

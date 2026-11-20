@@ -66,6 +66,7 @@ const warehouseRules = (isCreate) => [
 router.get('/lookups', controller.lookups);
 
 router.get('/scopes', controller.scopes);
+router.get('/site-stock', [query('siteId').isInt({ min: 1 }).withMessage('Choose a site.').toInt()], validate, controller.siteStock);
 
 router.get(
   '/central-overview',

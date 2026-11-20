@@ -58,6 +58,9 @@ const adjust = asyncHandler(async (req, res) =>
   ok(res, { transaction: await warehouseService.adjustStock(req.body, req.user.id) }, 201)
 );
 
+/** GET /api/warehouse/site-stock?siteId= — materials held for one site. */
+const siteStock = asyncHandler(async (req, res) => ok(res, await warehouseService.getSiteStock(req.query.siteId)));
+
 /** GET /api/warehouse/scopes */
 const scopes = asyncHandler(async (req, res) => ok(res, await warehouseService.getScopes()));
 
@@ -79,5 +82,5 @@ const usageOverview = asyncHandler(async (req, res) =>
 module.exports = {
   list, lookups, summary, stock, projectSiteStock, transactions, detail,
   create, update, receive, issue, transfer, adjust,
-  scopes, centralOverview, contractorTransactions, usageOverview,
+  scopes, siteStock, centralOverview, contractorTransactions, usageOverview,
 };
