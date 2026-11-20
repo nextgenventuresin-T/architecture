@@ -17,6 +17,7 @@ const STARTUP_MIGRATIONS = [
   '20261117_restore_failed_daily_log_stock',
   '20261118_site_teams',
   '20261118_area_progress',
+  '20261120_normalize_material_units',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };

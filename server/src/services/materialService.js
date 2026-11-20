@@ -5,6 +5,7 @@ const materialModel = require('../models/materialModel');
 const projectModel = require('../models/projectModel');
 const siteModel = require('../models/siteModel');
 const { pool } = require('../config/db');
+const { normalizeUnit } = require('../utils/materialUnits');
 
 /** Categories Interface 6 offers. Existing catalogue values are merged in via lookups. */
 const CATEGORIES = [
@@ -119,6 +120,7 @@ async function generateCode() {
 }
 
 async function create(payload) {
+  if (payload.unit) payload = { ...payload, unit: normalizeUnit(payload.unit) };
   const code = payload.code?.trim() || (await generateCode());
 
   if (await materialModel.findByCode(code)) {
@@ -146,6 +148,7 @@ async function create(payload) {
 }
 
 async function update(id, payload) {
+  if (payload.unit) payload = { ...payload, unit: normalizeUnit(payload.unit) };
   await getById(id);
 
   if (payload.code) {
