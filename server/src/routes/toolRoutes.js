@@ -76,7 +76,7 @@ router.patch(
 // (the PM's scope is enforced in the service).
 router.patch(
   '/units/:unitId/health',
-  requireRole(ROLES.ADMIN, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [
     idParam('unitId'),
     body('health').isIn(HEALTH).withMessage('Choose Excellent, Good, Average or Poor.'),
@@ -198,7 +198,7 @@ router.post(
 
 router.post(
   '/allocations/:assignmentId/return',
-  requireRole(ROLES.ADMIN, ROLES.PROJECT_MANAGER, ROLES.CONTRACTOR),
+  requireRole(ROLES.ADMIN, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER, ROLES.CONTRACTOR),
   [
     param('assignmentId').isInt({ min: 1 }),
     optDate('returned_date'),

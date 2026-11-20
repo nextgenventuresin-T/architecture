@@ -2,7 +2,7 @@
 
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 
 /**
  * Which projects and sites a Project Manager is ASSIGNED to - the basis for
@@ -38,7 +38,52 @@ async function employeeIdForUser(userId) {
   return Number(matches[0].id);
 }
 
-async function resolve(userId) {
+/**
+ * A Site Engineer works like a Project Manager but only on their sites: the
+ * sites granted in Users & Access, every site of a project granted there
+ * (unless sites of that project were granted individually), and any site their
+ * linked employee record is the engineer of. Projects are those sites' projects.
+ */
+async function resolveSiteEngineer(userId) {
+  const employeeId = await employeeIdForUser(userId);
+  const siteIds = new Set();
+  const [grantedSites] = await pool.query(
+    `SELECT usa.site_id FROM user_site_access usa
+     JOIN sites s ON s.id = usa.site_id JOIN projects p ON p.id = s.project_id AND p.is_archived = 0
+     WHERE usa.user_id = ?`,
+    [userId]
+  );
+  grantedSites.forEach((r) => siteIds.add(Number(r.site_id)));
+  const [grantedProjectSites] = await pool.query(
+    `SELECT s.id FROM user_project_access upa
+     JOIN projects p ON p.id = upa.project_id AND p.is_archived = 0
+     JOIN sites s ON s.project_id = upa.project_id
+     WHERE upa.user_id = ?
+       AND NOT EXISTS (SELECT 1 FROM user_site_access x JOIN sites xs ON xs.id = x.site_id
+                       WHERE x.user_id = upa.user_id AND xs.project_id = upa.project_id)`,
+    [userId]
+  );
+  grantedProjectSites.forEach((r) => siteIds.add(Number(r.id)));
+  if (employeeId) {
+    const engineerSites = await require('./siteReceiverScope').engineerSiteIds(employeeId);
+    engineerSites.forEach((id) => siteIds.add(Number(id)));
+  }
+  const sIds = Array.from(siteIds);
+  const projectIds = new Set();
+  if (sIds.length) {
+    const [rows] = await pool.query('SELECT DISTINCT project_id FROM sites WHERE id IN (?)', [sIds]);
+    rows.forEach((r) => projectIds.add(Number(r.project_id)));
+  }
+  const [grantedProjects] = await pool.query(
+    'SELECT upa.project_id FROM user_project_access upa JOIN projects p ON p.id = upa.project_id AND p.is_archived = 0 WHERE upa.user_id = ?',
+    [userId]
+  );
+  grantedProjects.forEach((r) => projectIds.add(Number(r.project_id)));
+  return { employeeId, projectIds: Array.from(projectIds), siteIds: sIds };
+}
+
+async function resolve(userId, role = null) {
+  if (role === ROLES.SITE_ENGINEER) return resolveSiteEngineer(userId);
   const projectIds = new Set();
   let employeeId = null;
 
@@ -80,7 +125,7 @@ async function resolve(userId) {
   return { employeeId, projectIds: pIds, siteIds };
 }
 
-const isPm = (hrScope) => hrScope?.role === ROLES.PROJECT_MANAGER;
+const isPm = (hrScope) => isPmRole(hrScope?.role);
 
 /** Throws unless the PM is assigned to this project (and site, when given). */
 function assertPmAssigned(hrScope, projectId, siteId = null) {

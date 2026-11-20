@@ -1,7 +1,7 @@
 'use strict';
 
 const ApiError = require('../utils/ApiError');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 const contractorModel = require('../models/contractorModel');
 const employeeModel = require('../models/employeeModel');
 const pmScopeService = require('../services/pmScopeService');
@@ -57,8 +57,8 @@ async function attachHrScope(req, res, next) {
       if (employee) scope.employeeId = employee.id;
     }
 
-    if (req.user.role === ROLES.PROJECT_MANAGER) {
-      const pm = await pmScopeService.resolve(req.user.id);
+    if (isPmRole(req.user.role)) {
+      const pm = await pmScopeService.resolve(req.user.id, req.user.role);
       scope.pmProjectIds = pm.projectIds;
       scope.pmSiteIds = pm.siteIds;
       scope.employeeId = pm.employeeId;

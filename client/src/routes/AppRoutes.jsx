@@ -276,7 +276,7 @@ export default function AppRoutes() {
       {/* Project Manager Workspace */}
       <Route
         path="/pm"
-        element={<ProtectedRoute allowedRoles={[ROLES.PROJECT_MANAGER, ROLES.ADMIN]}><RoleWorkspaceLayout /></ProtectedRoute>}
+        element={<ProtectedRoute allowedRoles={[ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER, ROLES.ADMIN]}><RoleWorkspaceLayout /></ProtectedRoute>}
       >
         <Route index element={<PmDashboardPage />} />
         <Route path="my-portal" element={<MyPortalPage />} />

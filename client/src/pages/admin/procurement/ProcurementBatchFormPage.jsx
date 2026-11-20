@@ -16,7 +16,7 @@ import { toolApi } from '../../../api/toolApi';
 import { vendorApi } from '../../../api/vendorApi';
 import { toApiError } from '../../../api/axiosClient';
 import useAuth from '../../../hooks/useAuth';
-import { ROLES } from '../../../config/roles';
+import { ROLES, isPmRole } from '../../../config/roles';
 import { formatCurrency } from '../../../utils/format';
 import { PRIORITIES } from '../../../utils/procurementOptions';
 import { isLiquidMaterial, isLitreUnit, formatLitres } from '../../../utils/liquidUnits';
@@ -89,7 +89,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const role = user?.role;
-  const isRequester = role === ROLES.CONTRACTOR || role === ROLES.PROJECT_MANAGER;
+  const isRequester = role === ROLES.CONTRACTOR || isPmRole(role);
   const modulePath = basePath === '/admin' ? '/admin/procurement' : basePath;
   const flows = isRequester ? REQUESTER_FLOWS : ADMIN_FLOWS;
 
@@ -116,7 +116,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
   const [contractors, setContractors] = useState([]);
 
   useEffect(() => {
-    const projectsLoad = role === ROLES.PROJECT_MANAGER
+    const projectsLoad = isPmRole(role)
       ? procurementApi.lookups().then((d) => d.projects ?? [])
       : projectsApi.listAll();
     projectsLoad.then(setProjects).catch(() => setProjects([]));

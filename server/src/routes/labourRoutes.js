@@ -41,7 +41,7 @@ const reportRules = [
 // ---- contractor-facing
 router.get(
   '/company-workers/lookup',
-  requireRole(ROLES.ADMIN, ROLES.HR, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.HR, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   asyncHandler(async (req, res) => ok(res, { workers: await service.lookup() }))
 );
 router.get(

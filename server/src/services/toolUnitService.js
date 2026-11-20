@@ -26,7 +26,7 @@
 
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 const notificationModel = require('../models/notificationModel');
 const warehouseModel = require('../models/warehouseModel');
 
@@ -297,7 +297,7 @@ async function listUnits(query = {}, hrScope) {
     params.push(`%${query.search}%`, `%${query.search}%`);
   }
   // PMs only see units that are free or sitting on one of their projects.
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+  if (isPmRole(hrScope?.role)) {
     const ids = hrScope.pmProjectIds || [];
     where.push(ids.length
       ? `(u.availability_status = 'available' OR u.current_project_id IN (${ids.map(() => '?').join(',')}))`
@@ -438,7 +438,7 @@ async function listAllocations(query = {}, hrScope) {
   if (query.projectId) { where.push('a.project_id = ?'); params.push(Number(query.projectId)); }
   if (query.taskId) { where.push('a.task_id = ?'); params.push(Number(query.taskId)); }
   if (hrScope?.role === ROLES.CONTRACTOR) { where.push('a.contractor_id = ?'); params.push(Number(hrScope.contractorId)); }
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+  if (isPmRole(hrScope?.role)) {
     const ids = hrScope.pmProjectIds || [];
     where.push(ids.length ? `a.project_id IN (${ids.map(() => '?').join(',')})` : '1 = 0');
     params.push(...ids);
@@ -784,7 +784,7 @@ async function updateHealth(id, payload, actor, hrScope) {
   return withTx(async (c) => {
     const [[unit]] = await c.query('SELECT * FROM tool_units WHERE id = ? FOR UPDATE', [id]);
     if (!unit) throw ApiError.notFound('That machine does not exist.');
-    if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+    if (isPmRole(hrScope?.role)) {
       const ids = hrScope.pmProjectIds || [];
       if (!unit.current_project_id || !ids.includes(Number(unit.current_project_id))) {
         throw ApiError.forbidden('You can only update the health of machines allocated to your assigned projects.');
@@ -847,7 +847,7 @@ async function allocate(payload, actor) {
 /** Who may return an allocation: Admin, the PM of its project, or the holding contractor. */
 function assertCanReturn(allocationRow, actor, hrScope) {
   if (actor?.role === ROLES.ADMIN) return;
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+  if (isPmRole(hrScope?.role)) {
     if ((hrScope.pmProjectIds || []).includes(Number(allocationRow.project_id))) return;
     throw ApiError.forbidden('You can only return machines allocated to your assigned projects.');
   }
@@ -861,7 +861,7 @@ async function returnAllocation(allocationId, payload, actor, hrScope) {
     if (!a) throw ApiError.notFound('That allocation does not exist.');
     assertCanReturn(a, actor, hrScope);
     // Only Admin/PM may record the condition or hold the unit for maintenance.
-    const canJudge = actor?.role === ROLES.ADMIN || hrScope?.role === ROLES.PROJECT_MANAGER;
+    const canJudge = actor?.role === ROLES.ADMIN || isPmRole(hrScope?.role);
     const result = await closeAllocationInTx(c, allocationId, {
       returnedDate: payload.returned_date,
       notes: payload.notes,

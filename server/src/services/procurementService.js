@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { pool } = require('../config/db');
 const ApiError = require('../utils/ApiError');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 const { BILLS_DIR } = require('../middleware/upload');
 const procurementModel = require('../models/procurementModel');
 const projectModel = require('../models/projectModel');
@@ -248,7 +248,7 @@ function pmRunSiteOf(row) {
 
 /** True when the viewer is a PM assigned to that site. */
 function viewerPmHasSite(viewer, siteId) {
-  return viewer?.role === ROLES.PROJECT_MANAGER && siteId != null && (viewer.pmSiteIds || []).includes(Number(siteId));
+  return isPmRole(viewer?.role) && siteId != null && (viewer.pmSiteIds || []).includes(Number(siteId));
 }
 
 /** Statuses in which a vendor's confirmation / dispatch can be recorded. */
@@ -597,7 +597,7 @@ function contractorScope(hrScope, userId) {
   if (hrScope?.role === ROLES.CONTRACTOR) return { contractorId: hrScope.contractorId, userId };
   // A Project Manager only ever sees/touches requests on their assigned
   // projects. Deny-by-default: an empty list matches nothing.
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) return { pmProjectIds: hrScope.pmProjectIds || [] };
+  if (isPmRole(hrScope?.role)) return { pmProjectIds: hrScope.pmProjectIds || [] };
   return {};
 }
 
@@ -1024,7 +1024,7 @@ async function create(payload, userId, hrScope, options = {}) {
 
   // 1. Task Baseline Enforcement
   const isContractor = hrScope?.role === ROLES.CONTRACTOR;
-  const isPM = hrScope?.role === 'project_manager';
+  const isPM = isPmRole(hrScope?.role);
   const taskId = payload.task_id ? Number(payload.task_id) : (flow.task_id ? Number(flow.task_id) : null);
 
   if ((isContractor || isPM) && payload.project_id && !taskId) {
@@ -1480,7 +1480,7 @@ async function update(id, payload, hrScope, userId) {
   // plan behind Admin's back: unplanned or extra material needs its own request.
   const role = hrScope?.role;
   const isMaterialRequest = (payload.item_type ?? request.item_type) !== 'tool' && (payload.material_id ?? request.material_id);
-  if ((role === ROLES.CONTRACTOR || role === 'project_manager') && isMaterialRequest) {
+  if ((role === ROLES.CONTRACTOR || isPmRole(role)) && isMaterialRequest) {
     const taskId = Number(payload.task_id ?? request.task_id) || null;
     const subtaskId = payload.subtask_id !== undefined || payload.subtaskId !== undefined
       ? (Number(subtaskIdFrom(payload)) || null)
@@ -1676,7 +1676,7 @@ async function updateStatus(id, nextStatus, role, hrScope, userId) {
   if (['approved', 'rejected'].includes(nextStatus) && request.requested_by && Number(request.requested_by) !== Number(userId)) {
     const requesterRole = request.requester_role;
     const base = requesterRole === ROLES.CONTRACTOR ? '/contractor/procurement'
-      : requesterRole === ROLES.PROJECT_MANAGER ? '/pm/procurement'
+      : isPmRole(requesterRole) ? '/pm/procurement'
       : '/admin/procurement';
     const [[item]] = await pool.query(
       `SELECT COALESCE(m.name, t.name, 'Item') AS name FROM procurement_requests pr
@@ -2576,7 +2576,7 @@ async function toolReceive(id, payload, userId, hrScope) {
     if (hrScope?.role === ROLES.CONTRACTOR && toolReceiverId(request) !== Number(hrScope.contractorId)) {
       throw ApiError.forbidden('You can only receive a machine dispatched to you.');
     }
-    if (hrScope?.role === ROLES.PROJECT_MANAGER && (toolReceiverId(request) || !pmScope.pmHasSite(hrScope, pmRunSiteOf(request)))) {
+    if (isPmRole(hrScope?.role) && (toolReceiverId(request) || !pmScope.pmHasSite(hrScope, pmRunSiteOf(request)))) {
       throw ApiError.forbidden('You can only receive a machine dispatched to a site you manage.');
     }
     const entered = String(payload.vehicle_number ?? '').trim();

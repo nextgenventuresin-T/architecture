@@ -23,7 +23,7 @@ router.use(attachHrScope);
 const { uploadBill } = require('../middleware/upload');
 router.post(
   '/:id/bill',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [param('id').isInt({ min: 1 })],
   validate,
   uploadBill,
@@ -31,7 +31,7 @@ router.post(
 );
 router.get(
   '/:id/bill',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.FINANCE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.FINANCE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [param('id').isInt({ min: 1 })],
   validate,
   controller.downloadBill
@@ -48,7 +48,7 @@ const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 // Raising and progressing requests is a Procurement/Admin job throughout.
 // Project Managers raise and progress requests for their assigned projects; the
 // service enforces the assignment (and that approve/reject stay with Admin).
-const canManage = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER);
+const canManage = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER);
 const canManageOrders = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT);
 // Receiving deliveries is also something Warehouse staff do day to day.
 const canReceive = requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE);
@@ -168,7 +168,7 @@ router.post(
 router.get('/batches/:batchId', [param('batchId').isInt({ min: 1 })], validate, controller.batchDetail);
 router.post(
   '/batches/:batchId/:action',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [
     param('batchId').isInt({ min: 1 }),
     param('action').isIn(['submit', 'approve', 'reject', 'confirm', 'order', 'vendor_confirm', 'dispatch', 'receive']),
@@ -277,7 +277,7 @@ router.post(
 // A contractor may receive only a vendor order delivered to them (checked in the service).
 router.post(
   '/:id/receiving',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [
     param('id').isInt({ min: 1 }),
     body('received_quantity').isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
@@ -364,7 +364,7 @@ router.post(
 // machine after verifying the vehicle. Receiver is enforced in the service.
 router.post(
   '/:id/tool-receive',
-  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [
     param('id').isInt({ min: 1 }),
     body('vehicle_number').trim().notEmpty().withMessage('Enter the arriving vehicle number.').isLength({ max: 40 }),

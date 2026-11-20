@@ -233,7 +233,9 @@ export default function UserFormPage({ mode = 'create' }) {
                 placeholder="Select a role"
                 options={roles.map((r) => ({ value: r.slug, label: r.name }))}
                 error={fieldErrors.role}
-                hint="Selecting a role pre-populates default permissions below."
+                hint={values.role === 'site_engineer'
+                  ? 'Same access as a Project Manager, only on their sites. After saving, assign their sites in the user’s "Projects & sites" tab.'
+                  : 'Selecting a role pre-populates default permissions below.'}
               />
               <InputField label="Department" value={values.department} onChange={set('department')} error={fieldErrors.department} />
               <SelectField

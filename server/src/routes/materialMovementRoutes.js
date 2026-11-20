@@ -35,7 +35,7 @@ router.get('/stock', controller.stock);
 // receiver verifies these details before confirming receipt.
 router.get(
   '/lookup',
-  requireRole(ROLES.ADMIN, ROLES.WAREHOUSE, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.WAREHOUSE, ROLES.PROCUREMENT, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [query('vehicle_number').trim().notEmpty().withMessage('Enter the vehicle number.').isLength({ max: 40 })],
   validate,
   controller.lookup
@@ -84,7 +84,7 @@ router.post(
 router.post(
   '/:id/receive',
   // A PM receives into the Site Store of a site they run (enforced in the service).
-  requireRole(ROLES.ADMIN, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER),
+  requireRole(ROLES.ADMIN, ROLES.WAREHOUSE, ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER),
   [
     param('id').isInt({ min: 1 }),
     body('received_quantity').optional({ nullable: true }).isFloat({ gt: 0 }).toFloat(),

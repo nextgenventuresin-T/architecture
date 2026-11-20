@@ -1,7 +1,7 @@
 'use strict';
 
 const ApiError = require('../utils/ApiError');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 const userAccessModel = require('../models/userAccessModel');
 const { pool } = require('../config/db');
 
@@ -38,9 +38,9 @@ async function loadContext(req) {
 
   // A Project Manager sees only the projects / sites they are assigned to - deny by
   // default, like a contractor. "No grants = unrestricted" applies to other roles only.
-  const isPm = req.user.role === ROLES.PROJECT_MANAGER;
+  const isPm = isPmRole(req.user.role);
   if (isPm) {
-    const pm = await require('../services/pmScopeService').resolve(userId);
+    const pm = await require('../services/pmScopeService').resolve(userId, req.user.role);
     projectIds = pm.projectIds;
     siteIds = pm.siteIds;
   }

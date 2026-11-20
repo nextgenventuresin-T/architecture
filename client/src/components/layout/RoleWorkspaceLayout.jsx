@@ -97,7 +97,9 @@ export function hasPermission(user, permission) {
 }
 
 export function modulesForRole(user) {
-  return (ROLE_MODULES[user?.role] ?? []).filter((module) => hasPermission(user, module.permission));
+  // A Site Engineer uses the Project Manager workspace and menu.
+  const menuRole = user?.role === ROLES.SITE_ENGINEER ? ROLES.PROJECT_MANAGER : user?.role;
+  return (ROLE_MODULES[menuRole] ?? []).filter((module) => hasPermission(user, module.permission));
 }
 
 export default function RoleWorkspaceLayout() {

@@ -39,9 +39,9 @@ const FLOWS = {
   vendor_site: { label: 'Vendor → Site / Contractor', roles: ADMIN_ROLES },
   // Company stock sent to a project site: issued from Central on dispatch, received at the site.
   central_site: { label: 'Central Warehouse → Site', roles: ADMIN_ROLES },
-  central_contractor: { label: 'Central Warehouse → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER] },
-  contractor_contractor: { label: 'Contractor → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER] },
-  supplier_contractor: { label: 'Outside supplier → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER] },
+  central_contractor: { label: 'Central Warehouse → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER] },
+  contractor_contractor: { label: 'Contractor → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER] },
+  supplier_contractor: { label: 'Outside supplier → Contractor', roles: [ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER] },
 };
 
 /**

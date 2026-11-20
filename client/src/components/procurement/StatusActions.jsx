@@ -12,7 +12,7 @@ import ToolFulfilDialog from './ToolFulfilDialog';
 import { procurementApi } from '../../api/procurementApi';
 import { toApiError } from '../../api/axiosClient';
 import useAuth from '../../hooks/useAuth';
-import { ROLES } from '../../config/roles';
+import { ROLES, isPmRole } from '../../config/roles';
 import { STATUS_TRANSITIONS, isVendorToContractor } from '../../utils/procurementOptions';
 
 const ICONS = {
@@ -37,7 +37,7 @@ export default function StatusActions({ request, movement, onChanged, onError })
   const role = user?.role;
   const canManage = [ROLES.ADMIN, ROLES.PROCUREMENT].includes(role);
   // A Project Manager raises and progresses their own requests; approve / reject stay with Admin.
-  const canManageOwnRequest = canManage || role === ROLES.CONTRACTOR || role === ROLES.PROJECT_MANAGER;
+  const canManageOwnRequest = canManage || role === ROLES.CONTRACTOR || isPmRole(role);
   const canApprove = role === ROLES.ADMIN;
   const canReceive = [ROLES.ADMIN, ROLES.PROCUREMENT, ROLES.WAREHOUSE].includes(role);
 

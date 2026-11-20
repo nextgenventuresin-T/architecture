@@ -14,7 +14,7 @@ async function resolvePmProjectIds(userId, role) {
   // project's Project Manager, a task / subtask assigned to them, or granted access.
   // (This used to check only the project's PM field, so a PM assigned to just a task
   // never saw that project on their pages.)
-  const { projectIds: assigned } = await require('./pmScopeService').resolve(userId);
+  const { projectIds: assigned } = await require('./pmScopeService').resolve(userId, role);
   const projectIds = new Set(assigned);
 
   if (projectIds.size === 0) {

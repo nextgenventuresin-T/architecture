@@ -1,7 +1,7 @@
 'use strict';
 
 const { pool } = require('../config/db');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 
 /**
  * WHO MAY RECEIVE MATERIAL AT A SITE, besides the site's contractor and Admin.
@@ -57,7 +57,7 @@ async function receiverSiteIds(hrScope) {
   if (!hrScope) return null;
   if (hrScope.receiverSiteIds) return hrScope.receiverSiteIds;
   let ids = null;
-  if (hrScope.role === ROLES.PROJECT_MANAGER) ids = (hrScope.pmSiteIds || []).map(Number);
+  if (isPmRole(hrScope.role)) ids = (hrScope.pmSiteIds || []).map(Number);
   else if (hrScope.role === ROLES.EMPLOYEE) ids = await engineerSiteIds(hrScope.employeeId);
   if (ids) hrScope.receiverSiteIds = ids; // eslint-disable-line no-param-reassign
   return ids;
@@ -70,6 +70,6 @@ async function canReceiveAtSite(hrScope, siteId) {
   return Boolean(ids && ids.includes(Number(siteId)));
 }
 
-const isSiteReceiverRole = (hrScope) => [ROLES.PROJECT_MANAGER, ROLES.EMPLOYEE].includes(hrScope?.role);
+const isSiteReceiverRole = (hrScope) => [ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER, ROLES.EMPLOYEE].includes(hrScope?.role);
 
 module.exports = { engineerSiteIds, receiverSiteIds, canReceiveAtSite, isSiteReceiverRole };

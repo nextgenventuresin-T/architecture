@@ -15,7 +15,7 @@ const svc = require('../services/siteReceivingService');
  * the receive itself runs through the shared, row-locked receive code.
  */
 const router = express.Router();
-router.use(requireAuth, requireRole(ROLES.PROJECT_MANAGER, ROLES.EMPLOYEE), attachHrScope);
+router.use(requireAuth, requireRole(ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER, ROLES.EMPLOYEE), attachHrScope);
 
 const ok = (res, data) => res.json({ success: true, data });
 

@@ -59,7 +59,7 @@ router.get('/:id', [param('id').isInt({ min: 1 })], validate, controller.detail)
 // their assigned sites, a Site Engineer on their sites (checked in the service), or Admin.
 router.post(
   '/',
-  requireRole(ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.EMPLOYEE, ROLES.ADMIN),
+  requireRole(ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER, ROLES.EMPLOYEE, ROLES.ADMIN),
   uploadWorkPhotos,
   [
     body('project_id').isInt({ min: 1 }).withMessage('Project is required.'),

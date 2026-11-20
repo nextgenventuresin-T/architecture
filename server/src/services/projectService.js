@@ -55,7 +55,7 @@ async function list(query, hrScope) {
 
   let scopedQuery = query;
   if (hrScope?.role === 'contractor') scopedQuery = { ...query, contractorId: hrScope.contractorId };
-  if (hrScope?.role === 'project_manager') scopedQuery = { ...query, projectIds: hrScope.pmProjectIds || [] };
+  if (require('../config/roles').isPmRole(hrScope?.role)) scopedQuery = { ...query, projectIds: hrScope.pmProjectIds || [] };
   const { rows, total } = await projectModel.findAll({ ...scopedQuery, page, pageSize });
 
   return {

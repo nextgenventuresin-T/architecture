@@ -2,7 +2,7 @@
 
 const ApiError = require('../utils/ApiError');
 const { pool } = require('../config/db');
-const { ROLES } = require('../config/roles');
+const { ROLES, isPmRole } = require('../config/roles');
 const movementModel = require('../models/materialMovementModel');
 const warehouseModel = require('../models/warehouseModel');
 const warehouseService = require('./warehouseService');
@@ -108,7 +108,7 @@ async function listMovements(query, hrScope, userId) {
     materialId: query.materialId,
     contractorId: cId,
     userId: cId ? userId : null,
-    pmProjectIds: hrScope?.role === ROLES.PROJECT_MANAGER ? (hrScope.pmProjectIds || []) : undefined,
+    pmProjectIds: isPmRole(hrScope?.role) ? (hrScope.pmProjectIds || []) : undefined,
   });
   return rows.map(toMovement);
 }
@@ -127,7 +127,7 @@ async function listIncoming(hrScope) {
 async function getById(id, hrScope) {
   const row = await movementModel.findById(id);
   if (!row) throw ApiError.notFound('That material movement does not exist.');
-  if (hrScope?.role === ROLES.PROJECT_MANAGER) {
+  if (isPmRole(hrScope?.role)) {
     const ids = hrScope.pmProjectIds || [];
     const pid = row.project_id != null ? Number(row.project_id) : null;
     if (pid == null || !ids.includes(pid)) throw ApiError.notFound('That material movement does not exist.');

@@ -12,7 +12,7 @@ const router = express.Router();
 
 // Project Manager or Admin can access PM endpoints
 router.use(requireAuth);
-router.use(requireRole(ROLES.PROJECT_MANAGER, ROLES.ADMIN));
+router.use(requireRole(ROLES.PROJECT_MANAGER, ROLES.SITE_ENGINEER, ROLES.ADMIN));
 router.use(attachHrScope);
 
 router.get('/dashboard', pmController.getDashboard);

@@ -19,6 +19,7 @@ const STARTUP_MIGRATIONS = [
   '20261118_area_progress',
   '20261120_normalize_material_units',
   '20261120_material_sub_units',
+  '20261120_site_engineer_role',
 ];
 
 const startup = { startedAt: new Date().toISOString(), migrationErrors: [] };
