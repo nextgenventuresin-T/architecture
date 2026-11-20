@@ -122,7 +122,8 @@ const requestRules = (isCreate) => {
     body('usage_charge_days').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).toFloat(),
     body('usage_charge_policy').optional({ nullable: true, checkFalsy: true }).isIn(['none', 'per_day_rate', 'fixed_total']),
     body('vendor_id').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).toInt(),
-    // Material with a sub-unit: quantity bought in its purchase unit and the conversion.
+    // Material used in a sub-unit: the sub-unit picked, and the quantity bought in the main unit.
+    body('sub_unit').optional({ nullable: true }).trim().isLength({ max: 20 }).withMessage('Keep the sub-unit under 20 characters.'),
     body('purchase_quantity').optional({ nullable: true, checkFalsy: true }).isFloat({ gt: 0 }).withMessage('Enter a quantity greater than zero.').toFloat(),
     body('units_per_purchase_unit').optional({ nullable: true, checkFalsy: true }).isFloat({ gt: 0 }).withMessage('Enter a number greater than zero.').toFloat(),
     // Bucket / liquid material: litres in one unit, or the total litres.

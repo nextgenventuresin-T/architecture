@@ -17,6 +17,7 @@ import { toolApi } from '../../../api/toolApi';
 import { toApiError } from '../../../api/axiosClient';
 import { formatCurrency } from '../../../utils/format';
 import { isLiquidMaterial, isLitreUnit, formatLitres } from '../../../utils/liquidUnits';
+import { MATERIAL_UNITS } from '../../../utils/materialOptions';
 import { areaOptionsFor } from '../../../utils/areaOptions';
 import { PRIORITIES, EDITABLE_STATUSES, PROCUREMENT_STATUS_LABELS, PROCUREMENT_KIND_OPTIONS, SOURCE_TYPE_OPTIONS } from '../../../utils/procurementOptions';
 
@@ -51,7 +52,7 @@ const EMPTY = {
   litres_per_unit: '',
   // Sub-unit material: quantity bought in the purchase unit, and sub-units in one.
   purchase_quantity: '',
-  units_per_purchase_unit: '',
+  sub_unit: '', // sub-unit picked for a material that has none yet
   estimated_rate: '',
   purchase_rate: '',
   total_amount: '',
@@ -209,7 +210,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
       unit: r.unit ?? '',
       litres_per_unit: r.litresPerUnit != null && !isLitreUnit(r.unit) ? String(r.litresPerUnit) : '',
       purchase_quantity: r.purchaseQuantity != null ? String(r.purchaseQuantity) : '',
-      units_per_purchase_unit: r.unitsPerPurchaseUnit != null ? String(r.unitsPerPurchaseUnit) : '',
+      sub_unit: '',
       estimated_rate: String(r.estimatedRate ?? 0),
       purchase_rate: r.purchaseRate != null ? String(r.purchaseRate) : '',
       total_amount: r.totalAmount != null ? String(r.totalAmount) : '',
@@ -327,16 +328,8 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
         return next;
       }
 
-      // Sub-unit material: quantity (in sub-units) = quantity bought x sub-units in one.
-      const fromPurchase = key === 'purchase_quantity' || key === 'units_per_purchase_unit';
-      if (fromPurchase) {
-        const pq = parseFloat(next.purchase_quantity);
-        const per = parseFloat(next.units_per_purchase_unit);
-        next.quantity = pq > 0 && per > 0 ? String(Number((pq * per).toFixed(2))) : '';
-      }
-
       // Auto-calculate total cost when quantity or unit cost changes for material
-      if (key === 'quantity' || fromPurchase || key === 'purchase_rate' || key === 'estimated_rate') {
+      if (key === 'quantity' || key === 'purchase_rate' || key === 'estimated_rate') {
         const qty = parseFloat(key === 'quantity' ? value : next.quantity);
         const pRate = parseFloat(key === 'purchase_rate' ? value : next.purchase_rate);
         const eRate = parseFloat(key === 'estimated_rate' ? value : next.estimated_rate);
@@ -401,10 +394,9 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
         ...current,
         material_id: value,
         unit: material?.unit || pm?.unit || current.unit || '', // the material's own unit
-        // Sub-unit material: default sub-units per purchase unit from the master.
-        units_per_purchase_unit: material?.subUnit && material?.unitsPerPurchaseUnit ? String(material.unitsPerPurchaseUnit) : '',
+        // A material already used in a sub-unit keeps it; otherwise none is picked yet.
+        sub_unit: '',
         purchase_quantity: '',
-        ...(material?.subUnit ? { quantity: '' } : null),
         estimated_rate: nextRate,
         purchase_rate: nextRate,
         total_amount: nextTotal,
@@ -419,7 +411,8 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
   const plannedQty = currentPlannedMaterial ? currentPlannedMaterial.revisedPlannedQuantity : 0;
   const alreadyProcured = currentPlannedMaterial ? currentPlannedMaterial.alreadyProcured : 0;
   const remainingPlanned = currentPlannedMaterial ? currentPlannedMaterial.remainingPlannedQuantity : 0;
-  const requestedQty = Number(values.quantity || 0);
+  const requestedQty = Number((values.sub_unit && !materials.find((m) => String(m.id) === String(values.material_id))?.subUnit
+    ? values.purchase_quantity : values.quantity) || 0);
   const remainingAfter = currentPlannedMaterial ? Number((remainingPlanned - requestedQty).toFixed(2)) : 0;
   const isToolItem = values.item_type === 'tool';
   // Bucket / liquid material: offer litres per unit and show the total litres.
@@ -430,12 +423,27 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
   const totalLitres = liquid && !litreUnit && Number(values.litres_per_unit) > 0 && Number(values.quantity) > 0
     ? Number((Number(values.quantity) * Number(values.litres_per_unit)).toFixed(3))
     : null;
-  // Sub-unit material (bought in kg, used in units): enter the kg and the conversion.
-  const subUnitMaterial = selectedMaterial?.subUnit ? selectedMaterial : null;
-  const boughtUnit = subUnitMaterial?.purchaseUnit || '';
-  const costPerBoughtUnit = subUnitMaterial && Number(values.units_per_purchase_unit) > 0 && Number(values.purchase_rate || values.estimated_rate) > 0
-    ? Number((Number(values.purchase_rate || values.estimated_rate) * Number(values.units_per_purchase_unit)).toFixed(2))
+  // Sub-unit (bought in kg, used in units): the main unit comes from the master; the
+  // sub-unit is the material's own, or one picked here (saved to the material on save).
+  const mainUnit = selectedMaterial?.purchaseUnit || values.unit || '';
+  const lockedSubUnit = selectedMaterial?.subUnit || '';
+  // Only a purchase from a vendor records what was bought (and can pick a new sub-unit).
+  const buyingFromVendor = (!isContractor && ['central_purchase', 'contractor_supply', 'project_site'].includes(values.procurement_kind)
+      && (values.source_type === 'supplier' || values.procurement_kind === 'central_purchase' || values.procurement_kind === 'project_site'))
+    || (isContractor && values.source_choice === 'supplier');
+  const subUnit = buyingFromVendor ? (lockedSubUnit || values.sub_unit) : '';
+  const pickingSubUnit = Boolean(values.sub_unit) && !lockedSubUnit;
+  const stockUnit = subUnit || lockedSubUnit || values.unit || '';
+  const perMainUnit = subUnit && Number(values.purchase_quantity) > 0 && Number(values.quantity) > 0
+    ? Number((Number(values.quantity) / Number(values.purchase_quantity)).toFixed(4))
     : null;
+  const costPerBoughtUnit = perMainUnit && Number(values.purchase_rate || values.estimated_rate) > 0
+    ? Number((Number(values.purchase_rate || values.estimated_rate) * perMainUnit).toFixed(2))
+    : null;
+  const boughtUnit = mainUnit;
+  const subUnitOptions = Array.from(new Set([...MATERIAL_UNITS, ...materials.flatMap((m) => [m.unit, m.purchaseUnit])]))
+    .filter((u) => u && u.toLowerCase() !== mainUnit.toLowerCase())
+    .sort((a, b) => a.localeCompare(b));
   const currentPlannedTool = plannedTools.find((t) => String(t.toolId) === String(values.tool_id));
   const selectedTaskSubtasks = tasks.find((t) => String(t.id) === String(values.task_id))?.subtasks ?? [];
   const isToolExcess = isContractor && isToolItem && Boolean(currentPlannedTool) && requestedQty > currentPlannedTool.remainingQuantity;
@@ -538,10 +546,10 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
 
   /** Sub-unit material: the quantity bought and the conversion (the server works out the sub-units). */
   function subUnitPayload() {
-    if (!subUnitMaterial || !(Number(values.purchase_quantity) > 0)) return {};
+    if (!subUnit || !(Number(values.purchase_quantity) > 0)) return {};
     return {
       purchase_quantity: Number(values.purchase_quantity),
-      units_per_purchase_unit: Number(values.units_per_purchase_unit) || null,
+      ...(pickingSubUnit ? { sub_unit: values.sub_unit } : null),
     };
   }
 
@@ -1396,7 +1404,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                       className="sm:col-span-2"
                     />
                     <InputField
-                      label={`Cost per ${values.unit || 'unit'}`}
+                      label={`Cost per ${stockUnit || 'unit'}`}
                       type="number"
                       min="0"
                       step="0.01"
@@ -1404,7 +1412,7 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                       onChange={set('purchase_rate')}
                       error={fieldErrors.purchase_rate}
                       hint={costPerBoughtUnit != null
-                        ? `Vendor cost for 1 ${values.unit} (= ₹${costPerBoughtUnit} per ${boughtUnit}).`
+                        ? `Vendor cost for 1 ${stockUnit} (= ₹${costPerBoughtUnit} per ${boughtUnit}).`
                         : 'Vendor cost per unit.'}
                       placeholder="0.00"
                     />
@@ -1575,36 +1583,48 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                 </div>
               )}
 
-              {subUnitMaterial && (
-                <>
-                  <InputField
-                    label={`Quantity bought (${boughtUnit})`}
-                    required
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={values.purchase_quantity}
-                    onChange={set('purchase_quantity')}
-                    error={fieldErrors.purchase_quantity}
-                    placeholder="20"
-                    hint={`Main unit from the material master: ${boughtUnit}.`}
-                  />
-                  <InputField
-                    label={`${values.unit} in 1 ${boughtUnit}`}
-                    required
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={values.units_per_purchase_unit}
-                    onChange={set('units_per_purchase_unit')}
-                    error={fieldErrors.units_per_purchase_unit}
-                    placeholder="5"
-                    hint={`Default from the master${subUnitMaterial.unitsPerPurchaseUnit ? ` (${subUnitMaterial.unitsPerPurchaseUnit})` : ''}; change it if this purchase differs.`}
-                  />
-                </>
+              <InputField
+                label={subUnit ? 'Main unit (bought in)' : 'Unit'}
+                value={subUnit ? mainUnit : values.unit}
+                onChange={set('unit')}
+                error={fieldErrors.unit}
+                placeholder="bags"
+                readOnly={Boolean(values.material_id) || values.item_type === 'tool'}
+                hint="From the material master (Materials & Tools)."
+              />
+              {selectedMaterial && buyingFromVendor && (
+                <SelectField
+                  label="Sub-unit (used in)"
+                  value={subUnit}
+                  onChange={set('sub_unit')}
+                  error={fieldErrors.sub_unit}
+                  disabled={Boolean(lockedSubUnit)}
+                  options={[
+                    { value: '', label: `None - used in ${mainUnit || 'the same unit'}` },
+                    ...(lockedSubUnit ? [{ value: lockedSubUnit, label: lockedSubUnit }] : subUnitOptions.map((u) => ({ value: u, label: u }))),
+                  ]}
+                  hint={lockedSubUnit
+                    ? `${selectedMaterial.name} is used in ${lockedSubUnit}; stock is counted in it.`
+                    : pickingSubUnit
+                      ? `Saved to the material: from now on it is stocked and used in ${values.sub_unit}${Number(selectedMaterial.currentStock) > 0 ? ', and its existing stock is converted' : ''}.`
+                      : 'Pick one if it is bought in one unit and used in another (e.g. bought in kg, used in units).'}
+                />
+              )}
+              {subUnit && (
+                <InputField
+                  label={`Quantity bought (${mainUnit})`}
+                  required
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={values.purchase_quantity}
+                  onChange={set('purchase_quantity')}
+                  error={fieldErrors.purchase_quantity}
+                  placeholder="20"
+                />
               )}
               <InputField
-                label={`Quantity${values.unit ? ` (${values.unit})` : ''}`}
+                label={subUnit ? `Total ${subUnit} got` : `Quantity${values.unit ? ` (${values.unit})` : ''}`}
                 required
                 type="number"
                 min="0"
@@ -1612,26 +1632,14 @@ export default function ProcurementFormPage({ mode = 'create', basePath = '/admi
                 value={values.quantity}
                 onChange={set('quantity')}
                 error={fieldErrors.quantity}
-                placeholder="500"
-                readOnly={Boolean(subUnitMaterial)}
-                hint={subUnitMaterial
-                  ? (Number(values.purchase_quantity) > 0 && Number(values.units_per_purchase_unit) > 0
-                    ? `${values.purchase_quantity} ${boughtUnit} × ${values.units_per_purchase_unit} = ${values.quantity} ${values.unit}. Stock and use are counted in ${values.unit}.`
-                    : `Worked out from the quantity bought. Stock and use are counted in ${values.unit}.`)
+                placeholder={subUnit ? '100' : '500'}
+                hint={subUnit
+                  ? (perMainUnit ? `1 ${mainUnit} = ${perMainUnit} ${subUnit}. Stock and use are counted in ${subUnit}.` : `How many ${subUnit} the ${mainUnit} bought make.`)
                   : undefined}
-              />
-              <InputField
-                label="Unit"
-                value={values.unit}
-                onChange={set('unit')}
-                error={fieldErrors.unit}
-                placeholder="bags"
-                readOnly={Boolean(values.material_id) || values.item_type === 'tool'}
-                hint="Always the unit set on the material (Materials & Tools). Change it there if it is wrong."
               />
               {!(isContractor && isToolItem) && !(((!isContractor && ['central_purchase', 'contractor_supply', 'project_site'].includes(values.procurement_kind) && (values.source_type === 'supplier' || values.procurement_kind === 'central_purchase' || values.procurement_kind === 'project_site')) || (isContractor && values.source_choice === 'supplier'))) && (
                 <InputField
-                  label={`Cost per ${values.unit || 'unit'}`}
+                  label={`Cost per ${stockUnit || 'unit'}`}
                   type="number"
                   min="0"
                   step="0.01"

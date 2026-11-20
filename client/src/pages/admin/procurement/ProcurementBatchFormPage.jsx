@@ -11,6 +11,7 @@ import { procurementApi } from '../../../api/procurementApi';
 import { projectsApi } from '../../../api/projectsApi';
 import { tasksApi } from '../../../api/tasksApi';
 import { materialsApi } from '../../../api/materialsApi';
+import { MATERIAL_UNITS } from '../../../utils/materialOptions';
 import { toolApi } from '../../../api/toolApi';
 import { vendorApi } from '../../../api/vendorApi';
 import { toApiError } from '../../../api/axiosClient';
@@ -52,7 +53,7 @@ function newRow(defaults) {
     litres_per_unit: '',
     // Sub-unit material: quantity bought in the purchase unit, and sub-units in one.
     purchase_quantity: '',
-    units_per_purchase_unit: '',
+    sub_unit: '', // sub-unit picked for a material that has none yet
     rate: '',
     transport_cost: '',
     vendor_id: defaults.vendor_id || '',
@@ -168,13 +169,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       if ('project_id' in patch) { next.site_id = ''; next.task_id = ''; next.subtask_id = ''; }
       if ('site_id' in patch) { next.task_id = ''; next.subtask_id = ''; }
       if ('task_id' in patch) next.subtask_id = '';
-      if ('item_type' in patch) { next.material_id = ''; next.tool_id = ''; next.unit = ''; next.quantity = patch.item_type === 'tool' ? '1' : ''; next.purchase_quantity = ''; next.units_per_purchase_unit = ''; }
-      // Sub-unit material: quantity (in sub-units) = quantity bought x sub-units in one.
-      if ('purchase_quantity' in patch || 'units_per_purchase_unit' in patch) {
-        const pq = Number(next.purchase_quantity);
-        const per = Number(next.units_per_purchase_unit);
-        next.quantity = pq > 0 && per > 0 ? String(Number((pq * per).toFixed(2))) : '';
-      }
+      if ('item_type' in patch) { next.material_id = ''; next.tool_id = ''; next.unit = ''; next.quantity = patch.item_type === 'tool' ? '1' : ''; next.purchase_quantity = ''; next.sub_unit = ''; }
       return next;
     }));
     setRowErrors((e) => {
@@ -190,13 +185,16 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
     updateRow(row.key, {
       material_id: materialId,
       unit: mat?.unit || plan?.unit || '', // the material's own unit (kg / litre / nos)
-      // Sub-unit material: default conversion from the master.
-      units_per_purchase_unit: mat?.subUnit && mat?.unitsPerPurchaseUnit ? String(mat.unitsPerPurchaseUnit) : '',
+      sub_unit: '',
       purchase_quantity: '',
-      ...(mat?.subUnit ? { quantity: '' } : null),
       rate: row.rate || String(plan?.costPerUnit || mat?.procurement_rate || mat?.default_rate || ''),
     });
   };
+
+  /** Units a material can be used in: the standard list plus units already in the catalogue. */
+  const subUnitOptions = (mainUnit) => Array.from(new Set([...MATERIAL_UNITS, ...materials.flatMap((m) => [m.unit, m.purchaseUnit])]))
+    .filter((u) => u && u.toLowerCase() !== String(mainUnit || '').toLowerCase())
+    .sort((x, y) => x.localeCompare(y));
 
   const setTool = (row, toolId) => {
     const plan = plannedToolsOf(row).find((p) => String(p.toolId) === String(toolId));
@@ -267,7 +265,9 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       } else if (r.material_id) {
         const plan = plannedMatsOf(r).find((p) => String(p.materialId) === String(r.material_id));
         unplanned = !plan;
-        overPlan = Boolean(plan && qty > Number(plan.remainingPlannedQuantity ?? Infinity));
+        const matRow = materials.find((m) => String(m.id) === String(r.material_id));
+        const planQty = r.sub_unit && !matRow?.subUnit ? Number(r.purchase_quantity || 0) : qty;
+        overPlan = Boolean(plan && planQty > Number(plan.remainingPlannedQuantity ?? Infinity));
       }
     }
     const mat = !isTool && r.material_id ? materials.find((m) => String(m.id) === String(r.material_id)) : null;
@@ -278,10 +278,16 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       : null;
     const transport = Number(r.transport_cost || 0);
     const lineTotal = qty * Number(r.rate || 0) * (isTool && r.tool_mode === 'rented' ? Number(r.rental_days || 1) : 1) + transport;
-    const subMat = mat?.subUnit ? mat : null;
-    const perBought = subMat && Number(r.units_per_purchase_unit) > 0 && Number(r.rate) > 0
-      ? Number((Number(r.rate) * Number(r.units_per_purchase_unit)).toFixed(2)) : null;
-    return { isTool, unplanned, overPlan, plannedDays, transport, lineTotal, needsReason: unplanned || overPlan, liquid, litreUnit, totalLitres, subMat, perBought };
+    // Sub-unit: the material's own (locked) or one picked on this line.
+    const mainUnit = mat?.purchaseUnit || r.unit || '';
+    const lockedSub = mat?.subUnit || '';
+    // Only a vendor purchase records what was bought (and can pick a new sub-unit).
+    const subUnit = !isTool && mat && isVendorFlow(flow) ? (lockedSub || r.sub_unit) : '';
+    const pickingSub = Boolean(subUnit) && !lockedSub;
+    const perMain = subUnit && Number(r.purchase_quantity) > 0 && qty > 0 ? Number((qty / Number(r.purchase_quantity)).toFixed(4)) : null;
+    const perBought = perMain && Number(r.rate) > 0 ? Number((Number(r.rate) * perMain).toFixed(2)) : null;
+    const subMat = subUnit ? { purchaseUnit: mainUnit } : null;
+    return { isTool, unplanned, overPlan, plannedDays, transport, lineTotal, needsReason: unplanned || overPlan, liquid, litreUnit, totalLitres, subMat, perBought, mainUnit, lockedSub, subUnit, pickingSub, perMain };
   };
 
   const batchTotal = rows.reduce((s, r) => s + analyse(r).lineTotal, 0);
@@ -296,7 +302,6 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       if (a.isTool ? !r.tool_id : !r.material_id) e.item = a.isTool ? 'Select a machine / tool.' : 'Select a material.';
       if (!(Number(r.quantity) > 0)) e.quantity = 'Enter a quantity.';
       if (a.subMat && !(Number(r.purchase_quantity) > 0)) e.purchase_quantity = `Enter the quantity in ${a.subMat.purchaseUnit}.`;
-      if (a.subMat && !(Number(r.units_per_purchase_unit) > 0)) e.units_per_purchase_unit = 'Enter a number greater than 0.';
       if (r.transport_cost !== '' && !(Number(r.transport_cost) >= 0)) e.transport_cost = 'Enter a valid amount.';
       if (a.isTool && !(Number.isInteger(Number(r.quantity)) && Number(r.quantity) >= 1 && Number(r.quantity) <= 50)) e.quantity = 'Enter whole units (1 - 50).';
       if (hasLinks(flow) && !r.project_id) e.project_id = 'Select a project.';
@@ -333,7 +338,7 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
       transport_cost: r.transport_cost !== '' && Number(r.transport_cost) > 0 ? Number(r.transport_cost) : null,
       // Sub-unit material: quantity bought and the conversion (server works out the sub-units).
       ...(a.subMat && Number(r.purchase_quantity) > 0
-        ? { purchase_quantity: Number(r.purchase_quantity), units_per_purchase_unit: Number(r.units_per_purchase_unit) || null }
+        ? { purchase_quantity: Number(r.purchase_quantity), ...(a.pickingSub ? { sub_unit: r.sub_unit } : null) }
         : {}),
     };
     if (hasLinks(flow)) {
@@ -618,24 +623,28 @@ export default function ProcurementBatchFormPage({ basePath = '/admin' }) {
                     placeholder={isRequester && !r.task_id ? 'Select the task first' : 'Select'}
                     options={itemOptions(r)}
                   />
-                  {a.subMat && (
-                    <>
-                      <InputField className="lg:col-span-2" label={`Bought (${a.subMat.purchaseUnit})`} required type="number" min="0" step="any"
-                        value={r.purchase_quantity} onChange={(e) => updateRow(r.key, { purchase_quantity: e.target.value })} error={err.purchase_quantity}
-                        placeholder="20" />
-                      <InputField className="lg:col-span-2" label={`${r.unit} in 1 ${a.subMat.purchaseUnit}`} required type="number" min="0" step="any"
-                        value={r.units_per_purchase_unit} onChange={(e) => updateRow(r.key, { units_per_purchase_unit: e.target.value })} error={err.units_per_purchase_unit}
-                        placeholder="5" hint={a.subMat.unitsPerPurchaseUnit ? `Master default: ${a.subMat.unitsPerPurchaseUnit}` : undefined} />
-                    </>
+                  {!a.isTool && r.material_id && isVendorFlow(flow) && (
+                    <SelectField className="lg:col-span-2" label="Sub-unit (used in)" value={a.subUnit}
+                      onChange={(e) => updateRow(r.key, { sub_unit: e.target.value })} error={err.sub_unit}
+                      disabled={Boolean(a.lockedSub)}
+                      options={[
+                        { value: '', label: `None (${a.mainUnit || 'same unit'})` },
+                        ...(a.lockedSub ? [{ value: a.lockedSub, label: a.lockedSub }] : subUnitOptions(a.mainUnit).map((u) => ({ value: u, label: u }))),
+                      ]}
+                      hint={a.pickingSub ? `Saved to the material: used in ${r.sub_unit} from now on` : undefined} />
                   )}
-                  <InputField className="lg:col-span-2" label={a.isTool ? 'Units' : `Qty${r.unit ? ` (${r.unit})` : ''}`} required type="number"
+                  {a.subMat && (
+                    <InputField className="lg:col-span-2" label={`Bought (${a.mainUnit})`} required type="number" min="0" step="any"
+                      value={r.purchase_quantity} onChange={(e) => updateRow(r.key, { purchase_quantity: e.target.value })} error={err.purchase_quantity}
+                      placeholder="20" />
+                  )}
+                  <InputField className="lg:col-span-2" label={a.isTool ? 'Units' : a.subUnit ? `Total ${a.subUnit} got` : `Qty${r.unit ? ` (${r.unit})` : ''}`} required type="number"
                     min={a.isTool ? '1' : '0'} step={a.isTool ? '1' : 'any'}
                     value={r.quantity} onChange={(e) => updateRow(r.key, { quantity: e.target.value })} error={err.quantity}
-                    readOnly={Boolean(a.subMat)}
                     hint={a.isTool && Number(r.quantity) > 1 ? `${r.quantity} units - each tracked by its own serial number`
-                      : a.subMat ? 'Worked out from the quantity bought' : undefined} />
+                      : a.perMain ? `1 ${a.mainUnit} = ${a.perMain} ${a.subUnit}` : undefined} />
                   {(isVendorFlow(flow) || (!isRequester && !materialsOnly(flow))) && (
-                    <InputField className="lg:col-span-2" label={a.isTool && r.tool_mode === 'rented' ? 'Rate / day (₹)' : `Cost / ${!a.isTool && r.unit ? r.unit : 'unit'} (₹)`} type="number" min="0" step="any"
+                    <InputField className="lg:col-span-2" label={a.isTool && r.tool_mode === 'rented' ? 'Rate / day (₹)' : `Cost / ${!a.isTool ? (a.subUnit || r.unit || 'unit') : 'unit'} (₹)`} type="number" min="0" step="any"
                       value={r.rate} onChange={(e) => updateRow(r.key, { rate: e.target.value })} error={err.estimated_rate || err.purchase_rate}
                       hint={a.perBought != null ? `= ₹${a.perBought} per ${a.subMat.purchaseUnit}` : undefined} />
                   )}

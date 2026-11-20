@@ -26,7 +26,7 @@ const transportExpenseService = require('./transportExpenseService');
 const { transportCategoryFor } = require('../config/costBuckets');
 const siteReceiver = require('./siteReceiverScope');
 const { isLiquidMaterial, isLitreUnit, litresOrNull } = require('../config/liquidUnits');
-const subUnits = require('./materialSubUnitService');
+const { normalizeUnit } = require('../utils/materialUnits');
 
 /**
  * How the goods physically arrive, derived from the flow (never stored):
@@ -63,29 +63,59 @@ function litresColumns(payload, { quantity, unit, material }) {
 }
 
 /**
- * Material with a sub-unit (bought in kg, used in units): the buyer enters the
- * quantity in the purchase unit and how many sub-units are in one. `quantity`
- * becomes the sub-unit quantity (20 kg x 5 = 100 units), which receiving, stock
- * and costing use; the rate is per sub-unit. Returns the columns to store, or
- * {} when the material has no sub-unit or no purchase quantity was sent.
- * Mutates payload.quantity so every later check (plan, excess) is in sub-units.
+ * Material used in a sub-unit (bought in kg, used in units): the buyer enters the
+ * quantity bought in the material's main unit (20 kg) and the total sub-units got
+ * (`quantity`, 100 units); the rate is per sub-unit. `quantity` stays the sub-unit
+ * quantity, which receiving, stock and costing use. Returns the columns to store
+ * (with the conversion this purchase works out to, 1 kg = 5 units), or {} when the
+ * material has no sub-unit or no purchase quantity was sent.
  */
-function applyPurchaseUnits(payload, material) {
-  const pq = payload.purchase_quantity ?? payload.purchaseQuantity;
-  if (!material?.purchase_unit) return pq !== undefined ? { purchase_quantity: null, purchase_unit: null, units_per_purchase_unit: null } : {};
-  if (pq === undefined || pq === null || pq === '') return {};
-  const converted = subUnits.stockQuantityFor(material, pq, payload.units_per_purchase_unit ?? payload.unitsPerPurchaseUnit);
-  if (!converted) {
-    throw ApiError.badRequest('Check the highlighted fields.', {
-      purchase_quantity: `Enter the quantity in ${material.purchase_unit} and how many ${material.unit} are in 1 ${material.purchase_unit}.`,
-    });
-  }
-  payload.quantity = converted.quantity;
+function applyPurchaseUnits(payload, material, fallbackQuantity = null) {
+  const pqIn = payload.purchase_quantity ?? payload.purchaseQuantity;
+  if (!material?.purchase_unit) return pqIn !== undefined ? { purchase_quantity: null, purchase_unit: null, units_per_purchase_unit: null } : {};
+  if (pqIn === undefined || pqIn === null || pqIn === '') return {};
+  const pq = Number(pqIn);
+  const q = Number(payload.quantity ?? fallbackQuantity);
+  if (!(pq > 0)) throw ApiError.badRequest('Check the highlighted fields.', { purchase_quantity: `Enter the quantity bought in ${material.purchase_unit}.` });
+  if (!(q > 0)) throw ApiError.badRequest('Check the highlighted fields.', { quantity: `Enter the total ${material.unit} got.` });
   return {
-    purchase_quantity: converted.purchaseQuantity,
-    purchase_unit: converted.purchaseUnit,
-    units_per_purchase_unit: converted.factor,
+    purchase_quantity: Number(pq.toFixed(3)),
+    purchase_unit: material.purchase_unit,
+    units_per_purchase_unit: Number((q / pq).toFixed(4)),
   };
+}
+
+/**
+ * The sub-unit picked in procurement. A material without one gets it saved now
+ * (conversion = total sub-units / quantity bought), which also converts its old
+ * records; a material that has one must keep it. In a dry run (batch check)
+ * nothing is saved and the quantity is checked against the plan in the main
+ * unit, which is what the plan is still in. Returns the material row to use.
+ */
+async function resolvePickedSubUnit(payload, material, { dryRun = false, fallbackQuantity = null } = {}) {
+  const picked = normalizeUnit(String(payload.sub_unit ?? payload.subUnit ?? '').trim());
+  if (!material || !picked) return material;
+  if (material.purchase_unit) {
+    if (picked.toLowerCase() !== String(material.unit).toLowerCase()) {
+      throw ApiError.badRequest('Check the highlighted fields.', {
+        sub_unit: `${material.name} is already used in ${material.unit}; it cannot be procured in ${picked}.`,
+      });
+    }
+    return material;
+  }
+  if (picked.toLowerCase() === String(material.unit).toLowerCase()) return material;
+  const pq = Number(payload.purchase_quantity ?? payload.purchaseQuantity);
+  const q = Number(payload.quantity ?? fallbackQuantity);
+  if (!(pq > 0)) throw ApiError.badRequest('Check the highlighted fields.', { purchase_quantity: `Enter the quantity bought in ${material.unit}.` });
+  if (!(q > 0)) throw ApiError.badRequest('Check the highlighted fields.', { quantity: `Enter the total ${picked} got.` });
+  if (dryRun) {
+    payload.quantity = pq;
+    return material;
+  }
+  // Lazy require: materialService does not depend on procurement.
+  const materialService = require('./materialService');
+  await materialService.update(material.id, { sub_unit: picked, units_per_purchase_unit: Number((q / pq).toFixed(4)) });
+  return materialModel.findById(material.id);
 }
 
 function moneyOrNull(value, field) {
@@ -958,12 +988,15 @@ async function create(payload, userId, hrScope, options = {}) {
     pmScope.assertPmAssigned(hrScope, payload.project_id, payload.site_id ?? null);
   }
 
-  // Bought in the purchase unit (kg): turn it into sub-units before any check.
+  // Used in a sub-unit (bought in kg, used in units): save a newly picked
+  // sub-unit to the material, then record what was bought.
   let purchaseColumns = {};
   if (payload.material_id && payload.item_type !== 'tool') {
     payload = { ...payload };
-    const bought = await materialModel.findById(Number(payload.material_id)).catch(() => null);
-    purchaseColumns = applyPurchaseUnits(payload, bought);
+    let bought = await materialModel.findById(Number(payload.material_id)).catch(() => null);
+    const pickingNew = bought && !bought.purchase_unit && (payload.sub_unit ?? payload.subUnit);
+    bought = await resolvePickedSubUnit(payload, bought, { dryRun: options.dryRun });
+    if (!(options.dryRun && pickingNew)) purchaseColumns = applyPurchaseUnits(payload, bought);
   }
 
   const { material, tool, columns: flow } = await resolveFlow(payload, hrScope);
@@ -1429,12 +1462,13 @@ async function update(id, payload, hrScope, userId) {
     });
   }
 
-  // Bought in the purchase unit (kg): turn it into sub-units before the checks below.
+  // Used in a sub-unit: save a newly picked sub-unit, then record what was bought.
   let purchaseColumns = {};
   if ((payload.item_type ?? request.item_type) !== 'tool' && (payload.material_id ?? request.material_id)) {
     payload = { ...payload };
-    const bought = await materialModel.findById(Number(payload.material_id ?? request.material_id)).catch(() => null);
-    purchaseColumns = applyPurchaseUnits(payload, bought);
+    let bought = await materialModel.findById(Number(payload.material_id ?? request.material_id)).catch(() => null);
+    bought = await resolvePickedSubUnit(payload, bought, { fallbackQuantity: request.quantity });
+    purchaseColumns = applyPurchaseUnits(payload, bought, request.quantity);
   }
 
   if (payload.quantity !== undefined && Number(payload.quantity) <= 0) {
