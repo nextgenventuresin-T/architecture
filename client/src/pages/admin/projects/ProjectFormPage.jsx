@@ -213,7 +213,7 @@ function toFormPlan(src, fallbackStart, fallbackEnd) {
         skillTrade: l.skillTrade || l.skill_trade || '',
         startDate: lStart,
         endDate: lEnd,
-        workerCount: 1,
+        workerCount: Math.max(1, Number(l.workerCount ?? l.worker_count ?? 1) || 1),
         dailyWage: isCompany ? 0 : Number(l.dailyWage ?? l.daily_wage ?? 0),
         workingDays: Number(l.workingDays ?? l.working_days ?? calcWorkingDays(lStart, lEnd)),
         transportCost: Number(l.transportCost ?? l.transport_cost ?? 0),
@@ -379,7 +379,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
               skillTrade: l.person_trade || l.skill_trade || l.skillTrade || '',
               startDate: lStart,
               endDate: lEnd,
-              workerCount: 1,
+              workerCount: Math.max(1, Number(l.workerCount ?? l.worker_count ?? 1) || 1),
               dailyWage: wage,
               workingDays: days,
               transportCost: Number(l.transportCost ?? l.transport_cost ?? 0),
@@ -1229,6 +1229,7 @@ export default function ProjectFormPage({ mode = 'create' }) {
         const dw = isCompany ? 0 : Number(l.dailyWage || 0);
         const wd = Number(l.workingDays || calcWorkingDays(l.startDate, l.endDate));
         const transfer = Number(l.transportCost || 0);
+        const wc = Math.max(1, Number(l.workerCount ?? 1) || 1);
         return {
           workerId: l.workerId || null,
           worker_id: l.workerId || null,
@@ -1243,16 +1244,16 @@ export default function ProjectFormPage({ mode = 'create' }) {
           start_date: l.startDate || null,
           endDate: l.endDate || null,
           end_date: l.endDate || null,
-          workerCount: 1,
-          worker_count: 1,
+          workerCount: wc,
+          worker_count: wc,
           dailyWage: dw,
           daily_wage: dw,
           workingDays: wd,
           working_days: wd,
           transportCost: transfer,
           transport_cost: transfer,
-          totalCost: (isCompany ? 0 : dw * wd) + transfer,
-          total_cost: (isCompany ? 0 : dw * wd) + transfer,
+          totalCost: (isCompany ? 0 : wc * dw * wd) + transfer,
+          total_cost: (isCompany ? 0 : wc * dw * wd) + transfer,
           remarks: (l.remarks || '').trim() || null,
         };
       }),
